@@ -103,26 +103,44 @@ final class FakePreferences: PreferenceStore, Sendable {
 
 /// 包一层真实 `GenerationRunner`：计数、可在开跑前停住。
 final class GatedGenerator: MosaicGenerating, Sendable {
-    let runner = GenerationRunner()
+    let runner: GenerationRunner
     let calls = Locked(0)
     let gate: Locked<GatePoint?>
-    init(gate: GatePoint? = nil) { self.gate = Locked(gate) }
+    /// 从第 N 次 run/reshuffle 起抛错（nil = 不抛）。用来测失败后的「再试一次」。
+    let failFromCall = Locked<Int?>(nil)
+    init(gate: GatePoint? = nil, runner: GenerationRunner = GenerationRunner()) {
+        self.gate = Locked(gate)
+        self.runner = runner
+    }
+    struct ForcedFailure: Error, Sendable {}
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await pass()
+        return try await runner.run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress, stage: stage)
+    }
+    func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
+                   progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await pass()
+        return try await runner.reshuffle(previous, target: target, settings: settings, seed: seed, progress: progress, stage: stage)
+    }
+    func invalidateLocalResolution() { runner.invalidateLocalResolution() }
 
-    private func pass() async {
-        calls.update { $0 += 1 }
+    private func pass() async throws {
+        let n = calls.update { $0 += 1; return $0 }
         if let g = gate.get() {
             await g.reached.open()
             await g.release.wait()
         }
+        if let f = failFromCall.get(), n >= f { throw ForcedFailure() }
     }
     func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
              progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct {
-        await pass()
+        try await pass()
         return try await runner.run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress)
     }
     func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
                    progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct {
-        await pass()
+        try await pass()
         return try await runner.reshuffle(previous, target: target, settings: settings, seed: seed, progress: progress)
     }
 }

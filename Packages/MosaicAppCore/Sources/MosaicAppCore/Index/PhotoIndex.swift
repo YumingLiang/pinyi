@@ -252,6 +252,9 @@ public actor PhotoIndex {
         return n
     }
 
+    /// 当前索引里仍在的资产 ID（含 pending / unavailable / failed；已从相册删除的不在内）。
+    public func indexedAssetIDs() -> Set<String> { Set(manifest.entries.keys) }
+
     // MARK: diff
 
     /// 全量元数据 diff（决定 11），并把结果应用到索引：删除 → tombstone；修改 → tombstone + pending；新增 / 重试 → pending。
