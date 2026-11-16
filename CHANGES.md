@@ -1,5 +1,14 @@
 # CHANGES
 
+## feat/app-layer：P0 预览「第二次放大失效」（真机 32ec2b5 Internal）
+
+- **根因**：`ResultView` 用 `MagnificationGesture().onChanged { scale = max(1, min(8, $0)) }`。手势值是**相对本次手势开始**的倍数（每次从 1 起），旧代码直接把它当绝对倍数、也没有 `onEnded` 累乘进基准——第二次捏合一开始 scale 就被设回 ≈1，图弹回原大小；上限 8 也太小，细网格放到顶也看不清单格。
+- **修法**：
+  - 缩放状态与规则放进 `MosaicAppCore/Preview/ZoomState.swift`（纯值类型，Linux 单测）：显示倍数 = `baseScale × liveMagnification`，`pinchEnded` 时提交；`pinchCancelled` / `panCancelled` 处理系统取消（`onEnded` 不触发）；上限 `maxScaleToFillOneCell` = max(4, 视口短边 ÷ 单格显示边长)，即至少让单格铺满屏幕；双击在上限前逐级 ×2、到顶复位；平移夹在内容边界内；视口为 0（切后台 / 过渡）时不丢倍数。
+  - 可复用组件 `App/Views/ZoomableContainer.swift`（结果页现用，后续「作品查看」也用）：`Binding<ZoomState>` 由调用方持有，`@GestureState` 标记手势进行中，复位时调 cancel（`onEnded` 已提交时为空操作）。
+  - 结果页的状态放在 `AppModel.resultZoom`，视图重建 / 旋转 / 切后台都不丢，换新作品时复位。
+- **测试**（`ZoomStateTests`，17 个，`testZoomRegression*` 为 QA 回归）：连续 5 次 ×1.5 捏合基准 = 累乘、粗网格到上限停住；连续 5 次缩小到下限停住、再放大从当前倍数接着；中途取消的捏合 / 平移基准不变（含「先取消后 onEnded」的乱序）；双击与捏合交替；旋转 / 视口为 0 后倍数保持；上下限夹取；单格铺满屏幕上限；坏手势值忽略。
+
 ## feat/app-layer：评审 d6fa750 必须修 MF-1～MF-7、架构师 G-1（严格并发 + TSan）/ G-3（AppCoordinator）、QA 跟进
 
 ### 对照表

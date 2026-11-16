@@ -195,7 +195,6 @@ struct GenerationProgressView: View {
 
 struct ResultView: View {
     @EnvironmentObject var model: AppModel
-    @State private var scale: CGFloat = 1
 
     var body: some View {
         VStack(spacing: 12) {
@@ -203,10 +202,12 @@ struct ResultView: View {
                 Text(L10nKey.shortageResult).font(.footnote).foregroundStyle(.secondary)
             }
             if let img = model.resultImage {
-                // ⚠️ MVP 预览：MagnificationGesture 放大位图；方案 §2.8 的 CATiledLayer 分层预览留给后续卡片。
-                Image(decorative: img, scale: 1).resizable().interpolation(.none).scaledToFit()
-                    .scaleEffect(scale)
-                    .gesture(MagnificationGesture().onChanged { scale = max(1, min(8, $0)) })
+                // 缩放规则见 ZoomState（捏合累乘、单格铺满屏幕上限、双击逐级放大 / 到顶复位）。
+                let grid = model.previewGrid
+                ZoomableContainer(aspectRatio: Double(img.width) / Double(max(1, img.height)),
+                                  columns: grid.columns, rows: grid.rows, zoom: $model.resultZoom) {
+                    Image(decorative: img, scale: 1).resizable().interpolation(.none).scaledToFit()
+                }
             }
             Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
             HStack {
