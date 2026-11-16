@@ -7,26 +7,17 @@ import Foundation
 /// - 与 Swift 结构化并发对接：`async` 入口用 `withTaskCancellationHandler` 把 Task 取消转成 `cancel()`，
 ///   同步入口在调用线程上同时检查 `Task.isCancelled`。
 /// - 取消后所有入口抛 `CancellationError`，**不返回任何半成品**；取消不影响随机数序列，重跑同种子结果一致。
-public final class CancellationToken: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
+public final class CancellationToken: Sendable {
+    private let cancelled = LockedState(false)
 
     /// 创建未取消的令牌。
     public init() {}
 
     /// 请求取消（幂等）。
-    public func cancel() {
-        lock.lock()
-        cancelled = true
-        lock.unlock()
-    }
+    public func cancel() { cancelled.set(true) }
 
     /// 是否已请求取消。
-    public var isCancelled: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return cancelled
-    }
+    public var isCancelled: Bool { cancelled.get() }
 }
 
 /// 一次长任务的取消/进度控制（内部使用，把令牌、Task 取消、进度回调合在一起）。

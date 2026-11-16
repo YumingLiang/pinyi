@@ -4,12 +4,11 @@ import XCTest
 @testable import MosaicCore
 
 /// 线程安全的收集器（测试用）。
-final class Box<T>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _value: T
-    init(_ v: T) { _value = v }
-    var value: T { lock.lock(); defer { lock.unlock() }; return _value }
-    func mutate(_ f: (inout T) -> Void) { lock.lock(); f(&_value); lock.unlock() }
+final class Box<T: Sendable>: Sendable {
+    private let state: LockedState<T>
+    init(_ v: T) { state = LockedState(v) }
+    var value: T { state.get() }
+    func mutate(_ f: (inout T) -> Void) { state.withLock { f(&$0) } }
 }
 
 /// 只实现不可取消接口的内核，用来验证协议默认实现。

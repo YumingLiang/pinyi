@@ -19,8 +19,11 @@ options:
 
 settings:
   base:
+    # G-1：Swift 6 语言模式（数据竞争类诊断本身就是错误）+ 完整并发检查 + 其余警告也当错误。
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     TARGETED_DEVICE_FAMILY: "1"              # MVP 只做 iPhone
     ENABLE_USER_SCRIPT_SANDBOXING: YES
