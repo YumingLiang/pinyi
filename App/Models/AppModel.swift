@@ -21,6 +21,15 @@ final class AppModel: ObservableObject {
     /// 拖滑杆实时生效、不重画马赛克（导出时在条带里按同一 α 混合）。
     @Published private(set) var overlayImage: CGImage?
 
+    /// 结果页缩放状态：放在模型里，视图重建 / 旋转 / 切后台都不丢；换新作品时复位。
+    @Published var resultZoom = ZoomState()
+
+    /// 当前作品的网格列 / 行数（缩放上限用）；没有作品时为 0。
+    var previewGrid: (columns: Int, rows: Int) {
+        guard let layout = coordinator.product?.generation.layout else { return (0, 0) }
+        return (layout.columns, layout.rows)
+    }
+
     private var renderedRevision = 0
     private var previewTask: Task<Void, Never>?
     private var changeObserver: LibraryChangeObserver?
@@ -134,6 +143,7 @@ final class AppModel: ObservableObject {
 
     private func renderPreview() {
         guard let product = coordinator.product, let target = coordinator.target else { return }
+        resultZoom.reset()
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
         overlayImage = MosaicPreviewRenderer.overlay(product, target: target)
         let thumbs = thumbnails

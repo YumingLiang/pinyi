@@ -2,63 +2,21 @@ import SwiftUI
 import UIKit
 import MosaicAppCore
 
-/// T7：普通缩放预览（不用 CATiledLayer）。双指缩放 1–6 倍、拖动平移、双击在 1× / 3× 间切换。
-/// 预览位图长边 ≤ 2400 px（`MosaicPreviewRenderer.cellPixels`），放大时用最近邻插值，块边清楚。
-struct ZoomableMosaicView: View {
+/// T7：马赛克 + 可选叠加层（同尺寸 scaledToFit）。缩放 / 平移交给 `ZoomableContainer`。
+struct MosaicWithOverlay: View {
     let image: CGImage
     let overlay: CGImage?
     let overlayAlpha: Double
 
-    @State private var scale: CGFloat = 1
-    @State private var lastScale: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var lastOffset: CGSize = .zero
-
-    static let maxScale: CGFloat = 6
-
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                Image(decorative: image, scale: 1).resizable().interpolation(.none).scaledToFit()
-                if let overlay, overlayAlpha > 0 {
-                    // sRGB 编码值上的 α 混合 = 导出条带里 CGContext.setAlpha 的结果（同一公式）
-                    Image(decorative: overlay, scale: 1).resizable().interpolation(.medium).scaledToFit()
-                        .opacity(overlayAlpha)
-                }
+        ZStack {
+            Image(decorative: image, scale: 1).resizable().interpolation(.none).scaledToFit()
+            if let overlay, overlayAlpha > 0 {
+                // sRGB 编码值上的 α 混合 = 导出条带里 CGContext.setAlpha 的结果（同一公式）
+                Image(decorative: overlay, scale: 1).resizable().interpolation(.medium).scaledToFit()
+                    .opacity(overlayAlpha)
             }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .scaleEffect(scale)
-            .offset(offset)
-            .gesture(
-                MagnificationGesture()
-                    .onChanged { v in scale = min(Self.maxScale, max(1, lastScale * v)) }
-                    .onEnded { _ in
-                        lastScale = scale
-                        if scale == 1 { offset = .zero; lastOffset = .zero }
-                    }
-                    .simultaneously(with: DragGesture()
-                        .onChanged { v in
-                            guard scale > 1 else { return }
-                            offset = clamp(CGSize(width: lastOffset.width + v.translation.width,
-                                                  height: lastOffset.height + v.translation.height), in: geo.size)
-                        }
-                        .onEnded { _ in lastOffset = offset })
-            )
-            .onTapGesture(count: 2) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    scale = scale > 1 ? 1 : 3
-                    lastScale = scale
-                    offset = .zero
-                    lastOffset = .zero
-                }
-            }
-            .clipped()
         }
-    }
-
-    private func clamp(_ o: CGSize, in size: CGSize) -> CGSize {
-        let maxX = size.width * (scale - 1) / 2, maxY = size.height * (scale - 1) / 2
-        return CGSize(width: min(maxX, max(-maxX, o.width)), height: min(maxY, max(-maxY, o.height)))
     }
 }
 

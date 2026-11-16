@@ -197,15 +197,20 @@ struct ResultView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 12) {
+        // 不包 ScrollView：缩放容器的拖动手势会和滚动抢手势；容器占满剩余空间。
+        VStack(spacing: 12) {
                 if case .result(let o) = model.flow.generation.phase, o.shouldShowShortageNotice {
                     Text(L10nKey.shortageResult).font(.footnote).foregroundStyle(.secondary)
                 }
                 if let img = model.resultImage {
-                    // T7：普通缩放预览（MagnificationGesture + 平移），不用 CATiledLayer；叠加层随滑杆实时变化。
-                    ZoomableMosaicView(image: img, overlay: model.overlayImage, overlayAlpha: model.overlayAlpha)
-                        .aspectRatio(CGFloat(img.width) / CGFloat(max(1, img.height)), contentMode: .fit)
+                    // T7：普通缩放预览，不用 CATiledLayer；缩放规则见 ZoomState（捏合累乘、单格铺满屏幕上限、
+                    // 双击逐级放大 / 到顶复位），组件 ZoomableContainer 与「作品查看」共用。叠加层随滑杆实时变化。
+                    let grid = model.previewGrid
+                    ZoomableContainer(aspectRatio: Double(img.width) / Double(max(1, img.height)),
+                                      columns: grid.columns, rows: grid.rows, zoom: $model.resultZoom) {
+                        MosaicWithOverlay(image: img, overlay: model.overlayImage, overlayAlpha: model.overlayAlpha)
+                    }
+                    .frame(maxHeight: .infinity)
                 }
                 Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
                 // T7：结果页的叠加滑杆（0–0.3）
@@ -224,8 +229,7 @@ struct ResultView: View {
                 // T8：保存 / 分享（导出尺寸选择暂停，待「高清导出」定案）
                 ExportControls()
             }
-            .padding()
-        }
+        .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))
         .modifier(ExportResultModifier())
     }

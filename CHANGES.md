@@ -7,7 +7,7 @@
 ### 改动
 
 - **T7 预览**
-  - `ZoomableMosaicView`：双指缩放 1–6 倍、拖动平移（限制在图内）、双击在 1× / 3× 间切换。不用 CATiledLayer；预览位图长边 ≤ 2400 px，放大时最近邻插值。
+  - 预览缩放改用 app-layer 的可复用 `ZoomableContainer` + `ZoomState`（P0 修复，见下节），内容是 `MosaicWithOverlay`。不用 CATiledLayer；预览位图长边 ≤ 2400 px，放大时最近邻插值。结果页去掉 ScrollView，避免拖动和滚动抢手势。
   - 结果页加叠加滑杆（0–0.3）。叠加层是裁到网格区域的目标图，SwiftUI 用 `opacity(α)` 叠在马赛克上，拖动实时生效，不重画马赛克。导出时在每条带里用同一个 α 混合（sRGB 编码值上的 α 混合，与 `OverlayBlend` 同公式）。
 - **T8 导出（逻辑在 MosaicAppCore `Export/StripExporter.swift`，Linux 有测试）**
   - `ExportGeometry(layout:longEdge:stripByteBudget:)`：任意长边，每格像素 = ⌊长边 ÷ N⌋；条带高度由**字节预算**（默认 16 MiB 画布）反推整行格子数，长边越大条带越矮，单条带内存与长边无关（最少 1 行格子）；字节数全部 Int64（3 万像素 raw ≈ 2.7 GB 不溢出）；磁盘预算 = raw 暂存 + 2 × JPEG 上界 + 50 MB 余量。
@@ -54,6 +54,14 @@ AppTests（模拟器）：`testImageIOEncoderWritesJPEGFromRawStripFile`、`test
 - R26：`export.degraded` 提示（部分原图未下载、导出时降级）**未接**，需要渲染器回报降级格数，留到后续。
 
 
+## feat/app-layer：P0 预览「第二次放大失效」（真机 32ec2b5 Internal）
+
+- **根因**：`ResultView` 用 `MagnificationGesture().onChanged { scale = max(1, min(8, $0)) }`。手势值是**相对本次手势开始**的倍数（每次从 1 起），旧代码直接把它当绝对倍数、也没有 `onEnded` 累乘进基准——第二次捏合一开始 scale 就被设回 ≈1，图弹回原大小；上限 8 也太小，细网格放到顶也看不清单格。
+- **修法**：
+  - 缩放状态与规则放进 `MosaicAppCore/Preview/ZoomState.swift`（纯值类型，Linux 单测）：显示倍数 = `baseScale × liveMagnification`，`pinchEnded` 时提交；`pinchCancelled` / `panCancelled` 处理系统取消（`onEnded` 不触发）；上限 `maxScaleToFillOneCell` = max(4, 视口短边 ÷ 单格显示边长)，即至少让单格铺满屏幕；双击在上限前逐级 ×2、到顶复位；平移夹在内容边界内；视口为 0（切后台 / 过渡）时不丢倍数。
+  - 可复用组件 `App/Views/ZoomableContainer.swift`（结果页现用，后续「作品查看」也用）：`Binding<ZoomState>` 由调用方持有，`@GestureState` 标记手势进行中，复位时调 cancel（`onEnded` 已提交时为空操作）。
+  - 结果页的状态放在 `AppModel.resultZoom`，视图重建 / 旋转 / 切后台都不丢，换新作品时复位。
+- **测试**（`ZoomStateTests`，17 个，`testZoomRegression*` 为 QA 回归）：连续 5 次 ×1.5 捏合基准 = 累乘、粗网格到上限停住；连续 5 次缩小到下限停住、再放大从当前倍数接着；中途取消的捏合 / 平移基准不变（含「先取消后 onEnded」的乱序）；双击与捏合交替；旋转 / 视口为 0 后倍数保持；上下限夹取；单格铺满屏幕上限；坏手势值忽略。
 ## feat/app-layer：评审 d6fa750 必须修 MF-1～MF-7、架构师 G-1（严格并发 + TSan）/ G-3（AppCoordinator）、QA 跟进
 
 ### 对照表
