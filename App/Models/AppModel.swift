@@ -111,6 +111,18 @@ final class AppModel: ObservableObject {
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
+
+    // MARK: 导出（紧急版：只保存到相册）
+
+    var exportPhase: ExportPhase { state.export }
+    var exportTier: ExportTier {
+        get { state.exportTier }
+        set { coordinator.setExportTier(newValue) }
+    }
+    var canExport: Bool { coordinator.canExport }
+    func saveTapped() { Task { await coordinator.saveTapped() } }
+    func exportFailurePrimaryTapped() { Task { await coordinator.exportFailurePrimaryTapped() } }
+    func dismissExportResult() { coordinator.dismissExportResult() }
     func send(_ e: GenerationMachine.Event) { coordinator.send(e) }
 
     // MARK: 平台专属：目标图 / 预览

@@ -169,7 +169,7 @@ final class FakeExporter: MosaicExporting, Sendable {
         }
         try Task.checkCancellation()
         if let e = state.get().error { throw e }
-        let url = dir.appendingPathComponent("mosaic-\(request.size.longEdge)-\(UUID().uuidString).jpg")
+        let url = dir.appendingPathComponent("mosaic-\(request.tier.rawValue)-\(UUID().uuidString).jpg")
         try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: url)
         progress(1)
         return url

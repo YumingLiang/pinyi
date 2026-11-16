@@ -88,7 +88,8 @@ public struct AppState: Sendable, Hashable {
     public var transientNotice: L10nKey?
     public var showScanSheet = false
     public var export: ExportPhase = .idle
-    public var exportSize: ExportSize = .standard
+    /// 导出档位（默认超清）。
+    public var exportTier: ExportTier = .default
     /// 每出一个新结果 +1（平台层据此重画预览）。
     public var resultRevision = 0
     /// 生成进度页的阶段（匹配 / 检查清晰度），决定正文文案。
