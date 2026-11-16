@@ -139,12 +139,13 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.nav_title` | 导航标题 | 用哪些照片来拼 |
 | `source.list.all` | 完全访问时的来源标题 | 全部照片 |
 | `source.list.allowed` | 受限访问时的来源标题 | 已允许访问的照片 |
-| `source.list.count` | 张数（跟在标题后面） | {count} 张 |
+| `source.list.count` | 张数（跟在标题后面；扫描完成后显示可用张数） | {count} 张 |
+| `source.list.count_pending` | 张数（扫描未完成时显示资产总数，不随扫描跳动） | 约 {count} 张 |
 | `source.list.title_format` | 组合格式（标题与张数同一行） | {title}  {count} 张 |
 | `source.album.option` | 选项 | 选择相簿 |
 | `source.album.option_desc` | 说明 | 只用一个相簿，比如宝宝相册。 |
 | `source.album.list_title` | 相簿列表标题 | 选择相簿 |
-| `source.album.item_count` | 相簿项副文案 | {count} 张 |
+| `source.album.item_count` | 相簿项副文案（规则同 `source.list.count` / `count_pending`） | {count} 张 |
 | `source.album.unreadable` | 无法读取 | 打不开这个相簿，请换一个，或改用全部照片。 |
 | `source.add_photos` | 受限状态下常驻入口（同样调用系统选择器） | 增加可用照片 |
 | `source.next` | 下一步 | 下一步 |
@@ -248,7 +249,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `preview.share` | 按钮 | 分享 |
 | `preview.adjust` | 按钮 | 再调一调 |
 | `preview.reshuffle` | 按钮 | 换一种拼法 |
-| `shortage.result` | 结果页短提示 | 有些照片重复用了几次 |
+| `shortage.result` | 结果页短提示（仅当可用照片 < 200 张且匹配器实际放宽了约束时显示） | 有些照片重复用了几次 |
 
 ### 4.9 导出尺寸（用户仅两档）
 
@@ -258,9 +259,9 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 |---|---|---|
 | `export.size.section` | 区域标题 | 导出尺寸 |
 | `export.size.4000` | 默认档名称 | 标准 |
-| `export.size.4000.desc` | 说明 | 边长 4000 像素，文件更小，适合保存和分享。（默认） |
+| `export.size.4000.desc` | 说明 | 长边约 4000 像素，文件更小，适合保存和分享。（默认） |
 | `export.size.6000` | 较大档名称 | 更细 |
-| `export.size.6000.desc` | 说明 | 边长 6000 像素，放大更清楚，文件会大一些。 |
+| `export.size.6000.desc` | 说明 | 长边约 6000 像素，放大更清楚，文件会大一些。 |
 | `export.degraded` | 部分原图未在本地、导出时块被降级 | 有些照片还没下载到这台手机，导出后这些小块会稍模糊 |
 | `export.progress.title` | 导出中标题 | 正在导出 |
 | `export.progress.hint` | 导出中提示 | 导出时请停留在这个页面。 |
@@ -349,6 +350,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `settings.performance` | 内部 TestFlight 设置页入口（编译开关控制；正式版隐藏） | 性能测试 |
 | `settings.about` | 关于入口 | 关于拼忆 |
 | `about.title` | 关于页标题 | 关于拼忆 |
+| `diagnostics.export_note` | 诊断导出说明 | 仅包含技术诊断信息，不含照片。 |
 | `about.body` | 关于正文 | 拼忆在这台 iPhone 上，用你自己的照片拼出一张新的马赛克图。所有处理都在本地完成，照片不会上传。 |
 | `about.performance_hidden` | 正式版隐藏入口说明（不对用户展示；连点版本号 5 次进入性能测试） | （无文案，手势入口） |
 | `privacy.entry` | 隐私说明入口 | 照片如何被使用 |

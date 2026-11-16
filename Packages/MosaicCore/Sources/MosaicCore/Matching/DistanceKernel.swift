@@ -27,6 +27,37 @@ public protocol DistanceKernel: Sendable {
         candidates: UnsafeBufferPointer<Float>, n: Int,
         dims: Int, k: Int, mask: BitMask?
     ) -> TopKResult
+
+    /// 可取消版本：语义同上，但在计算过程中协作式检查取消。
+    ///
+    /// - Parameters:
+    ///   - cancellation: 显式令牌；`nil` 时只检查调用线程所在 Task 的取消状态。
+    ///   - progress: `(已完成查询组, 总查询组)`，可能在工作线程调用。
+    /// - Throws: 取消时抛 `CancellationError`，不返回部分结果。
+    /// 默认实现只在开始前/结束后检查取消（适合尚未支持分块检查的实现，如 Accelerate 占位）。
+    func topK(
+        queries: UnsafeBufferPointer<Float>, m: Int,
+        candidates: UnsafeBufferPointer<Float>, n: Int,
+        dims: Int, k: Int, mask: BitMask?,
+        cancellation: CancellationToken?, progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?
+    ) throws -> TopKResult
+}
+
+extension DistanceKernel {
+    /// 默认的可取消实现：前后各检查一次。
+    public func topK(
+        queries: UnsafeBufferPointer<Float>, m: Int,
+        candidates: UnsafeBufferPointer<Float>, n: Int,
+        dims: Int, k: Int, mask: BitMask?,
+        cancellation: CancellationToken?, progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?
+    ) throws -> TopKResult {
+        let check = CancellationCheck(token: cancellation)
+        try check.check()
+        let r = topK(queries: queries, m: m, candidates: candidates, n: n, dims: dims, k: k, mask: mask)
+        try check.check()
+        progress?(1, 1)
+        return r
+    }
 }
 
 extension DistanceKernel {
@@ -35,6 +66,14 @@ extension DistanceKernel {
     /// - Throws: `MosaicError.dimensionMismatch`、`MosaicError.countMismatch`、
     ///   `MosaicError.invalidConfiguration`（k < 0）。
     public func topK(queries: FeatureMatrix, candidates: FeatureMatrix, k: Int, mask: BitMask? = nil) throws -> TopKResult {
+        try topK(queries: queries, candidates: candidates, k: k, mask: mask, cancellation: nil, progress: nil)
+    }
+
+    /// 可取消的 `FeatureMatrix` 封装。
+    /// - Throws: 同上；取消时抛 `CancellationError`。
+    public func topK(queries: FeatureMatrix, candidates: FeatureMatrix, k: Int, mask: BitMask?,
+                     cancellation: CancellationToken?,
+                     progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?) throws -> TopKResult {
         guard queries.dimension == candidates.dimension else {
             throw MosaicError.dimensionMismatch(expected: candidates.dimension, actual: queries.dimension)
         }
@@ -42,10 +81,10 @@ extension DistanceKernel {
         if let mask, mask.count != candidates.count {
             throw MosaicError.countMismatch(expected: candidates.count, actual: mask.count)
         }
-        return queries.storage.withUnsafeBufferPointer { q in
-            candidates.storage.withUnsafeBufferPointer { c in
-                topK(queries: q, m: queries.count, candidates: c, n: candidates.count,
-                     dims: queries.dimension, k: k, mask: mask)
+        return try queries.storage.withUnsafeBufferPointer { q in
+            try candidates.storage.withUnsafeBufferPointer { c in
+                try topK(queries: q, m: queries.count, candidates: c, n: candidates.count,
+                         dims: queries.dimension, k: k, mask: mask, cancellation: cancellation, progress: progress)
             }
         }
     }

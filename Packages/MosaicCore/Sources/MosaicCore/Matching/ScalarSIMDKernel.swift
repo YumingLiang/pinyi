@@ -1,4 +1,5 @@
 import Dispatch
+import Foundation
 
 /// 纯 Swift 的 CPU 暴力 top‑k 内核（参考实现，Linux / iOS 通用，技术方案 §3.3 推荐方案）。
 ///
@@ -34,6 +35,32 @@ public struct ScalarSIMDKernel: DistanceKernel {
         candidates: UnsafeBufferPointer<Float>, n: Int,
         dims: Int, k: Int, mask: BitMask?
     ) -> TopKResult {
+        // 不可取消路径：不传令牌且不看 Task 状态，因此不会抛错。
+        // swiftlint:disable:next force_try
+        try! run(queries: queries, m: m, candidates: candidates, n: n, dims: dims, k: k, mask: mask,
+                 cancellation: nil, observeTask: false, progress: nil)
+    }
+
+    /// 可取消版本：每个查询组（默认 16 个查询 × 全部候选）开始前检查一次取消，
+    /// 取消响应延迟 ≈ 一个查询组的耗时（5 万候选时约 1–3 ms / 核）。
+    public func topK(
+        queries: UnsafeBufferPointer<Float>, m: Int,
+        candidates: UnsafeBufferPointer<Float>, n: Int,
+        dims: Int, k: Int, mask: BitMask?,
+        cancellation: CancellationToken?, progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?
+    ) throws -> TopKResult {
+        try run(queries: queries, m: m, candidates: candidates, n: n, dims: dims, k: k, mask: mask,
+                cancellation: cancellation, observeTask: true, progress: progress)
+    }
+
+    private func run(
+        queries: UnsafeBufferPointer<Float>, m: Int,
+        candidates: UnsafeBufferPointer<Float>, n: Int,
+        dims: Int, k: Int, mask: BitMask?,
+        cancellation: CancellationToken?, observeTask: Bool,
+        progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?
+    ) throws -> TopKResult {
+        if observeTask { try CancellationCheck(token: cancellation).check() }
         precondition(dims > 0 && m >= 0 && n >= 0 && k >= 0, "invalid topK arguments")
         precondition(queries.count >= dims * m, "queries buffer too small")
         precondition(candidates.count >= dims * n, "candidates buffer too small")
@@ -51,11 +78,19 @@ public struct ScalarSIMDKernel: DistanceKernel {
         let qb = queryBlockSize
         let tile = candidateTileSize
         let blockCount = (m + qb - 1) / qb
+        // 内部停止标志：任一线程发现取消（令牌，或调用线程上的 Task 取消）即置位，其余组直接跳过。
+        let stop = CancellationToken()
+        let counter = ProgressCounter(total: blockCount, handler: progress)
 
         outIndices.withUnsafeMutableBufferPointer { oi in
             outDistances.withUnsafeMutableBufferPointer { od in
                 let ptrs = KernelPointers(q: qBase, c: cBase, outIndices: oi.baseAddress!, outDistances: od.baseAddress!)
                 let work: @Sendable (Int) -> Void = { block in
+                    if stop.isCancelled { return }
+                    if (cancellation?.isCancelled ?? false) || (observeTask && Task.isCancelled) {
+                        stop.cancel()
+                        return
+                    }
                     let qStart = block * qb
                     let qEnd = min(m, qStart + qb)
                     ScalarSIMDKernel.processBlock(
@@ -63,6 +98,7 @@ public struct ScalarSIMDKernel: DistanceKernel {
                         n: n, c: ptrs.c, dims: dims, k: kEff, tile: tile,
                         maskWords: maskWords, outIndices: ptrs.outIndices, outDistances: ptrs.outDistances
                     )
+                    counter.increment()
                 }
                 if parallel && blockCount > 1 {
                     DispatchQueue.concurrentPerform(iterations: blockCount, execute: work)
@@ -70,6 +106,10 @@ public struct ScalarSIMDKernel: DistanceKernel {
                     for b in 0..<blockCount { work(b) }
                 }
             }
+        }
+        // 任何一组被跳过 → 整体作废，不返回部分结果。
+        if stop.isCancelled || (observeTask && CancellationCheck(token: cancellation).isCancelled) {
+            throw CancellationError()
         }
         return TopKResult(queryCount: m, k: kEff, indices: outIndices, distances: outDistances)
     }
@@ -211,5 +251,26 @@ extension UnsafeMutablePointer {
         let t = self[a]
         self[a] = self[b]
         self[b] = t
+    }
+}
+
+/// 线程安全的进度计数器：在锁内递增并回调，保证 `completed` 单调。
+final class ProgressCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = 0
+    private let total: Int
+    private let handler: (@Sendable (Int, Int) -> Void)?
+
+    init(total: Int, handler: (@Sendable (Int, Int) -> Void)?) {
+        self.total = total
+        self.handler = handler
+    }
+
+    func increment() {
+        guard let handler else { return }
+        lock.lock()
+        done += 1
+        handler(done, total)
+        lock.unlock()
     }
 }

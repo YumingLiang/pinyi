@@ -1,0 +1,199 @@
+import Dispatch
+import Foundation
+import XCTest
+@testable import MosaicCore
+
+/// 线程安全的收集器（测试用）。
+final class Box<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: T
+    init(_ v: T) { _value = v }
+    var value: T { lock.lock(); defer { lock.unlock() }; return _value }
+    func mutate(_ f: (inout T) -> Void) { lock.lock(); f(&_value); lock.unlock() }
+}
+
+/// 只实现不可取消接口的内核，用来验证协议默认实现。
+private struct PlainKernel: DistanceKernel {
+    func topK(queries: UnsafeBufferPointer<Float>, m: Int, candidates: UnsafeBufferPointer<Float>, n: Int,
+              dims: Int, k: Int, mask: BitMask?) -> TopKResult {
+        ScalarSIMDKernel(parallel: false).topK(queries: queries, m: m, candidates: candidates, n: n, dims: dims, k: k, mask: mask)
+    }
+}
+
+func gradientImage(width: Int, height: Int) throws -> PixelBuffer {
+    var bytes = [UInt8](repeating: 255, count: width * height * 4)
+    for y in 0..<height {
+        for x in 0..<width {
+            let o = (y * width + x) * 4
+            bytes[o] = UInt8(x * 255 / max(1, width - 1))
+            bytes[o + 1] = UInt8(y * 255 / max(1, height - 1))
+            bytes[o + 2] = UInt8((x + y) * 127 / max(1, width + height - 2))
+        }
+    }
+    return try PixelBuffer(width: width, height: height, bytes: bytes)
+}
+
+final class CancellationTests: XCTestCase {
+    private func fixture(library: Int = 2_000, cols: Int = 30, rows: Int = 20)
+        throws -> (grid: MosaicGrid, cells: FeatureMatrix, lib: FeatureMatrix) {
+        let grid = try MosaicGrid(columns: cols, rows: rows)
+        return (grid, FeatureMatrix(vectors: syntheticVectors(count: grid.cellCount, seed: 21)),
+                FeatureMatrix(vectors: syntheticVectors(count: library, seed: 22)))
+    }
+
+    private func assertCancelled(_ body: () throws -> Void, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try body(), file: file, line: line) { e in
+            XCTAssertTrue(e is CancellationError, "expected CancellationError, got \(e)", file: file, line: line)
+        }
+    }
+
+    func testPreCancelledTokenStopsEverything() throws {
+        let f = try fixture()
+        let token = CancellationToken()
+        token.cancel()
+        XCTAssertTrue(token.isCancelled)
+        assertCancelled { _ = try ScalarSIMDKernel().topK(queries: f.cells, candidates: f.lib, k: 8, mask: nil, cancellation: token, progress: nil) }
+        assertCancelled { _ = try PlainKernel().topK(queries: f.cells, candidates: f.lib, k: 8, mask: nil, cancellation: token, progress: nil) }
+        assertCancelled {
+            _ = try GreedyAssigner().assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
+                                            lightnessVariance: nil, cancellation: token, progress: nil)
+        }
+        let img = try gradientImage(width: 64, height: 48)
+        assertCancelled {
+            _ = try MosaicPipeline().generate(target: img, density: .custom(columns: 16), table: FeatureTable(records:
+                syntheticVectors(count: 300, seed: 1).map { FeatureRecord(vector: $0) }), cancellation: token)
+        }
+    }
+
+    func testCancelDuringMatchingAndAssigningPhases() throws {
+        let f = try fixture()
+        for phase in [MosaicProgress.Phase.matching, .assigning] {
+            let token = CancellationToken()
+            let seen = Box<[MosaicProgress]>([])
+            assertCancelled {
+                _ = try GreedyAssigner().assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
+                                                lightnessVariance: nil, cancellation: token) { p in
+                    seen.mutate { $0.append(p) }
+                    if p.phase == phase, p.completed >= (phase == .matching ? 2 : 128) { token.cancel() }
+                }
+            }
+            let ps = seen.value
+            XCTAssertTrue(ps.contains { $0.phase == phase }, "phase \(phase)")
+            // 被取消后不会报告"完成"。
+            XCTAssertFalse(ps.contains { $0.phase == .assigning && $0.completed == $0.total }, "phase \(phase)")
+        }
+    }
+
+    func testRerunAfterCancelIsIdenticalToUncancelledRun() throws {
+        let f = try fixture()
+        let config = AssignmentConfiguration(seed: 1234)
+        let baseline = try GreedyAssigner(configuration: config).assign(grid: f.grid, cellFeatures: f.cells, library: f.lib)
+
+        let token = CancellationToken()
+        assertCancelled {
+            _ = try GreedyAssigner(configuration: config).assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
+                                                                 lightnessVariance: nil, cancellation: token) { p in
+                if p.phase == .assigning, p.completed >= 64 { token.cancel() }
+            }
+        }
+        let progress = Box<[MosaicProgress]>([])
+        let rerun = try GreedyAssigner(configuration: config).assign(
+            grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil, lightnessVariance: nil,
+            cancellation: CancellationToken()) { p in progress.mutate { $0.append(p) } }
+        XCTAssertEqual(rerun, baseline)
+
+        // 进度：每阶段单调不减，最终到达 total。
+        for phase in [MosaicProgress.Phase.matching, .assigning] {
+            let xs = progress.value.filter { $0.phase == phase }
+            XCTAssertFalse(xs.isEmpty)
+            XCTAssertEqual(xs.map(\.completed), xs.map(\.completed).sorted())
+            XCTAssertEqual(xs.last?.completed, xs.last?.total)
+        }
+        XCTAssertEqual(progress.value.last?.overallFraction ?? 0, 1, accuracy: 1e-9)
+    }
+
+    func testCancellationLatencyFromAnotherThread() throws {
+        // 由进度回调触发"另一个线程"去取消，保证取消时仍在计算中（debug / release 都成立）。
+        let f = try fixture(library: 20_000, cols: 80, rows: 60)
+        let token = CancellationToken()
+        let cancelAt = Box<UInt64>(0)
+        let trigger = DispatchSemaphore(value: 0)
+        let fired = Box<Bool>(false)
+        DispatchQueue.global().async {
+            trigger.wait()
+            cancelAt.mutate { $0 = DispatchTime.now().uptimeNanoseconds }
+            token.cancel()
+        }
+        var thrown: Error?
+        do {
+            _ = try GreedyAssigner().assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
+                                            lightnessVariance: nil, cancellation: token) { p in
+                if p.phase == .matching, p.completed >= 3 {
+                    var first = false
+                    fired.mutate { if !$0 { $0 = true; first = true } }
+                    if first { trigger.signal() }
+                }
+            }
+        } catch { thrown = error }
+        let end = DispatchTime.now().uptimeNanoseconds
+        XCTAssertTrue(thrown is CancellationError, "finished before cancel? \(String(describing: thrown))")
+        let latencyMs = Double(end - cancelAt.value) / 1e6
+        print(String(format: "[bench] cancel latency (assign 80x60 × 20000, cross-thread) = %.2f ms", latencyMs))
+        XCTAssertLessThan(latencyMs, 250)
+    }
+
+    func testSwiftTaskCancellationAsyncAPI() async throws {
+        let img = try gradientImage(width: 320, height: 240)
+        let records = syntheticVectors(count: 20_000, seed: 5).map { FeatureRecord(vector: $0, lightnessVariance: 0.001) }
+        let table = FeatureTable(records: records)
+        let pipeline = MosaicPipeline()
+        let started = Box<Bool>(false)
+        let task = Task.detached {
+            try await pipeline.generate(target: img, density: .fine, table: table, seed: 1) { _ in started.mutate { $0 = true } }
+        }
+        while !started.value { try await Task.sleep(nanoseconds: 1_000_000) }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("expected cancellation")
+        } catch is CancellationError {
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
+            print(String(format: "[bench] Task.cancel latency (pipeline .fine × 20000) = %.2f ms", ms))
+            XCTAssertLessThan(ms, 250)
+        }
+    }
+
+    func testSyncAPIObservesEnclosingTaskCancellation() async throws {
+        let f = try fixture()
+        let task = Task.detached { () throws -> MosaicAssignment in
+            while !Task.isCancelled { await Task.yield() }
+            // 无令牌：同步入口仍能看到当前 Task 已取消。
+            return try GreedyAssigner().assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
+                                               lightnessVariance: nil, cancellation: nil, progress: nil)
+        }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("expected cancellation")
+        } catch is CancellationError {}
+    }
+
+    func testAsyncAPIUncancelledMatchesSyncAPI() async throws {
+        let img = try gradientImage(width: 96, height: 64)
+        let table = FeatureTable(records: syntheticVectors(count: 600, seed: 8).enumerated().map {
+            FeatureRecord(vector: $1, lightnessVariance: $0 % 3 == 0 ? 0 : 0.001)
+        })
+        let p = MosaicPipeline()
+        let a = try await p.generate(target: img, density: .custom(columns: 24), table: table, seed: 77)
+        let b = try p.generate(target: img, density: .custom(columns: 24), table: table, seed: 77, cancellation: nil)
+        XCTAssertEqual(a, b)
+    }
+
+    func testCheckIntervalValidated() {
+        var c = AssignmentConfiguration()
+        c.cancellationCheckInterval = 0
+        XCTAssertThrowsError(try c.validate())
+    }
+}

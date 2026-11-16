@@ -48,4 +48,39 @@ final class PerformanceTests: XCTestCase {
         print("[bench] worst-case uniform \(cols)x\(rows) × \(library): \(String(format: "%.1f", ms)) ms; levels=\(a.statistics.levelCounts)")
         XCTAssertFalse(a.statistics.relaxedConstraints)
     }
+
+    /// 新路径：带亮度方差打分 + 取消令牌 + 进度回调的完整分配，与旧 API 耗时对比；另测取消延迟。
+    func testEndToEndWithVarianceAndCancellation() throws {
+        let cols = fullScale ? 120 : 40
+        let rows = fullScale ? 90 : 30
+        let library = fullScale ? 50_000 : 5_000
+        let grid = try MosaicGrid(columns: cols, rows: rows)
+        let lib = FeatureMatrix(vectors: syntheticVectors(count: library, seed: 3))
+        let cells = FeatureMatrix(vectors: syntheticVectors(count: grid.cellCount, seed: 4))
+        var rng = Xoshiro256StarStar(seed: 6)
+        let variance = (0..<library).map { _ in rng.nextUnitFloat() * 0.002 }
+        let token = CancellationToken()
+        let start = DispatchTime.now().uptimeNanoseconds
+        let a = try GreedyAssigner().assign(grid: grid, cellFeatures: cells, library: lib, mask: nil,
+                                            lightnessVariance: variance, cancellation: token) { _ in }
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+        print("[bench] assign+variance+token+progress \(cols)x\(rows) × \(library): \(String(format: "%.1f", ms)) ms; levels=\(a.statistics.levelCounts)")
+
+        // 取消延迟：在匹配阶段中途取消。
+        let t2 = CancellationToken()
+        let cancelledAt = Box<UInt64>(0)
+        var thrown: Error?
+        do {
+            _ = try GreedyAssigner().assign(grid: grid, cellFeatures: cells, library: lib, mask: nil,
+                                            lightnessVariance: variance, cancellation: t2) { p in
+                if p.phase == .matching, p.completed == max(1, p.total / 3) {
+                    cancelledAt.mutate { $0 = DispatchTime.now().uptimeNanoseconds }
+                    t2.cancel()
+                }
+            }
+        } catch { thrown = error }
+        let lat = Double(DispatchTime.now().uptimeNanoseconds - cancelledAt.value) / 1e6
+        XCTAssertTrue(thrown is CancellationError)
+        print("[bench] cancel latency mid-matching \(cols)x\(rows) × \(library): \(String(format: "%.2f", lat)) ms")
+    }
 }

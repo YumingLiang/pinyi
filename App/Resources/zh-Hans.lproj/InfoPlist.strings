@@ -6,5 +6,5 @@
 /* `NSPhotoLibraryAddUsageDescription`（copy_v1.1.md:74） */
 "NSPhotoLibraryAddUsageDescription" = "拼忆需要把做好的马赛克图保存到你的相册。图片只保存在这台 iPhone 上，不会上传。";
 
-/* App 显示名（copy_v1.1.md:339） */
+/* App 显示名（copy_v1.1.md:340） */
 "CFBundleDisplayName" = "拼忆";

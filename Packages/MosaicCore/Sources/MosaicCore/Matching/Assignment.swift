@@ -9,6 +9,7 @@ private struct ScanPointers: @unchecked Sendable {
     let bestIdx: UnsafeMutablePointer<Int>
     let bestScore: UnsafeMutablePointer<Float>
     let bestDist: UnsafeMutablePointer<Float>
+    let penalty: UnsafePointer<Float>?
 }
 
 /// 单张素材的使用上限（技术方案 §3.4 第 3 步）。
@@ -70,6 +71,18 @@ public struct AssignmentConfiguration: Hashable, Sendable {
     /// 默认 true（对方案 §3.4 回退链的补充，待架构师确认）：避免目标图大片同色时 128 个近邻被上限用尽，
     /// 明明还有大量未用素材却"忽略上限"并误报素材不足。
     public var exhaustiveSearchBeforeRelaxing: Bool
+    /// 低细节（纯色）惩罚系数 μ（技术方案 §2.1：亮度方差"用于惩罚纯色图过度使用"）。
+    ///
+    /// `score = dist + λ · uses(i) + μ · flatness(i)`，`flatness = max(0, 1 − σ²_L(i) / lowDetailVarianceReference)`。
+    /// 默认 0.002：相当于 12 维每维约 0.013 的 OKLab 差（√(0.002/12)），低于常用的 OKLab 可察觉差 ~0.02，
+    /// 所以只有当一张有纹理的素材"几乎一样接近"时才压过纯色图，不会为避开纯色而明显牺牲颜色；
+    /// 同时小于 λ（0.005），即纯色惩罚弱于"多用一次"的惩罚。0 = 关闭。待合成数据 A/B + TF2 目测调参。
+    public var lowDetailPenalty: Float
+    /// 方差参考值 σ²_ref（L 归一到 0…1）：方差 ≥ 它的素材不受惩罚。默认 0.0004（σ_L = 0.02），
+    /// 与 `FeatureExtractor.lowDetailVarianceThreshold` / `FeatureFlags.lowDetail` 阈值一致。
+    public var lowDetailVarianceReference: Float
+    /// 分配循环每处理多少个格子检查一次取消（另外每次扩 k / 全库搜索前也检查）。默认 64。
+    public var cancellationCheckInterval: Int
 
     /// 创建配置；所有参数都有方案默认值。
     public init(
@@ -81,8 +94,14 @@ public struct AssignmentConfiguration: Hashable, Sendable {
         relaxedNeighborhood: Neighborhood = .four,
         seed: UInt64 = 0,
         order: CellOrder = .seededRandom,
-        exhaustiveSearchBeforeRelaxing: Bool = true
+        exhaustiveSearchBeforeRelaxing: Bool = true,
+        lowDetailPenalty: Float = 0.002,
+        lowDetailVarianceReference: Float = 0.0004,
+        cancellationCheckInterval: Int = 64
     ) {
+        self.lowDetailPenalty = lowDetailPenalty
+        self.lowDetailVarianceReference = lowDetailVarianceReference
+        self.cancellationCheckInterval = cancellationCheckInterval
         self.exhaustiveSearchBeforeRelaxing = exhaustiveSearchBeforeRelaxing
         self.k = k
         self.fallbackK = fallbackK
@@ -119,6 +138,15 @@ public struct AssignmentConfiguration: Hashable, Sendable {
         guard fallbackK >= 1 else { throw MosaicError.invalidConfiguration("fallbackK must be >= 1") }
         guard usagePenalty >= 0, usagePenalty.isFinite else {
             throw MosaicError.invalidConfiguration("usagePenalty must be finite and >= 0")
+        }
+        guard lowDetailPenalty >= 0, lowDetailPenalty.isFinite else {
+            throw MosaicError.invalidConfiguration("lowDetailPenalty must be finite and >= 0")
+        }
+        guard lowDetailVarianceReference > 0, lowDetailVarianceReference.isFinite else {
+            throw MosaicError.invalidConfiguration("lowDetailVarianceReference must be > 0")
+        }
+        guard cancellationCheckInterval >= 1 else {
+            throw MosaicError.invalidConfiguration("cancellationCheckInterval must be >= 1")
         }
         if case .automatic(let m) = cap, !(m > 0 && m.isFinite) {
             throw MosaicError.invalidConfiguration("automatic cap multiplier must be > 0")
@@ -240,7 +268,36 @@ public struct GreedyAssigner: Sendable {
     /// - Returns: 分配结果。空网格返回空结果。
     /// - Throws: 维度/个数不一致、配置非法、无可用素材（`MosaicError.noCandidates`）。
     public func assign(grid: MosaicGrid, cellFeatures: FeatureMatrix, library: FeatureMatrix, mask: BitMask? = nil) throws -> MosaicAssignment {
+        try assign(grid: grid, cellFeatures: cellFeatures, library: library, mask: mask,
+                   lightnessVariance: nil, cancellation: nil, progress: nil)
+    }
+
+    /// 以 `FeatureTable` 为素材的便捷入口：自动带上亮度方差，并排除 tombstone 行。
+    public func assign(grid: MosaicGrid, cellFeatures: FeatureMatrix, table: FeatureTable, mask: BitMask? = nil,
+                       cancellation: CancellationToken? = nil, progress: MosaicProgressHandler? = nil) throws -> MosaicAssignment {
+        if let mask, mask.count != table.count {
+            throw MosaicError.countMismatch(expected: table.count, actual: mask.count)
+        }
+        let live = table.liveMask
+        let m = mask.map { $0.intersection(live) } ?? live
+        return try assign(grid: grid, cellFeatures: cellFeatures, library: table.matrix, mask: m,
+                          lightnessVariance: table.lightnessVariance, cancellation: cancellation, progress: progress)
+    }
+
+    /// 执行分配（完整版：亮度方差打分 + 可取消 + 进度）。
+    ///
+    /// - Parameters:
+    ///   - lightnessVariance: 每张素材的亮度方差（长度 = `library.count`）；`nil` 表示不启用纯色惩罚。
+    ///   - cancellation: 取消令牌；同时检查调用线程所在 Task 的取消状态。
+    ///   - progress: 进度回调（`.matching` 与 `.assigning` 两个阶段）。
+    /// - Throws: 除上述错误外，取消时抛 `CancellationError`（不返回部分结果）。
+    ///   取消与否不改变随机序列：未取消的运行结果只由（输入、配置、种子）决定。
+    public func assign(grid: MosaicGrid, cellFeatures: FeatureMatrix, library: FeatureMatrix, mask: BitMask?,
+                       lightnessVariance: [Float]?, cancellation: CancellationToken?,
+                       progress: MosaicProgressHandler?) throws -> MosaicAssignment {
         let config = configuration
+        let check = CancellationCheck(token: cancellation)
+        try check.check()
         try config.validate()
         guard cellFeatures.count == grid.cellCount else {
             throw MosaicError.countMismatch(expected: grid.cellCount, actual: cellFeatures.count)
@@ -250,6 +307,9 @@ public struct GreedyAssigner: Sendable {
         }
         if let mask, mask.count != library.count {
             throw MosaicError.countMismatch(expected: library.count, actual: mask.count)
+        }
+        if let lightnessVariance, lightnessVariance.count != library.count {
+            throw MosaicError.countMismatch(expected: library.count, actual: lightnessVariance.count)
         }
 
         let cellCount = grid.cellCount
@@ -269,7 +329,17 @@ public struct GreedyAssigner: Sendable {
 
         let cap = config.cap.resolve(cellCount: cellCount, availableCount: available)
         let order = try makeOrder(cellCount: cellCount, config: config)
-        let topK = try kernel.topK(queries: cellFeatures, candidates: library, k: config.k, mask: mask)
+        let topK = try kernel.topK(queries: cellFeatures, candidates: library, k: config.k, mask: mask,
+                                   cancellation: cancellation,
+                                   progress: progress.map { p in { @Sendable done, total in
+                                       p(MosaicProgress(phase: .matching, completed: done, total: total)) } })
+        // 每张素材的静态（与使用次数无关）惩罚：μ · flatness(i)。
+        let staticPenalty: [Float]? = lightnessVariance.flatMap { v -> [Float]? in
+            guard config.lowDetailPenalty > 0 else { return nil }
+            let mu = config.lowDetailPenalty, ref = config.lowDetailVarianceReference
+            return v.map { mu * max(0, 1 - max(0, $0) / ref) }
+        }
+        let interval = config.cancellationCheckInterval
         let canExpand = config.fallbackK > topK.k && available > topK.k
 
         var uses = [Int32](repeating: 0, count: library.count)
@@ -283,39 +353,47 @@ public struct GreedyAssigner: Sendable {
         var primaryTiles: [Int] = []
         var relaxedTiles: [Int] = []
 
-        for cell in order {
+        progress?(MosaicProgress(phase: .assigning, completed: 0, total: cellCount))
+        for (step, cell) in order.enumerated() {
+            if step % interval == 0 {
+                try check.check()
+                if step > 0 { progress?(MosaicProgress(phase: .assigning, completed: step, total: cellCount)) }
+            }
             collectAssigned(cell, grid: grid, neighborhood: config.neighborhood, assigned: assigned, into: &primaryTiles)
             collectAssigned(cell, grid: grid, neighborhood: config.relaxedNeighborhood, assigned: assigned, into: &relaxedTiles)
 
             var list = topK.neighbors(forQuery: cell)
             var choice: (Neighbor, FallbackLevel)?
 
-            if let n = pick(list, forbidden: primaryTiles, cap: cap, uses: uses, lambda: lambda) {
+            if let n = pick(list, forbidden: primaryTiles, cap: cap, uses: uses, lambda: lambda, penalty: staticPenalty) {
                 choice = (n, .primary)
             } else {
                 if canExpand {
+                    try check.check()
                     list = try kernel.topK(queries: cellFeatures.subset(cell), candidates: library,
                                            k: config.fallbackK, mask: mask).neighbors(forQuery: 0)
-                    if let n = pick(list, forbidden: primaryTiles, cap: cap, uses: uses, lambda: lambda) {
+                    if let n = pick(list, forbidden: primaryTiles, cap: cap, uses: uses, lambda: lambda, penalty: staticPenalty) {
                         choice = (n, .expandedCandidates)
                     }
                 }
                 if choice == nil, config.exhaustiveSearchBeforeRelaxing, available > list.count {
+                    try check.check()
                     if let n = exhaustivePick(cell: cell, cellFeatures: cellFeatures, library: library, maskWords: maskWords,
-                                              forbidden: primaryTiles, cap: cap, uses: uses, lambda: lambda, scratch: &scratch) {
+                                              forbidden: primaryTiles, cap: cap, uses: uses, lambda: lambda,
+                                              penalty: staticPenalty, scratch: &scratch) {
                         choice = (n, .exhaustiveSearch)
                     } else {
                         // 极少走到：全部可用素材都已到上限或在主邻域内，后续放宽级别也在全库上选。
                         list = allCandidates(scratch: scratch, maskWords: maskWords)
                     }
                 }
-                if choice == nil, let n = pick(list, forbidden: relaxedTiles, cap: cap, uses: uses, lambda: lambda) {
+                if choice == nil, let n = pick(list, forbidden: relaxedTiles, cap: cap, uses: uses, lambda: lambda, penalty: staticPenalty) {
                     choice = (n, .relaxedNeighborhood)
                 }
-                if choice == nil, let n = pick(list, forbidden: relaxedTiles, cap: nil, uses: uses, lambda: lambda) {
+                if choice == nil, let n = pick(list, forbidden: relaxedTiles, cap: nil, uses: uses, lambda: lambda, penalty: staticPenalty) {
                     choice = (n, .capIgnored)
                 }
-                if choice == nil, let n = pick(list, forbidden: [], cap: nil, uses: uses, lambda: lambda) {
+                if choice == nil, let n = pick(list, forbidden: [], cap: nil, uses: uses, lambda: lambda, penalty: staticPenalty) {
                     choice = (n, .neighborhoodIgnored)
                 }
             }
@@ -328,6 +406,8 @@ public struct GreedyAssigner: Sendable {
             uses[n.index] += 1
         }
 
+        try check.check()
+        progress?(MosaicProgress(phase: .assigning, completed: cellCount, total: cellCount))
         var levelCounts = [Int](repeating: 0, count: FallbackLevel.allCases.count)
         for l in levels { levelCounts[l.rawValue] += 1 }
         let stats = AssignmentStatistics(
@@ -370,7 +450,7 @@ public struct GreedyAssigner: Sendable {
     /// 全库搜索：按候选分块并行计算距离并就地选优（上限、惩罚、主邻域），不分配候选列表。
     /// 各块的局部最优按 (得分, 距离, 下标) 归并，结果与线程数无关、与"对全部候选调用 `pick`"一致。
     private func exhaustivePick(cell: Int, cellFeatures: FeatureMatrix, library: FeatureMatrix, maskWords: [UInt64]?,
-                                forbidden: [Int], cap: Int?, uses: [Int32], lambda: Float,
+                                forbidden: [Int], cap: Int?, uses: [Int32], lambda: Float, penalty: [Float]?,
                                 scratch: inout [Float]) -> Neighbor? {
         let n = library.count
         let dims = library.dimension
@@ -383,6 +463,8 @@ public struct GreedyAssigner: Sendable {
         var bestScore = [Float](repeating: .infinity, count: chunkCount)
         var bestDist = [Float](repeating: .infinity, count: chunkCount)
 
+        let penaltyStorage = penalty ?? []
+        penaltyStorage.withUnsafeBufferPointer { penBuf in
         scratch.withUnsafeMutableBufferPointer { dist in
             library.storage.withUnsafeBufferPointer { lib in
                 uses.withUnsafeBufferPointer { u in
@@ -390,7 +472,8 @@ public struct GreedyAssigner: Sendable {
                         bestScore.withUnsafeMutableBufferPointer { bs in
                             bestDist.withUnsafeMutableBufferPointer { bd in
                                 let p = ScanPointers(dist: dist.baseAddress!, lib: lib.baseAddress!, uses: u.baseAddress!,
-                                                     bestIdx: bi.baseAddress!, bestScore: bs.baseAddress!, bestDist: bd.baseAddress!)
+                                                     bestIdx: bi.baseAddress!, bestScore: bs.baseAddress!, bestDist: bd.baseAddress!,
+                                                     penalty: penalty == nil ? nil : penBuf.baseAddress)
                                 let work: @Sendable (Int) -> Void = { c in
                                     let lo = c * chunk
                                     let hi = min(n, lo + chunk)
@@ -417,7 +500,8 @@ public struct GreedyAssigner: Sendable {
                                         let ui = p.uses[i]
                                         if ui >= capValue { continue }
                                         let dd = p.dist[i]
-                                        let score = dd + lambda * Float(ui)
+                                        var score = dd + lambda * Float(ui)
+                                        if let pp = p.penalty { score += pp[i] }
                                         // 下标升序遍历：只在严格更优时替换，等价于 (得分, 距离, 下标) 平局规则。
                                         if score < bScore || (score == bScore && dd < bDist) {
                                             if forbidden.contains(i) { continue }
@@ -440,6 +524,7 @@ public struct GreedyAssigner: Sendable {
                     }
                 }
             }
+        }
         }
         var result: Neighbor?
         var rScore = Float.infinity
@@ -471,14 +556,15 @@ public struct GreedyAssigner: Sendable {
     }
 
     /// 在候选列表中选出得分最低且未被禁用的素材；全部被禁时返回 nil。
-    private func pick(_ list: [Neighbor], forbidden: [Int], cap: Int?, uses: [Int32], lambda: Float) -> Neighbor? {
+    private func pick(_ list: [Neighbor], forbidden: [Int], cap: Int?, uses: [Int32], lambda: Float,
+                      penalty: [Float]?) -> Neighbor? {
         var best: Neighbor?
         var bestScore = Float.infinity
         for cand in list {
             if forbidden.contains(cand.index) { continue }
             let u = uses[cand.index]
             if let cap, Int(u) >= cap { continue }
-            let score = cand.distance + lambda * Float(u)
+            let score = cand.distance + lambda * Float(u) + (penalty?[cand.index] ?? 0)
             if let b = best {
                 if score < bestScore || (score == bestScore && (cand.distance < b.distance
                     || (cand.distance == b.distance && cand.index < b.index))) {
