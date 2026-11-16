@@ -1,0 +1,421 @@
+/* 自动生成：python3 scripts/gen-localizable.py —— 请改 copy_v1.1.md 后重新生成，勿手改。 */
+
+/* 标题（copy_v1.1.md:44） */
+"onboarding.1.title" = "用你的照片，拼出一张新的回忆";
+
+/* 正文（copy_v1.1.md:45） */
+"onboarding.1.body" = "选一张想拼出来的照片，拼忆会用相册里的照片当作小方块，在这台 iPhone 上拼成一幅马赛克图。";
+
+/* 按钮（copy_v1.1.md:46） */
+"onboarding.1.next" = "下一步";
+
+/* 标题（copy_v1.1.md:52） */
+"onboarding.2.title" = "照片不会离开这台手机";
+
+/* 正文（copy_v1.1.md:53） */
+"onboarding.2.body" = "所有处理都在手机本地完成，照片不会上传。不需要账号，也不连接网络。";
+
+/* 按钮（copy_v1.1.md:54） */
+"onboarding.2.next" = "下一步";
+
+/* 标题（copy_v1.1.md:60） */
+"onboarding.3.title" = "选一张目标图，再选用哪些照片来拼";
+
+/* 正文（copy_v1.1.md:61） */
+"onboarding.3.body" = "可以用全部照片，也可以只选一个相簿。宝宝相簿、旅行相簿都很适合。拼好后能放大，看清每一块都是哪张照片。";
+
+/* 按钮（copy_v1.1.md:62） */
+"onboarding.3.start" = "开始使用";
+
+/* 按钮（若即将弹出系统权限）（copy_v1.1.md:63） */
+"onboarding.3.allow" = "允许访问照片";
+
+/* 标题（copy_v1.1.md:88） */
+"permission.undetermined.title" = "需要访问照片才能开始";
+
+/* 正文（copy_v1.1.md:89） */
+"permission.undetermined.body" = "拼忆要用你相册里的照片来拼图。我们只会在这台手机上处理，照片不会上传。";
+
+/* 主按钮（copy_v1.1.md:90） */
+"permission.undetermined.primary" = "继续";
+
+/* 次按钮（copy_v1.1.md:91） */
+"permission.undetermined.secondary" = "先看看说明";
+
+/* 标题（copy_v1.1.md:99） */
+"limited.title" = "目前只能使用部分照片";
+
+/* 正文（copy_v1.1.md:100） */
+"limited.body" = "现在只能用你选中的那些照片来拼图。想用某个相簿（比如宝宝相册），请先增加可用的照片。";
+
+/* 主按钮（copy_v1.1.md:101） */
+"limited.primary" = "选择更多照片";
+
+/* 次按钮（copy_v1.1.md:102） */
+"limited.secondary" = "用已选的照片继续";
+
+/* 文字链接（跳系统设置）（copy_v1.1.md:103） */
+"limited.allow_all_link" = "改为允许访问全部照片";
+
+/* 标题（copy_v1.1.md:111） */
+"permission.denied.title" = "没有相册权限，没法开始拼图";
+
+/* 正文（copy_v1.1.md:112） */
+"permission.denied.body" = "请到系统设置里打开「拼忆」的照片权限。我们只会在这台手机上使用这些照片，不会上传。";
+
+/* 主按钮（copy_v1.1.md:113） */
+"permission.denied.primary" = "去设置";
+
+/* 次按钮（copy_v1.1.md:114） */
+"permission.denied.secondary" = "以后再说";
+
+/* 导航标题（copy_v1.1.md:126） */
+"target.nav_title" = "选择目标图";
+
+/* 引导语（copy_v1.1.md:127） */
+"target.prompt" = "想把哪张照片拼出来？";
+
+/* 按钮（copy_v1.1.md:128） */
+"target.choose" = "从相册选择";
+
+/* 已选后的操作（copy_v1.1.md:129） */
+"target.replace" = "更换照片";
+
+/* 下一步（copy_v1.1.md:130） */
+"target.next" = "下一步";
+
+/* 无法读取（copy_v1.1.md:131） */
+"target.unreadable" = "这张照片打不开，请换一张再试。";
+
+/* 导航标题（copy_v1.1.md:139） */
+"source.nav_title" = "用哪些照片来拼";
+
+/* 完全访问时的来源标题（copy_v1.1.md:140） */
+"source.list.all" = "全部照片";
+
+/* 受限访问时的来源标题（copy_v1.1.md:141） */
+"source.list.allowed" = "已允许访问的照片";
+
+/* 张数（跟在标题后面；扫描完成后显示可用张数）（copy_v1.1.md:142） 参数: %1$@=count */
+"source.list.count" = "%1$@ 张";
+
+/* 张数（扫描未完成时显示资产总数，不随扫描跳动）（copy_v1.1.md:143） 参数: %1$@=count */
+"source.list.count_pending" = "约 %1$@ 张";
+
+/* 组合格式（标题与张数同一行）（copy_v1.1.md:144） 参数: %1$@=title, %2$@=count */
+"source.list.title_format" = "%1$@  %2$@ 张";
+
+/* 选项（copy_v1.1.md:145） */
+"source.album.option" = "选择相簿";
+
+/* 说明（copy_v1.1.md:146） */
+"source.album.option_desc" = "只用一个相簿，比如宝宝相册。";
+
+/* 相簿列表标题（copy_v1.1.md:147） */
+"source.album.list_title" = "选择相簿";
+
+/* 相簿项副文案（规则同 `source.list.count` / `count_pending`）（copy_v1.1.md:148） 参数: %1$@=count */
+"source.album.item_count" = "%1$@ 张";
+
+/* 无法读取（copy_v1.1.md:149） */
+"source.album.unreadable" = "打不开这个相簿，请换一个，或改用全部照片。";
+
+/* 受限状态下常驻入口（同样调用系统选择器）（copy_v1.1.md:150） */
+"source.add_photos" = "增加可用照片";
+
+/* 下一步（copy_v1.1.md:151） */
+"source.next" = "下一步";
+
+/* 区域标题（copy_v1.1.md:162） */
+"density.section" = "拼图密度";
+
+/* 粗（copy_v1.1.md:163） */
+"density.coarse" = "粗";
+
+/* 说明（copy_v1.1.md:164） */
+"density.coarse.desc" = "方块更大，更容易看清每一张照片。";
+
+/* 中（默认）（copy_v1.1.md:165） */
+"density.medium" = "中";
+
+/* 说明（copy_v1.1.md:166） */
+"density.medium.desc" = "在细节和每张照片的清晰度之间比较平衡。";
+
+/* 细（copy_v1.1.md:167） */
+"density.fine" = "细";
+
+/* 说明（copy_v1.1.md:168） */
+"density.fine.desc" = "更接近原图，单张照片会更小。";
+
+/* 区域标题（copy_v1.1.md:176） */
+"overlay.section" = "原图叠加";
+
+/* 滑杆左侧（copy_v1.1.md:177） */
+"overlay.left" = "更能看清照片";
+
+/* 滑杆右侧（copy_v1.1.md:178） */
+"overlay.right" = "更像原图";
+
+/* 辅助说明（copy_v1.1.md:179） */
+"overlay.hint" = "往右拖，会更像目标图；往左拖，更容易认出每一块是哪张照片。";
+
+/* 主按钮（copy_v1.1.md:187） */
+"generate.cta" = "开始拼图";
+
+/* 生成前一行小字（可选）（copy_v1.1.md:188） */
+"generate.privacy_hint" = "处理都在本地完成，照片不会上传。";
+
+/* 生成前提示（唯一长句）（copy_v1.1.md:189） */
+"shortage.pregenerate" = "照片比较少，会重复使用一些，效果可能不理想";
+
+/* 主按钮（copy_v1.1.md:190） */
+"shortage.pregenerate.continue" = "继续拼图";
+
+/* 次按钮（copy_v1.1.md:191） */
+"shortage.pregenerate.back" = "返回调整";
+
+/* 标题（copy_v1.1.md:201） */
+"scan.title" = "正在整理照片";
+
+/* 被杀后再次打开的进度页标题/状态（copy_v1.1.md:202） */
+"scan.resume" = "接着上次继续扫描";
+
+/* 进度（copy_v1.1.md:203） 参数: %1$@=done, %2$@=total */
+"scan.progress" = "已处理 %1$@ / %2$@ 张";
+
+/* 状态补充（可选，首次）（copy_v1.1.md:204） */
+"scan.first_time_hint" = "第一次可能会久一点，之后会快很多。";
+
+/* 达到 2,000 张后的状态（copy_v1.1.md:205） 参数: %1$@=ready */
+"scan.progressive.ready" = "已就绪 %1$@ 张，可以开始拼图";
+
+/* 补充（copy_v1.1.md:206） */
+"scan.progressive.hint" = "其余照片还在继续整理。";
+
+/* 此时的主按钮（copy_v1.1.md:207） */
+"scan.progressive.cta" = "开始拼图";
+
+/* 按钮（copy_v1.1.md:208） */
+"scan.cancel" = "取消";
+
+/* 取消确认标题（copy_v1.1.md:209） */
+"scan.cancel_confirm.title" = "要停止整理吗？";
+
+/* 取消确认正文（copy_v1.1.md:210） */
+"scan.cancel_confirm.body" = "已经处理过的部分会保留，下次可以接着用。";
+
+/* 确认（copy_v1.1.md:211） */
+"scan.cancel_confirm.stop" = "停止";
+
+/* 返回（copy_v1.1.md:212） */
+"scan.cancel_confirm.continue" = "继续整理";
+
+/* 扫描完成且部分未下载、但仍有可用照片（copy_v1.1.md:213） */
+"scan.skipped_undownloaded" = "有些照片还没下载到这台手机，已跳过";
+
+/* 标题（copy_v1.1.md:223） */
+"generate.progress.title" = "正在拼图";
+
+/* 正文（copy_v1.1.md:224） */
+"generate.progress.body" = "请稍等，马上就好。手机可能会有些发热，这是正常的。";
+
+/* 按钮（copy_v1.1.md:225） */
+"generate.progress.cancel" = "取消";
+
+/* 取消确认标题（copy_v1.1.md:226） */
+"generate.cancel_confirm.title" = "要取消这次拼图吗？";
+
+/* 确认（copy_v1.1.md:227） */
+"generate.cancel_confirm.confirm" = "取消拼图";
+
+/* 返回（copy_v1.1.md:228） */
+"generate.cancel_confirm.continue" = "继续等待";
+
+/* 自动重跑失败后的提示（copy_v1.1.md:229） */
+"generate.auto_retry_failed" = "刚才没拼完，再试一次";
+
+/* 主按钮（copy_v1.1.md:230） */
+"generate.auto_retry_failed.retry" = "再试一次";
+
+/* 其他生成失败标题（copy_v1.1.md:231） */
+"generate.failed.title" = "这次没能完成";
+
+/* 正文（copy_v1.1.md:232） */
+"generate.failed.body" = "拼图没有成功，可能是照片读取出了问题，或这台手机暂时内存不足。可以稍后再试，或先改成「粗」密度。";
+
+/* 主按钮（copy_v1.1.md:233） */
+"generate.failed.retry" = "再试一次";
+
+/* 次按钮（copy_v1.1.md:234） */
+"generate.failed.back" = "返回调整";
+
+/* 导航标题（copy_v1.1.md:246） */
+"preview.nav_title" = "预览";
+
+/* 提示（copy_v1.1.md:247） */
+"preview.hint" = "双指放大，看看每一块都是哪张照片。";
+
+/* 按钮（copy_v1.1.md:248） */
+"preview.save" = "保存到相册";
+
+/* 按钮（copy_v1.1.md:249） */
+"preview.share" = "分享";
+
+/* 按钮（copy_v1.1.md:250） */
+"preview.adjust" = "再调一调";
+
+/* 按钮（copy_v1.1.md:251） */
+"preview.reshuffle" = "换一种拼法";
+
+/* 结果页短提示（仅当可用照片 < 200 张且匹配器实际放宽了约束时显示）（copy_v1.1.md:252） */
+"shortage.result" = "有些照片重复用了几次";
+
+/* 区域标题（copy_v1.1.md:260） */
+"export.size.section" = "导出尺寸";
+
+/* 默认档名称（copy_v1.1.md:261） */
+"export.size.4000" = "标准";
+
+/* 说明（copy_v1.1.md:262） */
+"export.size.4000.desc" = "长边约 4000 像素，文件更小，适合保存和分享。（默认）";
+
+/* 较大档名称（copy_v1.1.md:263） */
+"export.size.6000" = "更细";
+
+/* 说明（copy_v1.1.md:264） */
+"export.size.6000.desc" = "长边约 6000 像素，放大更清楚，文件会大一些。";
+
+/* 部分原图未在本地、导出时块被降级（copy_v1.1.md:265） */
+"export.degraded" = "有些照片还没下载到这台手机，导出后这些小块会稍模糊";
+
+/* 导出中标题（copy_v1.1.md:266） */
+"export.progress.title" = "正在导出";
+
+/* 导出中提示（copy_v1.1.md:267） */
+"export.progress.hint" = "导出时请停留在这个页面。";
+
+/* 导出被后台宽限打断、回到前台（copy_v1.1.md:268） */
+"export.interrupted" = "导出被打断了，导出时请停留在这个页面";
+
+/* 按钮（copy_v1.1.md:269） */
+"export.retry" = "重新导出";
+
+/* 标题（copy_v1.1.md:277） */
+"save.success.title" = "已保存到相册";
+
+/* 正文（copy_v1.1.md:278） */
+"save.success.body" = "可以在系统相册里找到这张图，也可以再分享给家人。";
+
+/* 主按钮（copy_v1.1.md:279） */
+"save.success.done" = "完成";
+
+/* 次按钮（copy_v1.1.md:280） */
+"save.success.share" = "分享";
+
+/* 系统分享面板标题（如需）（copy_v1.1.md:281） */
+"share.sheet_title" = "分享这张拼图";
+
+/* 尚未保存、分享完成后的轻提示（copy_v1.1.md:282） */
+"share.suggest_save" = "也可以再保存到相册";
+
+/* 标题（copy_v1.1.md:294） */
+"empty.no_photos.title" = "相册里还没有照片";
+
+/* 正文（copy_v1.1.md:295） */
+"empty.no_photos.body" = "先去拍几张，拍好了再回来。";
+
+/* 按钮（copy_v1.1.md:296） */
+"empty.no_photos.ok" = "我知道了";
+
+/* 标题（copy_v1.1.md:306） */
+"empty.not_downloaded.title" = "照片都还没下载到这台手机";
+
+/* 正文（copy_v1.1.md:307） */
+"empty.not_downloaded.body" = "可以在 设置 > 照片 里打开「下载并保留原件」，或先打开系统「照片」App 浏览一下。";
+
+/* 按钮（copy_v1.1.md:308） */
+"empty.not_downloaded.retry" = "重新检查";
+
+/* 预检不足，或写入中磁盘写满（copy_v1.1.md:316） */
+"save.disk_full.title" = "手机存储空间不足";
+
+/* 正文（copy_v1.1.md:317） */
+"save.disk_full.body" = "这张拼图比较大，目前没有足够的空间来完成或保存。清理一些空间后再试试。";
+
+/* 按钮（copy_v1.1.md:318） */
+"save.disk_full.ok" = "我知道了";
+
+/* 「添加照片」权限被拒（copy_v1.1.md:319） */
+"save.add_denied.title" = "需要允许添加照片才能保存";
+
+/* 正文（copy_v1.1.md:320） */
+"save.add_denied.body" = "也可以先用「分享」把这张图发出去。";
+
+/* 主按钮（copy_v1.1.md:321） */
+"save.add_denied.settings" = "去设置";
+
+/* 次按钮（copy_v1.1.md:322） */
+"save.add_denied.share" = "分享";
+
+/* 编码失败或其他错误（copy_v1.1.md:323） */
+"save.failed" = "没能保存到相册，再试一次";
+
+/* 主按钮（copy_v1.1.md:324） */
+"save.failed.retry" = "再试一次";
+
+/* 用户主动停止扫描（copy_v1.1.md:330） */
+"misc.scan_stopped" = "整理已停止。可以重新开始，或先用已经整理好的照片。";
+
+/* App 显示名（copy_v1.1.md:340） */
+"app.display_name" = "拼忆";
+
+/* 建议 App Store 副标题（copy_v1.1.md:341） */
+"app.store_subtitle" = "照片马赛克";
+
+/* 建议展示名（copy_v1.1.md:342） */
+"app.store_full_name" = "拼忆 - 照片马赛克";
+
+/* 取消（copy_v1.1.md:343） */
+"common.cancel" = "取消";
+
+/* 完成（copy_v1.1.md:344） */
+"common.done" = "完成";
+
+/* 返回（copy_v1.1.md:345） */
+"common.back" = "返回";
+
+/* 确定（copy_v1.1.md:346） */
+"common.ok" = "确定";
+
+/* 关闭（copy_v1.1.md:347） */
+"common.close" = "关闭";
+
+/* 重试（copy_v1.1.md:348） */
+"common.retry" = "再试一次";
+
+/* 设置页标题（copy_v1.1.md:349） */
+"settings.title" = "设置";
+
+/* 内部 TestFlight 设置页入口（编译开关控制；正式版隐藏）（copy_v1.1.md:350） */
+"settings.performance" = "性能测试";
+
+/* 关于入口（copy_v1.1.md:351） */
+"settings.about" = "关于拼忆";
+
+/* 关于页标题（copy_v1.1.md:352） */
+"about.title" = "关于拼忆";
+
+/* 诊断导出说明（copy_v1.1.md:353） */
+"diagnostics.export_note" = "仅包含技术诊断信息，不含照片。";
+
+/* 关于正文（copy_v1.1.md:354） */
+"about.body" = "拼忆在这台 iPhone 上，用你自己的照片拼出一张新的马赛克图。所有处理都在本地完成，照片不会上传。";
+
+/* 正式版隐藏入口说明（不对用户展示；连点版本号 5 次进入性能测试）（copy_v1.1.md:355） */
+"about.performance_hidden" = "（无文案，手势入口）";
+
+/* 隐私说明入口（copy_v1.1.md:356） */
+"privacy.entry" = "照片如何被使用";
+
+/* 隐私说明正文（copy_v1.1.md:357） */
+"privacy.body" = "拼忆会读取你允许访问的照片，用于生成马赛克图，也可以在你同意后把成品保存到相册。照片不会上传，也不会用于分析或广告。";

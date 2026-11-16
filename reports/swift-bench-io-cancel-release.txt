@@ -1,0 +1,78 @@
+# MOSAIC_BENCH=1 swift test -c release --filter 'PerformanceTests|FeatureFileTests.testLargeFile50kRecords|CancellationTests' — 2026-11-16 01:25 PST, 8 cores x86_64
+[0/1] Planning build
+Building for production...
+[0/3] Write sources
+[1/3] Write swift-version-6D5649C0BD1EF214.txt
+[3/4] Compiling MosaicCoreTests AssignmentTests.swift
+/workspace/photomosaic/Packages/MosaicCore/Tests/MosaicCoreTests/LowDetailPenaltyTests.swift:27:13: warning: variable 'off' was never mutated; consider changing to 'let' constant
+ 25 |         XCTAssertEqual(try assignOne(library: lib, variance: nil).tiles, [0])
+ 26 |         XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001]).tiles, [1])
+ 27 |         var off = AssignmentConfiguration().withAbsolutePenalties(usage: 0.005, lowDetail: 0)
+    |             `- warning: variable 'off' was never mutated; consider changing to 'let' constant
+ 28 |         XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001], config: off).tiles, [0])
+ 29 |         // 报告的距离仍是纯颜色距离，不含惩罚。
+[3/7] /workspace/photomosaic/Packages/MosaicCore/.build/x86_64-unknown-linux-gnu/release/MosaicCorePackageDiscoveredTests.derived/all-discovered-tests.swift
+[4/8] Write sources
+[6/9] Compiling MosaicCorePackageDiscoveredTests MosaicCoreTests.swift
+[6/9] /workspace/photomosaic/Packages/MosaicCore/.build/x86_64-unknown-linux-gnu/release/MosaicCorePackageTests.derived/runner.swift
+[7/10] Write sources
+[9/11] Compiling MosaicCorePackageTests runner.swift
+[9/11] Write Objects.LinkFileList
+[10/11] Linking MosaicCorePackageTests.xctest
+Build complete! (7.18s)
+Test Suite 'Selected tests' started at 2026-11-16 01:25:38.475
+Test Suite 'CancellationTests' started at 2026-11-16 01:25:38.476
+Test Case 'CancellationTests.testAsyncAPIUncancelledMatchesSyncAPI' started at 2026-11-16 01:25:38.476
+Test Case 'CancellationTests.testAsyncAPIUncancelledMatchesSyncAPI' passed (0.008 seconds)
+Test Case 'CancellationTests.testCancelDuringMatchingAndAssigningPhases' started at 2026-11-16 01:25:38.484
+Test Case 'CancellationTests.testCancelDuringMatchingAndAssigningPhases' passed (0.002 seconds)
+Test Case 'CancellationTests.testCancellationLatencyFromAnotherThread' started at 2026-11-16 01:25:38.486
+[bench] cancel latency (assign 80x60 × 20000, cross-thread) = 0.88 ms
+Test Case 'CancellationTests.testCancellationLatencyFromAnotherThread' passed (0.006 seconds)
+Test Case 'CancellationTests.testCheckIntervalValidated' started at 2026-11-16 01:25:38.492
+Test Case 'CancellationTests.testCheckIntervalValidated' passed (0.0 seconds)
+Test Case 'CancellationTests.testPreCancelledTokenStopsEverything' started at 2026-11-16 01:25:38.492
+Test Case 'CancellationTests.testPreCancelledTokenStopsEverything' passed (0.0 seconds)
+Test Case 'CancellationTests.testRerunAfterCancelIsIdenticalToUncancelledRun' started at 2026-11-16 01:25:38.493
+Test Case 'CancellationTests.testRerunAfterCancelIsIdenticalToUncancelledRun' passed (0.004 seconds)
+Test Case 'CancellationTests.testSwiftTaskCancellationAsyncAPI' started at 2026-11-16 01:25:38.497
+[bench] Task.cancel latency (pipeline .fine × 20000) = 0.63 ms
+Test Case 'CancellationTests.testSwiftTaskCancellationAsyncAPI' passed (0.071 seconds)
+Test Case 'CancellationTests.testSyncAPIObservesEnclosingTaskCancellation' started at 2026-11-16 01:25:38.568
+Test Case 'CancellationTests.testSyncAPIObservesEnclosingTaskCancellation' passed (0.0 seconds)
+Test Suite 'CancellationTests' passed at 2026-11-16 01:25:38.568
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.092 (0.092) seconds
+Test Suite 'FeatureFileTests' started at 2026-11-16 01:25:38.568
+Test Case 'FeatureFileTests.testLargeFile50kRecords' started at 2026-11-16 01:25:38.568
+[bench] features.bin 50000 records = 2.86 MB; write 15.0 ms, mmap read+verify 7.0 ms
+Test Case 'FeatureFileTests.testLargeFile50kRecords' passed (0.034 seconds)
+Test Suite 'FeatureFileTests' passed at 2026-11-16 01:25:38.602
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.034 (0.034) seconds
+Test Suite 'PerformanceTests' started at 2026-11-16 01:25:38.602
+Test Case 'PerformanceTests.testEndToEndAssignmentTiming' started at 2026-11-16 01:25:38.602
+[bench] assign 120x90 cells × 50000 candidates: 154.7 ms; levels=[10800, 0, 0, 0, 0, 0, 0]; cap=1
+Test Case 'PerformanceTests.testEndToEndAssignmentTiming' passed (0.164 seconds)
+Test Case 'PerformanceTests.testEndToEndWithVarianceAndCancellation' started at 2026-11-16 01:25:38.766
+[bench] assign+variance+token+progress 120x90 × 50000: 156.5 ms; levels=[10800, 0, 0, 0, 0, 0, 0]
+[bench] cancel latency mid-matching 120x90 × 50000: 1.74 ms
+Test Case 'PerformanceTests.testEndToEndWithVarianceAndCancellation' passed (0.22 seconds)
+Test Case 'PerformanceTests.testTopKPerformanceBaseline' started at 2026-11-16 01:25:38.986
+/workspace/photomosaic/Packages/MosaicCore/Tests/MosaicCoreTests/PerformanceTests.swift:18: Test Case 'PerformanceTests.testTopKPerformanceBaseline' measured [Time, seconds] average: 0.148, relative standard deviation: 0.848%, values: [0.149965, 0.149895, 0.146642, 0.146720, 0.147480, 0.147150, 0.147252, 0.146792, 0.146837, 0.147737], performanceMetricID:org.swift.XCTPerformanceMetric_WallClockTime, maxPercentRelativeStandardDeviation: 10.000%, maxStandardDeviation: 0.100
+Test Case 'PerformanceTests.testTopKPerformanceBaseline' passed (1.482 seconds)
+Test Case 'PerformanceTests.testWorstCaseUniformMediumTiming' started at 2026-11-16 01:25:40.468
+[bench] worst-case uniform 80x60 × 50000, cap=1: 529.9 ms; levels=[32, 96, 1920, 0, 0, 2752, 0]; neighborhoodRelaxed=2752 capIgnored=2752 maxUses=3
+Test Case 'PerformanceTests.testWorstCaseUniformMediumTiming' passed (0.536 seconds)
+Test Case 'PerformanceTests.testWorstCaseUniformSquareMediumTiming' started at 2026-11-16 01:25:41.004
+[bench] worst-case uniform 80x80 × 50000, cap=1: 702.1 ms; levels=[32, 96, 1920, 0, 0, 4352, 0]; neighborhoodRelaxed=4352 capIgnored=4352 maxUses=4
+Test Case 'PerformanceTests.testWorstCaseUniformSquareMediumTiming' passed (0.708 seconds)
+Test Case 'PerformanceTests.testWorstCaseUniformTargetTiming' started at 2026-11-16 01:25:41.712
+[bench] worst-case uniform 120x90 × 50000, cap=1: 1185.0 ms; levels=[32, 96, 1920, 0, 0, 8752, 0]; neighborhoodRelaxed=8752 capIgnored=8752 maxUses=6
+Test Case 'PerformanceTests.testWorstCaseUniformTargetTiming' passed (1.193 seconds)
+Test Suite 'PerformanceTests' passed at 2026-11-16 01:25:42.905
+	 Executed 6 tests, with 0 failures (0 unexpected) in 4.302 (4.302) seconds
+Test Suite 'Selected tests' passed at 2026-11-16 01:25:42.905
+	 Executed 15 tests, with 0 failures (0 unexpected) in 4.429 (4.429) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.2.4 (5ee435b15ad40ec)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

@@ -1,0 +1,7 @@
+# actionlint 配置。
+# `macos-26` 是 GitHub 官方托管 runner 标签（actions/runner-images README、docs.github.com
+# “GitHub-hosted runners” 均列出，2026-11-16 核实），actionlint ≥ 1.7.12 已内置；
+# 这里只为兼容内置标签表较旧的 actionlint（如 1.7.7）声明，避免误报 [runner-label]。
+self-hosted-runner:
+  labels:
+    - macos-26

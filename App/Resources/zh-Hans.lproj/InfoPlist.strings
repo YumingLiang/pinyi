@@ -1,0 +1,10 @@
+/* 自动生成：python3 scripts/gen-localizable.py —— 请改 copy_v1.1.md 后重新生成，勿手改。 */
+
+/* `NSPhotoLibraryUsageDescription`（copy_v1.1.md:73） */
+"NSPhotoLibraryUsageDescription" = "拼忆需要访问你的照片，才能用相册或相簿里的图片来拼马赛克。所有处理都在这台 iPhone 上完成，照片不会上传。";
+
+/* `NSPhotoLibraryAddUsageDescription`（copy_v1.1.md:74） */
+"NSPhotoLibraryAddUsageDescription" = "拼忆需要把做好的马赛克图保存到你的相册。图片只保存在这台 iPhone 上，不会上传。";
+
+/* App 显示名（copy_v1.1.md:340） */
+"CFBundleDisplayName" = "拼忆";
