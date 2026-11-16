@@ -1,0 +1,827 @@
+# swift test (swift624) — MosaicCore + MosaicAppCore, HEAD 419cc5d + working tree, 2026-11-16 11:25:31 PST
+Swift version 6.2.4 (swift-6.2.4-RELEASE)
+Target: x86_64-unknown-linux-gnu
+=== MosaicCore ===
+Building for debugging...
+[0/13] Write sources
+[2/13] Write swift-version-6D5649C0BD1EF214.txt
+[4/42] Compiling MosaicCore FeatureSpec.swift
+[5/42] Compiling MosaicCore FeatureVector.swift
+[6/42] Compiling MosaicCore PixelBuffer.swift
+[7/42] Compiling MosaicCore ExportStrips.swift
+[8/45] Emitting module MosaicCore
+[9/45] Compiling MosaicCore SRGB.swift
+[10/45] Compiling MosaicCore LockedState.swift
+[11/45] Compiling MosaicCore FeatureExtractor.swift
+[12/45] Compiling MosaicCore FeatureMatrix.swift
+[13/45] Compiling MosaicCore Assignment.swift
+[14/45] Compiling MosaicCore BitMask.swift
+[15/45] Compiling MosaicCore Cancellation.swift
+[16/45] Compiling MosaicCore DistanceKernel.swift
+[17/45] Compiling MosaicCore GridLayout.swift
+[18/45] Compiling MosaicCore MosaicGrid.swift
+[19/45] Compiling MosaicCore MosaicPipeline.swift
+[20/45] Compiling MosaicCore TargetSampler.swift
+[21/45] Compiling MosaicCore FeatureFile.swift
+[22/45] Compiling MosaicCore FeatureTable.swift
+[23/45] Compiling MosaicCore LibrarySnapshot.swift
+[24/45] Compiling MosaicCore TuningDefaults.swift
+[25/45] Compiling MosaicCore MosaicCore.swift
+[26/45] Compiling MosaicCore OverlayBlend.swift
+[27/45] Compiling MosaicCore CRC32.swift
+[28/45] Compiling MosaicCore MaterialSupply.swift
+[29/45] Compiling MosaicCore ScalarSIMDKernel.swift
+[30/45] Compiling MosaicCore SeededRandom.swift
+[31/45] Compiling MosaicCore TopKResult.swift
+[32/45] Compiling MosaicCore CIELab.swift
+[33/45] Compiling MosaicCore DisplayP3.swift
+[34/45] Compiling MosaicCore OKLab.swift
+[35/45] Compiling MosaicCore PortableMath.swift
+[36/46] Wrapping AST for MosaicCore for debugging
+[38/61] Compiling MosaicCoreTests PerformanceTests.swift
+[39/61] Compiling MosaicCoreTests RandomTests.swift
+[40/62] Compiling MosaicCoreTests TestSupport.swift
+[41/62] Compiling MosaicCoreTests LowDetailPenaltyTests.swift
+[42/62] Compiling MosaicCoreTests MatchingTests.swift
+[43/62] Compiling MosaicCoreTests FeatureTests.swift
+[44/62] Compiling MosaicCoreTests LayoutTests.swift
+[45/62] Compiling MosaicCoreTests ReviewFollowUpTests.swift
+[46/62] Compiling MosaicCoreTests SupplyAndReshuffleTests.swift
+[47/62] Compiling MosaicCoreTests ConstrainedMatchingTests.swift
+[48/62] Compiling MosaicCoreTests FeatureFileTests.swift
+[49/62] Compiling MosaicCoreTests CancellationTests.swift
+[50/62] Compiling MosaicCoreTests ColorTests.swift
+[51/62] Compiling MosaicCoreTests ArchitectRecheckTests.swift
+[52/62] Compiling MosaicCoreTests AssignmentTests.swift
+[53/62] Emitting module MosaicCoreTests
+[54/63] /tmp/st-swift624-MosaicCore/x86_64-unknown-linux-gnu/debug/MosaicCorePackageDiscoveredTests.derived/all-discovered-tests.swift
+[55/63] Write sources
+[56/63] Wrapping AST for MosaicCoreTests for debugging
+[58/66] Compiling MosaicCorePackageDiscoveredTests all-discovered-tests.swift
+[59/66] Compiling MosaicCorePackageDiscoveredTests MosaicCoreTests.swift
+[60/66] Emitting module MosaicCorePackageDiscoveredTests
+[61/67] /tmp/st-swift624-MosaicCore/x86_64-unknown-linux-gnu/debug/MosaicCorePackageTests.derived/runner.swift
+[62/67] Write sources
+[63/67] Wrapping AST for MosaicCorePackageDiscoveredTests for debugging
+[65/69] Emitting module MosaicCorePackageTests
+[66/69] Compiling MosaicCorePackageTests runner.swift
+[67/70] Wrapping AST for MosaicCorePackageTests for debugging
+[68/70] Write Objects.LinkFileList
+[69/70] Linking MosaicCorePackageTests.xctest
+Build complete! (8.78s)
+Test Suite 'All tests' started at 2026-11-16 11:25:41.666
+Test Suite 'debug.xctest' started at 2026-11-16 11:25:41.692
+Test Suite 'ArchitectRecheckTests' started at 2026-11-16 11:25:41.692
+Test Case 'ArchitectRecheckTests.testCancelDuringBatchDeepeningThenRerunIsIdentical' started at 2026-11-16 11:25:41.692
+Test Case 'ArchitectRecheckTests.testCancelDuringBatchDeepeningThenRerunIsIdentical' passed (1.369 seconds)
+Test Case 'ArchitectRecheckTests.testM3ScaleInvarianceWithVarianceAndNonPowerOfTwoFactors' started at 2026-11-16 11:25:43.060
+Test Case 'ArchitectRecheckTests.testM3ScaleInvarianceWithVarianceAndNonPowerOfTwoFactors' passed (0.091 seconds)
+Test Case 'ArchitectRecheckTests.testMF2AllDistancesZeroUsesDegenerateConstant' started at 2026-11-16 11:25:43.151
+Test Case 'ArchitectRecheckTests.testMF2AllDistancesZeroUsesDegenerateConstant' passed (0.016 seconds)
+Test Case 'ArchitectRecheckTests.testMF2AllZeroTop1FallsBackToKthMedian' started at 2026-11-16 11:25:43.168
+Test Case 'ArchitectRecheckTests.testMF2AllZeroTop1FallsBackToKthMedian' passed (0.04 seconds)
+Test Case 'ArchitectRecheckTests.testMF2MostlyBlackTargetWithIdenticalBlackTileKeepsPenalties' started at 2026-11-16 11:25:43.208
+Test Case 'ArchitectRecheckTests.testMF2MostlyBlackTargetWithIdenticalBlackTileKeepsPenalties' passed (0.056 seconds)
+Test Case 'ArchitectRecheckTests.testMinimalOverflowPathIsReproducible' started at 2026-11-16 11:25:43.263
+Test Case 'ArchitectRecheckTests.testMinimalOverflowPathIsReproducible' passed (0.909 seconds)
+Test Case 'ArchitectRecheckTests.testOverlayConvertsMismatchedColorSpaces' started at 2026-11-16 11:25:44.172
+Test Case 'ArchitectRecheckTests.testOverlayConvertsMismatchedColorSpaces' passed (0.001 seconds)
+Test Case 'ArchitectRecheckTests.testRealV1FileIsDiscardedAndRebuilt' started at 2026-11-16 11:25:44.173
+Test Case 'ArchitectRecheckTests.testRealV1FileIsDiscardedAndRebuilt' passed (0.003 seconds)
+Test Case 'ArchitectRecheckTests.testSlowProgressCallbackStaysMonotonicAndCompletes' started at 2026-11-16 11:25:44.176
+Test Case 'ArchitectRecheckTests.testSlowProgressCallbackStaysMonotonicAndCompletes' passed (0.051 seconds)
+Test Case 'ArchitectRecheckTests.testSnapshotAsyncAndReshuffleKeepVariance' started at 2026-11-16 11:25:44.227
+Test Case 'ArchitectRecheckTests.testSnapshotAsyncAndReshuffleKeepVariance' passed (9.505 seconds)
+Test Case 'ArchitectRecheckTests.testTuningDefaultsSingleSource' started at 2026-11-16 11:25:53.733
+Test Case 'ArchitectRecheckTests.testTuningDefaultsSingleSource' passed (0.001 seconds)
+Test Suite 'ArchitectRecheckTests' passed at 2026-11-16 11:25:53.733
+	 Executed 11 tests, with 0 failures (0 unexpected) in 12.041 (12.041) seconds
+Test Suite 'AssignmentTests' started at 2026-11-16 11:25:53.733
+Test Case 'AssignmentTests.testCapIgnoredWhenMaterialsExhausted' started at 2026-11-16 11:25:53.733
+Test Case 'AssignmentTests.testCapIgnoredWhenMaterialsExhausted' passed (0.01 seconds)
+Test Case 'AssignmentTests.testCapOneWithExactlyEnoughMaterials' started at 2026-11-16 11:25:53.743
+Test Case 'AssignmentTests.testCapOneWithExactlyEnoughMaterials' passed (0.003 seconds)
+Test Case 'AssignmentTests.testDefaultConstraintsWithLargeLibrary' started at 2026-11-16 11:25:53.746
+Test Case 'AssignmentTests.testDefaultConstraintsWithLargeLibrary' passed (0.063 seconds)
+Test Case 'AssignmentTests.testEmptyGrid' started at 2026-11-16 11:25:53.809
+Test Case 'AssignmentTests.testEmptyGrid' passed (0.0 seconds)
+Test Case 'AssignmentTests.testEmptyLibraryAndEmptyMaskThrow' started at 2026-11-16 11:25:53.810
+Test Case 'AssignmentTests.testEmptyLibraryAndEmptyMaskThrow' passed (0.0 seconds)
+Test Case 'AssignmentTests.testExactMatchesWhenUnconstrained' started at 2026-11-16 11:25:53.810
+Test Case 'AssignmentTests.testExactMatchesWhenUnconstrained' passed (0.003 seconds)
+Test Case 'AssignmentTests.testExpandedCandidatesFallback' started at 2026-11-16 11:25:53.812
+Test Case 'AssignmentTests.testExpandedCandidatesFallback' passed (0.007 seconds)
+Test Case 'AssignmentTests.testFewerMaterialsThanCellsAutomaticCap' started at 2026-11-16 11:25:53.819
+Test Case 'AssignmentTests.testFewerMaterialsThanCellsAutomaticCap' passed (0.032 seconds)
+Test Case 'AssignmentTests.testInputValidation' started at 2026-11-16 11:25:53.851
+Test Case 'AssignmentTests.testInputValidation' passed (0.0 seconds)
+Test Case 'AssignmentTests.testMaskIsRespected' started at 2026-11-16 11:25:53.852
+Test Case 'AssignmentTests.testMaskIsRespected' passed (0.007 seconds)
+Test Case 'AssignmentTests.testNeighborhoodOffsets' started at 2026-11-16 11:25:53.859
+Test Case 'AssignmentTests.testNeighborhoodOffsets' passed (0.0 seconds)
+Test Case 'AssignmentTests.testOrderOptions' started at 2026-11-16 11:25:53.859
+Test Case 'AssignmentTests.testOrderOptions' passed (0.003 seconds)
+Test Case 'AssignmentTests.testPipelineEndToEnd' started at 2026-11-16 11:25:53.861
+Test Case 'AssignmentTests.testPipelineEndToEnd' passed (0.004 seconds)
+Test Case 'AssignmentTests.testRadiusTwoNeighborhood' started at 2026-11-16 11:25:53.866
+Test Case 'AssignmentTests.testRadiusTwoNeighborhood' passed (0.023 seconds)
+Test Case 'AssignmentTests.testSameSeedSameResultDifferentSeedDifferentResult' started at 2026-11-16 11:25:53.889
+Test Case 'AssignmentTests.testSameSeedSameResultDifferentSeedDifferentResult' passed (0.362 seconds)
+Test Case 'AssignmentTests.testSingleMaterial' started at 2026-11-16 11:25:54.251
+Test Case 'AssignmentTests.testSingleMaterial' passed (0.001 seconds)
+Test Case 'AssignmentTests.testTwoMaterialsRelaxesNeighborhood' started at 2026-11-16 11:25:54.252
+Test Case 'AssignmentTests.testTwoMaterialsRelaxesNeighborhood' passed (0.001 seconds)
+Test Case 'AssignmentTests.testUsageCapResolution' started at 2026-11-16 11:25:54.253
+Test Case 'AssignmentTests.testUsageCapResolution' passed (0.0 seconds)
+Test Case 'AssignmentTests.testUsagePenaltySpreadsUsage' started at 2026-11-16 11:25:54.253
+Test Case 'AssignmentTests.testUsagePenaltySpreadsUsage' passed (0.103 seconds)
+Test Suite 'AssignmentTests' passed at 2026-11-16 11:25:54.357
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.623 (0.623) seconds
+Test Suite 'CancellationTests' started at 2026-11-16 11:25:54.357
+Test Case 'CancellationTests.testAsyncAPIUncancelledMatchesSyncAPI' started at 2026-11-16 11:25:54.357
+Test Case 'CancellationTests.testAsyncAPIUncancelledMatchesSyncAPI' passed (0.098 seconds)
+Test Case 'CancellationTests.testCancelDuringMatchingAndAssigningPhases' started at 2026-11-16 11:25:54.455
+Test Case 'CancellationTests.testCancelDuringMatchingAndAssigningPhases' passed (0.027 seconds)
+Test Case 'CancellationTests.testCancellationLatencyFromAnotherThread' started at 2026-11-16 11:25:54.482
+[bench] cancel latency (assign 80x60 × 20000, cross-thread) = 17.36 ms
+Test Case 'CancellationTests.testCancellationLatencyFromAnotherThread' passed (0.056 seconds)
+Test Case 'CancellationTests.testCheckIntervalValidated' started at 2026-11-16 11:25:54.538
+Test Case 'CancellationTests.testCheckIntervalValidated' passed (0.0 seconds)
+Test Case 'CancellationTests.testPreCancelledTokenStopsEverything' started at 2026-11-16 11:25:54.538
+Test Case 'CancellationTests.testPreCancelledTokenStopsEverything' passed (0.003 seconds)
+Test Case 'CancellationTests.testRerunAfterCancelIsIdenticalToUncancelledRun' started at 2026-11-16 11:25:54.541
+Test Case 'CancellationTests.testRerunAfterCancelIsIdenticalToUncancelledRun' passed (0.07 seconds)
+Test Case 'CancellationTests.testSwiftTaskCancellationAsyncAPI' started at 2026-11-16 11:25:54.611
+[bench] Task.cancel latency (pipeline .fine × 20000) = 14.42 ms
+Test Case 'CancellationTests.testSwiftTaskCancellationAsyncAPI' passed (1.099 seconds)
+Test Case 'CancellationTests.testSyncAPIObservesEnclosingTaskCancellation' started at 2026-11-16 11:25:55.710
+Test Case 'CancellationTests.testSyncAPIObservesEnclosingTaskCancellation' passed (0.003 seconds)
+Test Suite 'CancellationTests' passed at 2026-11-16 11:25:55.713
+	 Executed 8 tests, with 0 failures (0 unexpected) in 1.356 (1.356) seconds
+Test Suite 'ColorTests' started at 2026-11-16 11:25:55.713
+Test Case 'ColorTests.testA03CIELabReferenceValues' started at 2026-11-16 11:25:55.713
+Test Case 'ColorTests.testA03CIELabReferenceValues' passed (0.001 seconds)
+Test Case 'ColorTests.testColorSpaceDispatch' started at 2026-11-16 11:25:55.714
+Test Case 'ColorTests.testColorSpaceDispatch' passed (0.0 seconds)
+Test Case 'ColorTests.testOKLabDistance' started at 2026-11-16 11:25:55.714
+Test Case 'ColorTests.testOKLabDistance' passed (0.0 seconds)
+Test Case 'ColorTests.testOKLabGrayIsAchromatic' started at 2026-11-16 11:25:55.714
+Test Case 'ColorTests.testOKLabGrayIsAchromatic' passed (0.0 seconds)
+Test Case 'ColorTests.testOKLabPrimariesReferenceValues' started at 2026-11-16 11:25:55.714
+Test Case 'ColorTests.testOKLabPrimariesReferenceValues' passed (0.0 seconds)
+Test Case 'ColorTests.testOKLabRoundTrip' started at 2026-11-16 11:25:55.714
+Test Case 'ColorTests.testOKLabRoundTrip' passed (0.0 seconds)
+Test Case 'ColorTests.testSRGBRoundTrip' started at 2026-11-16 11:25:55.715
+Test Case 'ColorTests.testSRGBRoundTrip' passed (0.0 seconds)
+Test Case 'ColorTests.testSRGBTransferFunctionReferenceValues' started at 2026-11-16 11:25:55.715
+Test Case 'ColorTests.testSRGBTransferFunctionReferenceValues' passed (0.0 seconds)
+Test Suite 'ColorTests' passed at 2026-11-16 11:25:55.715
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.002 (0.002) seconds
+Test Suite 'ConstrainedMatchingTests' started at 2026-11-16 11:25:55.715
+Test Case 'ConstrainedMatchingTests.testBitMaskExcludesCandidatesFromTopKAndAssignment' started at 2026-11-16 11:25:55.715
+Test Case 'ConstrainedMatchingTests.testBitMaskExcludesCandidatesFromTopKAndAssignment' passed (0.003 seconds)
+Test Case 'ConstrainedMatchingTests.testDifferentSeedsChangePRNGSequence' started at 2026-11-16 11:25:55.718
+Test Case 'ConstrainedMatchingTests.testDifferentSeedsChangePRNGSequence' passed (0.036 seconds)
+Test Case 'ConstrainedMatchingTests.testEightNeighborhoodHasNoDuplicateWhenSupplyIsAmple' started at 2026-11-16 11:25:55.754
+Test Case 'ConstrainedMatchingTests.testEightNeighborhoodHasNoDuplicateWhenSupplyIsAmple' passed (0.047 seconds)
+Test Case 'ConstrainedMatchingTests.testEqualDistanceTiesBreakByAscendingIndex' started at 2026-11-16 11:25:55.801
+Test Case 'ConstrainedMatchingTests.testEqualDistanceTiesBreakByAscendingIndex' passed (0.0 seconds)
+Test Case 'ConstrainedMatchingTests.testFallbackChainCountsMaterialShortageAndFillsAllCells' started at 2026-11-16 11:25:55.801
+Test Case 'ConstrainedMatchingTests.testFallbackChainCountsMaterialShortageAndFillsAllCells' passed (0.001 seconds)
+Test Case 'ConstrainedMatchingTests.testSameSeedSameInputYieldsIdenticalAssignment' started at 2026-11-16 11:25:55.802
+Test Case 'ConstrainedMatchingTests.testSameSeedSameInputYieldsIdenticalAssignment' passed (0.039 seconds)
+Test Case 'ConstrainedMatchingTests.testUsageNeverExceedsCapAndDefaultFormula' started at 2026-11-16 11:25:55.841
+Test Case 'ConstrainedMatchingTests.testUsageNeverExceedsCapAndDefaultFormula' passed (0.029 seconds)
+Test Suite 'ConstrainedMatchingTests' passed at 2026-11-16 11:25:55.870
+	 Executed 7 tests, with 0 failures (0 unexpected) in 0.155 (0.155) seconds
+Test Suite 'FeatureFileTests' started at 2026-11-16 11:25:55.870
+Test Case 'FeatureFileTests.testA08DecodesHandWrittenLittleEndianBytes' started at 2026-11-16 11:25:55.870
+Test Case 'FeatureFileTests.testA08DecodesHandWrittenLittleEndianBytes' passed (0.001 seconds)
+Test Case 'FeatureFileTests.testA08EncodingIsDeterministicAndLittleEndian' started at 2026-11-16 11:25:55.870
+Test Case 'FeatureFileTests.testA08EncodingIsDeterministicAndLittleEndian' passed (0.0 seconds)
+Test Case 'FeatureFileTests.testA08RoundTripMultipleChunks' started at 2026-11-16 11:25:55.871
+Test Case 'FeatureFileTests.testA08RoundTripMultipleChunks' passed (0.002 seconds)
+Test Case 'FeatureFileTests.testA09AssignerSkipsTombstones' started at 2026-11-16 11:25:55.873
+Test Case 'FeatureFileTests.testA09AssignerSkipsTombstones' passed (0.004 seconds)
+Test Case 'FeatureFileTests.testA09CompactIfNeededRewritesFile' started at 2026-11-16 11:25:55.877
+Test Case 'FeatureFileTests.testA09CompactIfNeededRewritesFile' passed (0.003 seconds)
+Test Case 'FeatureFileTests.testA09TombstoneAndCompaction' started at 2026-11-16 11:25:55.880
+Test Case 'FeatureFileTests.testA09TombstoneAndCompaction' passed (0.001 seconds)
+Test Case 'FeatureFileTests.testAtomicWriteReplacesAndLeavesNoTempFiles' started at 2026-11-16 11:25:55.881
+Test Case 'FeatureFileTests.testAtomicWriteReplacesAndLeavesNoTempFiles' passed (0.001 seconds)
+Test Case 'FeatureFileTests.testCRC32ReferenceVectors' started at 2026-11-16 11:25:55.882
+Test Case 'FeatureFileTests.testCRC32ReferenceVectors' passed (0.0 seconds)
+Test Case 'FeatureFileTests.testChunkChecksumFailureKeepsPrefixBeforeBadChunk' started at 2026-11-16 11:25:55.882
+Test Case 'FeatureFileTests.testChunkChecksumFailureKeepsPrefixBeforeBadChunk' passed (0.0 seconds)
+Test Case 'FeatureFileTests.testFailedWriteKeepsOldFile' started at 2026-11-16 11:25:55.883
+Test Case 'FeatureFileTests.testFailedWriteKeepsOldFile' passed (0.001 seconds)
+Test Case 'FeatureFileTests.testFeatureVersionMismatch' started at 2026-11-16 11:25:55.884
+Test Case 'FeatureFileTests.testFeatureVersionMismatch' passed (0.001 seconds)
+Test Case 'FeatureFileTests.testHeaderCorruptionAndBadMagic' started at 2026-11-16 11:25:55.885
+Test Case 'FeatureFileTests.testHeaderCorruptionAndBadMagic' passed (0.0 seconds)
+Test Case 'FeatureFileTests.testIncompatibleColorSpaceOrDimension' started at 2026-11-16 11:25:55.885
+Test Case 'FeatureFileTests.testIncompatibleColorSpaceOrDimension' passed (0.0 seconds)
+Test Case 'FeatureFileTests.testLargeFile50kRecords' started at 2026-11-16 11:25:55.886
+[bench] features.bin 50000 records = 2.86 MB; write 70.3 ms, mmap read+verify 30.9 ms
+Test Case 'FeatureFileTests.testLargeFile50kRecords' passed (0.183 seconds)
+Test Case 'FeatureFileTests.testRoundTripChunkBoundariesAndEmpty' started at 2026-11-16 11:25:56.069
+Test Case 'FeatureFileTests.testRoundTripChunkBoundariesAndEmpty' passed (0.001 seconds)
+Test Case 'FeatureFileTests.testTrailingBytes' started at 2026-11-16 11:25:56.070
+Test Case 'FeatureFileTests.testTrailingBytes' passed (0.0 seconds)
+Test Case 'FeatureFileTests.testTruncationKeepsValidPrefix' started at 2026-11-16 11:25:56.070
+Test Case 'FeatureFileTests.testTruncationKeepsValidPrefix' passed (0.002 seconds)
+Test Case 'FeatureFileTests.testUnsupportedFormatVersion' started at 2026-11-16 11:25:56.072
+Test Case 'FeatureFileTests.testUnsupportedFormatVersion' passed (0.0 seconds)
+Test Suite 'FeatureFileTests' passed at 2026-11-16 11:25:56.072
+	 Executed 18 tests, with 0 failures (0 unexpected) in 0.202 (0.202) seconds
+Test Suite 'FeatureTests' started at 2026-11-16 11:25:56.072
+Test Case 'FeatureTests.testBGRALayout' started at 2026-11-16 11:25:56.072
+Test Case 'FeatureTests.testBGRALayout' passed (0.0 seconds)
+Test Case 'FeatureTests.testCenterSquareCropOnLandscapeImage' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testCenterSquareCropOnLandscapeImage' passed (0.0 seconds)
+Test Case 'FeatureTests.testFeatureMatrixSoALayout' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testFeatureMatrixSoALayout' passed (0.0 seconds)
+Test Case 'FeatureTests.testFeatureVectorBasics' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testFeatureVectorBasics' passed (0.0 seconds)
+Test Case 'FeatureTests.testLinearLightVersusPerceptualAveraging' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testLinearLightVersusPerceptualAveraging' passed (0.0 seconds)
+Test Case 'FeatureTests.testOddAndTinyRegions' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testOddAndTinyRegions' passed (0.0 seconds)
+Test Case 'FeatureTests.testPixelBufferValidation' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testPixelBufferValidation' passed (0.0 seconds)
+Test Case 'FeatureTests.testQuadrantsMapToBlocksInOrder' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testQuadrantsMapToBlocksInOrder' passed (0.0 seconds)
+Test Case 'FeatureTests.testSpanPartitionCoversLength' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testSpanPartitionCoversLength' passed (0.0 seconds)
+Test Case 'FeatureTests.testTargetSamplerGrid' started at 2026-11-16 11:25:56.073
+Test Case 'FeatureTests.testTargetSamplerGrid' passed (0.152 seconds)
+Test Case 'FeatureTests.testUniformImageGivesFourEqualBlocks' started at 2026-11-16 11:25:56.225
+Test Case 'FeatureTests.testUniformImageGivesFourEqualBlocks' passed (0.001 seconds)
+Test Suite 'FeatureTests' passed at 2026-11-16 11:25:56.226
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.154 (0.154) seconds
+Test Suite 'LayoutTests' started at 2026-11-16 11:25:56.226
+Test Case 'LayoutTests.testCellPixelRegionsCoverCropWithoutGapsOrOverflow' started at 2026-11-16 11:25:56.226
+Test Case 'LayoutTests.testCellPixelRegionsCoverCropWithoutGapsOrOverflow' passed (0.0 seconds)
+Test Case 'LayoutTests.testExactlyNToOneBoundary' started at 2026-11-16 11:25:56.227
+Test Case 'LayoutTests.testExactlyNToOneBoundary' passed (0.0 seconds)
+Test Case 'LayoutTests.testExportSize' started at 2026-11-16 11:25:56.227
+Test Case 'LayoutTests.testExportSize' passed (0.0 seconds)
+Test Case 'LayoutTests.testExportSizeTable' started at 2026-11-16 11:25:56.227
+Test Case 'LayoutTests.testExportSizeTable' passed (0.0 seconds)
+Test Case 'LayoutTests.testExtremeLongImagePlanA' started at 2026-11-16 11:25:56.227
+Test Case 'LayoutTests.testExtremeLongImagePlanA' passed (0.047 seconds)
+Test Case 'LayoutTests.testExtremePanorama' started at 2026-11-16 11:25:56.274
+Test Case 'LayoutTests.testExtremePanorama' passed (0.0 seconds)
+Test Case 'LayoutTests.testFourByThree' started at 2026-11-16 11:25:56.275
+Test Case 'LayoutTests.testFourByThree' passed (0.0 seconds)
+Test Case 'LayoutTests.testInvalidSize' started at 2026-11-16 11:25:56.275
+Test Case 'LayoutTests.testInvalidSize' passed (0.0 seconds)
+Test Case 'LayoutTests.testNoFloatingPointUnderCount' started at 2026-11-16 11:25:56.275
+Test Case 'LayoutTests.testNoFloatingPointUnderCount' passed (0.0 seconds)
+Test Case 'LayoutTests.testNonIntegerCellSize' started at 2026-11-16 11:25:56.275
+Test Case 'LayoutTests.testNonIntegerCellSize' passed (0.0 seconds)
+Test Case 'LayoutTests.testSixteenByNine' started at 2026-11-16 11:25:56.275
+Test Case 'LayoutTests.testSixteenByNine' passed (0.0 seconds)
+Test Case 'LayoutTests.testSquare' started at 2026-11-16 11:25:56.275
+Test Case 'LayoutTests.testSquare' passed (0.0 seconds)
+Test Case 'LayoutTests.testThreeByFourPortrait' started at 2026-11-16 11:25:56.275
+Test Case 'LayoutTests.testThreeByFourPortrait' passed (0.0 seconds)
+Test Suite 'LayoutTests' passed at 2026-11-16 11:25:56.275
+	 Executed 13 tests, with 0 failures (0 unexpected) in 0.049 (0.049) seconds
+Test Suite 'LowDetailPenaltyTests' started at 2026-11-16 11:25:56.275
+Test Case 'LowDetailPenaltyTests.testExtractorVarianceFeedsTable' started at 2026-11-16 11:25:56.275
+Test Case 'LowDetailPenaltyTests.testExtractorVarianceFeedsTable' passed (0.0 seconds)
+Test Case 'LowDetailPenaltyTests.testFlatTilesUsedLessOnSyntheticLibrary' started at 2026-11-16 11:25:56.275
+[bench] flat tiles used: without penalty 156, with 73; mean dist 0.2076102059086164 → 0.20790491253137589
+Test Case 'LowDetailPenaltyTests.testFlatTilesUsedLessOnSyntheticLibrary' passed (0.031 seconds)
+Test Case 'LowDetailPenaltyTests.testFlatnessRampIsLinear' started at 2026-11-16 11:25:56.307
+Test Case 'LowDetailPenaltyTests.testFlatnessRampIsLinear' passed (0.0 seconds)
+Test Case 'LowDetailPenaltyTests.testNilVarianceMatchesLegacyAPI' started at 2026-11-16 11:25:56.307
+Test Case 'LowDetailPenaltyTests.testNilVarianceMatchesLegacyAPI' passed (0.012 seconds)
+Test Case 'LowDetailPenaltyTests.testPenaltyAlsoAppliesInExhaustiveSearch' started at 2026-11-16 11:25:56.319
+Test Case 'LowDetailPenaltyTests.testPenaltyAlsoAppliesInExhaustiveSearch' passed (0.0 seconds)
+Test Case 'LowDetailPenaltyTests.testPenaltyDoesNotOverrideClearlyBetterColor' started at 2026-11-16 11:25:56.319
+Test Case 'LowDetailPenaltyTests.testPenaltyDoesNotOverrideClearlyBetterColor' passed (0.0 seconds)
+Test Case 'LowDetailPenaltyTests.testPenaltyFlipsNearTie' started at 2026-11-16 11:25:56.319
+Test Case 'LowDetailPenaltyTests.testPenaltyFlipsNearTie' passed (0.0 seconds)
+Test Case 'LowDetailPenaltyTests.testRelativeLowDetailPenaltyScale' started at 2026-11-16 11:25:56.319
+Test Case 'LowDetailPenaltyTests.testRelativeLowDetailPenaltyScale' passed (0.0 seconds)
+Test Case 'LowDetailPenaltyTests.testValidation' started at 2026-11-16 11:25:56.319
+Test Case 'LowDetailPenaltyTests.testValidation' passed (0.0 seconds)
+Test Suite 'LowDetailPenaltyTests' passed at 2026-11-16 11:25:56.320
+	 Executed 9 tests, with 0 failures (0 unexpected) in 0.044 (0.044) seconds
+Test Suite 'MatchingTests' started at 2026-11-16 11:25:56.320
+Test Case 'MatchingTests.testArbitraryDimension' started at 2026-11-16 11:25:56.320
+Test Case 'MatchingTests.testArbitraryDimension' passed (0.002 seconds)
+Test Case 'MatchingTests.testBitMask' started at 2026-11-16 11:25:56.321
+Test Case 'MatchingTests.testBitMask' passed (0.0 seconds)
+Test Case 'MatchingTests.testEmptyInputs' started at 2026-11-16 11:25:56.322
+Test Case 'MatchingTests.testEmptyInputs' passed (0.0 seconds)
+Test Case 'MatchingTests.testExactMatchIsFirst' started at 2026-11-16 11:25:56.322
+Test Case 'MatchingTests.testExactMatchIsFirst' passed (0.001 seconds)
+Test Case 'MatchingTests.testKLargerThanLibrary' started at 2026-11-16 11:25:56.323
+Test Case 'MatchingTests.testKLargerThanLibrary' passed (0.0 seconds)
+Test Case 'MatchingTests.testMaskRestrictsCandidatesAndClampsK' started at 2026-11-16 11:25:56.323
+Test Case 'MatchingTests.testMaskRestrictsCandidatesAndClampsK' passed (0.001 seconds)
+Test Case 'MatchingTests.testSquaredEuclideanDistance' started at 2026-11-16 11:25:56.324
+Test Case 'MatchingTests.testSquaredEuclideanDistance' passed (0.0 seconds)
+Test Case 'MatchingTests.testTiesBrokenByIndex' started at 2026-11-16 11:25:56.324
+Test Case 'MatchingTests.testTiesBrokenByIndex' passed (0.0 seconds)
+Test Case 'MatchingTests.testTopKIsSortedAndParallelEqualsSerial' started at 2026-11-16 11:25:56.324
+Test Case 'MatchingTests.testTopKIsSortedAndParallelEqualsSerial' passed (0.08 seconds)
+Test Case 'MatchingTests.testTopKMatchesNaiveReference' started at 2026-11-16 11:25:56.404
+Test Case 'MatchingTests.testTopKMatchesNaiveReference' passed (3.545 seconds)
+Test Case 'MatchingTests.testValidationErrors' started at 2026-11-16 11:25:59.950
+Test Case 'MatchingTests.testValidationErrors' passed (0.001 seconds)
+Test Suite 'MatchingTests' passed at 2026-11-16 11:25:59.950
+	 Executed 11 tests, with 0 failures (0 unexpected) in 3.631 (3.631) seconds
+Test Suite 'PerformanceTests' started at 2026-11-16 11:25:59.950
+Test Case 'PerformanceTests.testEndToEndAssignmentTiming' started at 2026-11-16 11:25:59.950
+[bench] assign 40x30 cells × 5000 candidates: 89.5 ms; levels=[1200, 0, 0, 0, 0, 0, 0]; cap=1
+Test Case 'PerformanceTests.testEndToEndAssignmentTiming' passed (0.097 seconds)
+Test Case 'PerformanceTests.testEndToEndWithVarianceAndCancellation' started at 2026-11-16 11:26:00.047
+[bench] assign+variance+token+progress 40x30 × 5000: 116.3 ms; levels=[1200, 0, 0, 0, 0, 0, 0]
+[bench] cancel latency mid-matching 40x30 × 5000: 5.40 ms
+Test Case 'PerformanceTests.testEndToEndWithVarianceAndCancellation' passed (0.162 seconds)
+Test Case 'PerformanceTests.testTopKPerformanceBaseline' started at 2026-11-16 11:26:00.209
+/workspace/photomosaic/Packages/MosaicCore/Tests/MosaicCoreTests/PerformanceTests.swift:32: Test Case 'PerformanceTests.testTopKPerformanceBaseline' measured [Time, seconds] average: 0.071, relative standard deviation: 10.514%, values: [0.069063, 0.075340, 0.060607, 0.061688, 0.063147, 0.083304, 0.069255, 0.076503, 0.069971, 0.076699], performanceMetricID:org.swift.XCTPerformanceMetric_WallClockTime, maxPercentRelativeStandardDeviation: 10.000%, maxStandardDeviation: 0.100
+Test Case 'PerformanceTests.testTopKPerformanceBaseline' passed (0.711 seconds)
+Test Case 'PerformanceTests.testWorstCaseUniformMediumTiming' started at 2026-11-16 11:26:00.920
+[bench] worst-case uniform 20x15 × 3000, cap=1: 191.5 ms; levels=[32, 96, 172, 0, 0, 0, 0]; neighborhoodRelaxed=0 capIgnored=0 maxUses=1
+Test Case 'PerformanceTests.testWorstCaseUniformMediumTiming' passed (0.196 seconds)
+Test Case 'PerformanceTests.testWorstCaseUniformSquareMediumTiming' started at 2026-11-16 11:26:01.116
+[bench] worst-case uniform 20x20 × 3000, cap=1: 225.7 ms; levels=[32, 96, 272, 0, 0, 0, 0]; neighborhoodRelaxed=0 capIgnored=0 maxUses=1
+Test Case 'PerformanceTests.testWorstCaseUniformSquareMediumTiming' passed (0.23 seconds)
+Test Case 'PerformanceTests.testWorstCaseUniformTargetTiming' started at 2026-11-16 11:26:01.346
+[bench] worst-case uniform 30x20 × 3000, cap=1: 405.8 ms; levels=[32, 96, 472, 0, 0, 0, 0]; neighborhoodRelaxed=0 capIgnored=0 maxUses=1
+Test Case 'PerformanceTests.testWorstCaseUniformTargetTiming' passed (0.41 seconds)
+Test Suite 'PerformanceTests' passed at 2026-11-16 11:26:01.756
+	 Executed 6 tests, with 0 failures (0 unexpected) in 1.806 (1.806) seconds
+Test Suite 'RandomTests' started at 2026-11-16 11:26:01.756
+Test Case 'RandomTests.testBoundedIsInRangeAndRoughlyUniform' started at 2026-11-16 11:26:01.756
+Test Case 'RandomTests.testBoundedIsInRangeAndRoughlyUniform' passed (0.005 seconds)
+Test Case 'RandomTests.testPermutationIsReproducibleAndValid' started at 2026-11-16 11:26:01.762
+Test Case 'RandomTests.testPermutationIsReproducibleAndValid' passed (0.002 seconds)
+Test Case 'RandomTests.testSplitMix64ReferenceVector' started at 2026-11-16 11:26:01.764
+Test Case 'RandomTests.testSplitMix64ReferenceVector' passed (0.0 seconds)
+Test Case 'RandomTests.testUnitFloatRange' started at 2026-11-16 11:26:01.764
+Test Case 'RandomTests.testUnitFloatRange' passed (0.001 seconds)
+Test Case 'RandomTests.testXoshiro256StarStarReferenceVector' started at 2026-11-16 11:26:01.765
+Test Case 'RandomTests.testXoshiro256StarStarReferenceVector' passed (0.0 seconds)
+Test Case 'RandomTests.testXoshiroSeedExpansion' started at 2026-11-16 11:26:01.765
+Test Case 'RandomTests.testXoshiroSeedExpansion' passed (0.0 seconds)
+Test Suite 'RandomTests' passed at 2026-11-16 11:26:01.765
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.009 (0.009) seconds
+Test Suite 'ReviewFollowUpTests' started at 2026-11-16 11:26:01.765
+Test Case 'ReviewFollowUpTests.testA04DisplayP3MatrixDerivedFromPrimaries' started at 2026-11-16 11:26:01.765
+Test Case 'ReviewFollowUpTests.testA04DisplayP3MatrixDerivedFromPrimaries' passed (0.0 seconds)
+Test Case 'ReviewFollowUpTests.testA04P3BufferIsConvertedBeforeFeatures' started at 2026-11-16 11:26:01.765
+Test Case 'ReviewFollowUpTests.testA04P3BufferIsConvertedBeforeFeatures' passed (0.0 seconds)
+Test Case 'ReviewFollowUpTests.testA12AllOnesMaskEqualsNoMask' started at 2026-11-16 11:26:01.765
+Test Case 'ReviewFollowUpTests.testA12AllOnesMaskEqualsNoMask' passed (0.018 seconds)
+Test Case 'ReviewFollowUpTests.testA19OverlayAlphaFormula' started at 2026-11-16 11:26:01.784
+Test Case 'ReviewFollowUpTests.testA19OverlayAlphaFormula' passed (0.001 seconds)
+Test Case 'ReviewFollowUpTests.testA20ExportStripsCoverWithoutOverlap' started at 2026-11-16 11:26:01.785
+Test Case 'ReviewFollowUpTests.testA20ExportStripsCoverWithoutOverlap' passed (0.002 seconds)
+Test Case 'ReviewFollowUpTests.testM1CapIgnoredSpreadsOverflowEvenly' started at 2026-11-16 11:26:01.786
+Test Case 'ReviewFollowUpTests.testM1CapIgnoredSpreadsOverflowEvenly' passed (1.016 seconds)
+Test Case 'ReviewFollowUpTests.testM3LambdaIsAlphaTimesTop1Median' started at 2026-11-16 11:26:02.803
+Test Case 'ReviewFollowUpTests.testM3LambdaIsAlphaTimesTop1Median' passed (0.006 seconds)
+Test Case 'ReviewFollowUpTests.testM3ScaleInvarianceOfRelativePenalty' started at 2026-11-16 11:26:02.808
+Test Case 'ReviewFollowUpTests.testM3ScaleInvarianceOfRelativePenalty' passed (0.116 seconds)
+Test Case 'ReviewFollowUpTests.testS1SinglePassVarianceMatchesTwoPassReference' started at 2026-11-16 11:26:02.925
+Test Case 'ReviewFollowUpTests.testS1SinglePassVarianceMatchesTwoPassReference' passed (0.002 seconds)
+Test Case 'ReviewFollowUpTests.testS2ParallelSamplerEqualsSerial' started at 2026-11-16 11:26:02.927
+Test Case 'ReviewFollowUpTests.testS2ParallelSamplerEqualsSerial' passed (0.121 seconds)
+Test Case 'ReviewFollowUpTests.testS3PortableCbrt' started at 2026-11-16 11:26:03.048
+Test Case 'ReviewFollowUpTests.testS3PortableCbrt' passed (0.012 seconds)
+Test Case 'ReviewFollowUpTests.testS4FeatureSpecMismatchThrows' started at 2026-11-16 11:26:03.059
+Test Case 'ReviewFollowUpTests.testS4FeatureSpecMismatchThrows' passed (0.01 seconds)
+Test Case 'ReviewFollowUpTests.testS6SnapshotRestrictsRowsAndDrivesCapAndSupply' started at 2026-11-16 11:26:03.070
+Test Case 'ReviewFollowUpTests.testS6SnapshotRestrictsRowsAndDrivesCapAndSupply' passed (0.044 seconds)
+Test Case 'ReviewFollowUpTests.testShortageNoticeTruthTable' started at 2026-11-16 11:26:03.114
+Test Case 'ReviewFollowUpTests.testShortageNoticeTruthTable' passed (0.01 seconds)
+Test Suite 'ReviewFollowUpTests' passed at 2026-11-16 11:26:03.124
+	 Executed 14 tests, with 0 failures (0 unexpected) in 1.358 (1.358) seconds
+Test Suite 'SupplyAndReshuffleTests' started at 2026-11-16 11:26:03.124
+Test Case 'SupplyAndReshuffleTests.testBatchDeepeningAvoidsFalseShortage' started at 2026-11-16 11:26:03.124
+[M1] legacy chain levels=[340, 597, 0, 0, 1, 262, 0]
+[M1] batch-deepening levels=[346, 256, 598, 0, 0, 0, 0]
+Test Case 'SupplyAndReshuffleTests.testBatchDeepeningAvoidsFalseShortage' passed (2.143 seconds)
+Test Case 'SupplyAndReshuffleTests.testDeferredQueueDeterministicAcrossGroupSizes' started at 2026-11-16 11:26:05.267
+Test Case 'SupplyAndReshuffleTests.testDeferredQueueDeterministicAcrossGroupSizes' passed (3.215 seconds)
+Test Case 'SupplyAndReshuffleTests.testExhaustiveOnlyWhenFewCellsRemain' started at 2026-11-16 11:26:08.482
+Test Case 'SupplyAndReshuffleTests.testExhaustiveOnlyWhenFewCellsRemain' passed (0.315 seconds)
+Test Case 'SupplyAndReshuffleTests.testMaterialSupplyThreshold' started at 2026-11-16 11:26:08.796
+Test Case 'SupplyAndReshuffleTests.testMaterialSupplyThreshold' passed (0.0 seconds)
+Test Case 'SupplyAndReshuffleTests.testMultipleSourcesUnionAndDedupe' started at 2026-11-16 11:26:08.797
+Test Case 'SupplyAndReshuffleTests.testMultipleSourcesUnionAndDedupe' passed (0.005 seconds)
+Test Case 'SupplyAndReshuffleTests.testRelaxedConstraintsFlagExcludesPureKExpansion' started at 2026-11-16 11:26:08.801
+Test Case 'SupplyAndReshuffleTests.testRelaxedConstraintsFlagExcludesPureKExpansion' passed (0.007 seconds)
+Test Case 'SupplyAndReshuffleTests.testReshuffleChangesResultSameSeedReproduces' started at 2026-11-16 11:26:08.808
+Test Case 'SupplyAndReshuffleTests.testReshuffleChangesResultSameSeedReproduces' passed (1.791 seconds)
+Test Case 'SupplyAndReshuffleTests.testSeedDerivationSequenceIsDistinct' started at 2026-11-16 11:26:10.599
+Test Case 'SupplyAndReshuffleTests.testSeedDerivationSequenceIsDistinct' passed (0.001 seconds)
+Test Suite 'SupplyAndReshuffleTests' passed at 2026-11-16 11:26:10.600
+	 Executed 8 tests, with 0 failures (0 unexpected) in 7.476 (7.476) seconds
+Test Suite 'debug.xctest' passed at 2026-11-16 11:26:10.600
+	 Executed 149 tests, with 0 failures (0 unexpected) in 28.907 (28.907) seconds
+Test Suite 'All tests' passed at 2026-11-16 11:26:10.600
+	 Executed 149 tests, with 0 failures (0 unexpected) in 28.907 (28.907) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.2.4 (5ee435b15ad40ec)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
+exit=0
+=== MosaicAppCore ===
+Building for debugging...
+[0/15] Write sources
+[3/15] Write swift-version-6D5649C0BD1EF214.txt
+[5/44] Emitting module MosaicCore
+[6/47] Compiling MosaicCore Assignment.swift
+[7/47] Compiling MosaicCore BitMask.swift
+[8/47] Compiling MosaicCore Cancellation.swift
+[9/47] Compiling MosaicCore DistanceKernel.swift
+[10/47] Compiling MosaicCore GridLayout.swift
+[11/47] Compiling MosaicCore MosaicGrid.swift
+[12/47] Compiling MosaicCore MosaicPipeline.swift
+[13/47] Compiling MosaicCore TargetSampler.swift
+[14/47] Compiling MosaicCore FeatureFile.swift
+[15/47] Compiling MosaicCore FeatureTable.swift
+[16/47] Compiling MosaicCore LibrarySnapshot.swift
+[17/47] Compiling MosaicCore CIELab.swift
+[18/47] Compiling MosaicCore DisplayP3.swift
+[19/47] Compiling MosaicCore OKLab.swift
+[20/47] Compiling MosaicCore PortableMath.swift
+[21/47] Compiling MosaicCore FeatureSpec.swift
+[22/47] Compiling MosaicCore FeatureVector.swift
+[23/47] Compiling MosaicCore PixelBuffer.swift
+[24/47] Compiling MosaicCore ExportStrips.swift
+[25/47] Compiling MosaicCore TuningDefaults.swift
+[26/47] Compiling MosaicCore MosaicCore.swift
+[27/47] Compiling MosaicCore OverlayBlend.swift
+[28/47] Compiling MosaicCore CRC32.swift
+[29/47] Compiling MosaicCore MaterialSupply.swift
+[30/47] Compiling MosaicCore ScalarSIMDKernel.swift
+[31/47] Compiling MosaicCore SeededRandom.swift
+[32/47] Compiling MosaicCore TopKResult.swift
+[33/47] Compiling MosaicCore SRGB.swift
+[34/47] Compiling MosaicCore LockedState.swift
+[35/47] Compiling MosaicCore FeatureExtractor.swift
+[36/47] Compiling MosaicCore FeatureMatrix.swift
+[37/48] Wrapping AST for MosaicCore for debugging
+[39/73] Compiling MosaicAppCore BackupExclusion.swift
+[40/73] Compiling MosaicAppCore BoundedConcurrency.swift
+[41/73] Compiling MosaicAppCore ChangeDebouncer.swift
+[42/73] Compiling MosaicAppCore CommitPolicy.swift
+[43/76] Emitting module MosaicAppCore
+[44/76] Compiling MosaicAppCore FeatureTable+Append.swift
+[45/76] Compiling MosaicAppCore IndexManifest.swift
+[46/76] Compiling MosaicAppCore IndexStore.swift
+[47/76] Compiling MosaicAppCore PerfReport.swift
+[48/76] Compiling MosaicAppCore PhotoAuthorization.swift
+[49/76] Compiling MosaicAppCore PreviewRenderer.swift
+[50/76] Compiling MosaicAppCore GenerationRunner.swift
+[51/76] Compiling MosaicAppCore HiddenEntry.swift
+[52/76] Compiling MosaicAppCore MainFlow.swift
+[53/76] Compiling MosaicAppCore ScanFlow.swift
+[54/76] Compiling MosaicAppCore ThumbnailPreviewPlan.swift
+[55/76] Compiling MosaicAppCore EmptyState.swift
+[56/76] Compiling MosaicAppCore SourceList.swift
+[57/76] Compiling MosaicAppCore L10nKey.swift
+[58/76] Compiling MosaicAppCore MemoryFootprint.swift
+[59/76] Compiling MosaicAppCore PerfRecorder.swift
+[60/76] Compiling MosaicAppCore PhotoIndex.swift
+[61/76] Compiling MosaicAppCore TestAlbum.swift
+[62/76] Compiling MosaicAppCore PhotoLibraryProviding.swift
+[63/76] Compiling MosaicAppCore AppCoordinator.swift
+[64/76] Compiling MosaicAppCore AppState.swift
+[65/76] Compiling MosaicAppCore Dependencies.swift
+[66/76] Compiling MosaicAppCore GenerationMachine.swift
+[67/77] Wrapping AST for MosaicAppCore for debugging
+[69/95] Emitting module MosaicAppCoreTests
+[70/97] Compiling MosaicAppCoreTests L10nKeyTests.swift
+[71/97] Compiling MosaicAppCoreTests LibraryDiffTests.swift
+[72/97] Compiling MosaicAppCoreTests PerfTests.swift
+[73/97] Compiling MosaicAppCoreTests PermissionTests.swift
+[74/97] Compiling MosaicAppCoreTests RecordingBackupExclusion.swift
+[75/97] Compiling MosaicAppCoreTests SourceAndGateTests.swift
+[76/97] Compiling MosaicAppCoreTests IndexStoreTests.swift
+[77/97] Compiling MosaicAppCoreTests InternalToolsTests.swift
+[78/97] Compiling MosaicAppCoreTests GenerationMachineTests.swift
+[79/97] Compiling MosaicAppCoreTests GenerationRunnerTests.swift
+[80/97] Compiling MosaicAppCoreTests IndexBenchTests.swift
+[81/97] Compiling MosaicAppCoreTests CommitPolicyTests.swift
+[82/97] Compiling MosaicAppCoreTests CoordinatorFakes.swift
+[83/97] Compiling MosaicAppCoreTests Fakes.swift
+[84/97] Compiling MosaicAppCoreTests PhotoIndexTests.swift
+[85/97] Compiling MosaicAppCoreTests PreviewPlanAndMemoryTests.swift
+[86/97] Compiling MosaicAppCoreTests AppCoordinatorTests.swift
+[87/97] Compiling MosaicAppCoreTests BackupExclusionTests.swift
+[88/97] Compiling MosaicAppCoreTests BoundedConcurrencyTests.swift
+[89/98] /tmp/st-swift624-MosaicAppCore/x86_64-unknown-linux-gnu/debug/MosaicAppCorePackageDiscoveredTests.derived/all-discovered-tests.swift
+[90/98] Write sources
+[91/98] Wrapping AST for MosaicAppCoreTests for debugging
+[93/101] Compiling MosaicAppCorePackageDiscoveredTests all-discovered-tests.swift
+[94/101] Compiling MosaicAppCorePackageDiscoveredTests MosaicAppCoreTests.swift
+[95/101] Emitting module MosaicAppCorePackageDiscoveredTests
+[96/102] /tmp/st-swift624-MosaicAppCore/x86_64-unknown-linux-gnu/debug/MosaicAppCorePackageTests.derived/runner.swift
+[97/102] Write sources
+[98/102] Wrapping AST for MosaicAppCorePackageDiscoveredTests for debugging
+[100/104] Emitting module MosaicAppCorePackageTests
+[101/104] Compiling MosaicAppCorePackageTests runner.swift
+[102/105] Wrapping AST for MosaicAppCorePackageTests for debugging
+[103/105] Write Objects.LinkFileList
+[104/105] Linking MosaicAppCorePackageTests.xctest
+Build complete! (10.73s)
+Test Suite 'All tests' started at 2026-11-16 11:26:21.835
+Test Suite 'debug.xctest' started at 2026-11-16 11:26:21.837
+Test Suite 'AppCoordinatorTests' started at 2026-11-16 11:26:21.837
+Test Case 'AppCoordinatorTests.testAuthorizationBecomesDeniedThenLimited_B31' started at 2026-11-16 11:26:21.837
+Test Case 'AppCoordinatorTests.testAuthorizationBecomesDeniedThenLimited_B31' passed (0.018 seconds)
+Test Case 'AppCoordinatorTests.testCancelGenerationThenRegenerate_B20' started at 2026-11-16 11:26:21.855
+Test Case 'AppCoordinatorTests.testCancelGenerationThenRegenerate_B20' passed (0.287 seconds)
+Test Case 'AppCoordinatorTests.testCancelMidScanKeepsProgressAndResumes_B33' started at 2026-11-16 11:26:22.143
+Test Case 'AppCoordinatorTests.testCancelMidScanKeepsProgressAndResumes_B33' passed (0.014 seconds)
+Test Case 'AppCoordinatorTests.testConcurrentActionsAreMutuallyExclusive' started at 2026-11-16 11:26:22.157
+Test Case 'AppCoordinatorTests.testConcurrentActionsAreMutuallyExclusive' passed (0.145 seconds)
+Test Case 'AppCoordinatorTests.testEnterBackgroundFlushesScanProgressToDisk_B18' started at 2026-11-16 11:26:22.301
+Test Case 'AppCoordinatorTests.testEnterBackgroundFlushesScanProgressToDisk_B18' passed (0.014 seconds)
+Test Case 'AppCoordinatorTests.testExportInterruptedByBackgroundExpiry_B18' started at 2026-11-16 11:26:22.315
+Test Case 'AppCoordinatorTests.testExportInterruptedByBackgroundExpiry_B18' passed (0.151 seconds)
+Test Case 'AppCoordinatorTests.testGenerateBeforeProgressiveThresholdWaitsForScan_B07' started at 2026-11-16 11:26:22.466
+Test Case 'AppCoordinatorTests.testGenerateBeforeProgressiveThresholdWaitsForScan_B07' passed (0.077 seconds)
+Test Case 'AppCoordinatorTests.testGenerationBackgroundExpiryRerunsSameSeedOnActive_B18' started at 2026-11-16 11:26:22.543
+Test Case 'AppCoordinatorTests.testGenerationBackgroundExpiryRerunsSameSeedOnActive_B18' passed (0.163 seconds)
+Test Case 'AppCoordinatorTests.testLibraryChangesAreDebouncedWithInjectedClock_B11' started at 2026-11-16 11:26:22.706
+Test Case 'AppCoordinatorTests.testLibraryChangesAreDebouncedWithInjectedClock_B11' passed (0.004 seconds)
+Test Case 'AppCoordinatorTests.testMemorySamplingDuringScanUsesInjectedClock_MF7' started at 2026-11-16 11:26:22.710
+Test Case 'AppCoordinatorTests.testMemorySamplingDuringScanUsesInjectedClock_MF7' passed (0.007 seconds)
+Test Case 'AppCoordinatorTests.testProgressiveReadyAt2000AndGenerateWhileScanning_B07' started at 2026-11-16 11:26:22.717
+Test Case 'AppCoordinatorTests.testProgressiveReadyAt2000AndGenerateWhileScanning_B07' passed (0.582 seconds)
+Test Case 'AppCoordinatorTests.testSaveFailuresFollowPriority_B16_B17_B30' started at 2026-11-16 11:26:23.299
+Test Case 'AppCoordinatorTests.testSaveFailuresFollowPriority_B16_B17_B30' passed (0.156 seconds)
+Test Case 'AppCoordinatorTests.testScanBackgroundExpiryPausesAndResumesOnActive_B18' started at 2026-11-16 11:26:23.455
+Test Case 'AppCoordinatorTests.testScanBackgroundExpiryPausesAndResumesOnActive_B18' passed (0.012 seconds)
+Test Case 'AppCoordinatorTests.testStartResolvesRouteBeforeIndexLoadAndCleansExports_B27' started at 2026-11-16 11:26:23.467
+Test Case 'AppCoordinatorTests.testStartResolvesRouteBeforeIndexLoadAndCleansExports_B27' passed (0.002 seconds)
+Test Suite 'AppCoordinatorTests' passed at 2026-11-16 11:26:23.469
+	 Executed 14 tests, with 0 failures (0 unexpected) in 1.631 (1.631) seconds
+Test Suite 'BackupExclusionTests' started at 2026-11-16 11:26:23.469
+Test Case 'BackupExclusionTests.testB12EveryLaunchReappliesOnDirectoryOnly' started at 2026-11-16 11:26:23.469
+Test Case 'BackupExclusionTests.testB12EveryLaunchReappliesOnDirectoryOnly' passed (0.016 seconds)
+Test Case 'BackupExclusionTests.testB12FreshDirectoryExcludedOnLaunch' started at 2026-11-16 11:26:23.485
+Test Case 'BackupExclusionTests.testB12FreshDirectoryExcludedOnLaunch' passed (0.001 seconds)
+Test Case 'BackupExclusionTests.testDirectoryRecreatedDuringRunIsExcludedAgain' started at 2026-11-16 11:26:23.485
+Test Case 'BackupExclusionTests.testDirectoryRecreatedDuringRunIsExcludedAgain' passed (0.008 seconds)
+Test Case 'BackupExclusionTests.testFailureDoesNotBreakIndexAndIsCounted' started at 2026-11-16 11:26:23.493
+Test Case 'BackupExclusionTests.testFailureDoesNotBreakIndexAndIsCounted' passed (0.005 seconds)
+Test Suite 'BackupExclusionTests' passed at 2026-11-16 11:26:23.498
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.03 (0.03) seconds
+Test Suite 'BoundedConcurrencyTests' started at 2026-11-16 11:26:23.498
+Test Case 'BoundedConcurrencyTests.testCancellationThrows' started at 2026-11-16 11:26:23.498
+Test Case 'BoundedConcurrencyTests.testCancellationThrows' passed (0.006 seconds)
+Test Case 'BoundedConcurrencyTests.testOrderPreservedAndLimitRespected' started at 2026-11-16 11:26:23.504
+Test Case 'BoundedConcurrencyTests.testOrderPreservedAndLimitRespected' passed (0.011 seconds)
+Test Suite 'BoundedConcurrencyTests' passed at 2026-11-16 11:26:23.515
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.017 (0.017) seconds
+Test Suite 'CommitPolicyTests' started at 2026-11-16 11:26:23.515
+Test Case 'CommitPolicyTests.testPhotoIndexTimedCommitsRespect300RowsWithManualClock' started at 2026-11-16 11:26:23.515
+Test Case 'CommitPolicyTests.testPhotoIndexTimedCommitsRespect300RowsWithManualClock' passed (0.046 seconds)
+Test Case 'CommitPolicyTests.testSimulated100kFirstScanDutyCycleAtMost5Percent' started at 2026-11-16 11:26:23.561
+[MF-4 sim] n=100000 rate=111/s commits=108 rewritten=53.1×n duty=2.64%
+[MF-4 sim] n=100000 rate=300/s commits=48 rewritten=21.4×n duty=2.87%
+[MF-4 sim] n=10000 rate=111/s commits=12 rewritten=6.9×n duty=0.35%
+Test Case 'CommitPolicyTests.testSimulated100kFirstScanDutyCycleAtMost5Percent' passed (0.001 seconds)
+Test Case 'CommitPolicyTests.testSlowCommitsStretchInterval' started at 2026-11-16 11:26:23.562
+Test Case 'CommitPolicyTests.testSlowCommitsStretchInterval' passed (0.046 seconds)
+Test Case 'CommitPolicyTests.testTimedIntervalIsMaxOf8sAnd20xLastCommit' started at 2026-11-16 11:26:23.608
+Test Case 'CommitPolicyTests.testTimedIntervalIsMaxOf8sAnd20xLastCommit' passed (0.0 seconds)
+Test Case 'CommitPolicyTests.testTimedTriggerNeedsAtLeast300Rows' started at 2026-11-16 11:26:23.608
+Test Case 'CommitPolicyTests.testTimedTriggerNeedsAtLeast300Rows' passed (0.0 seconds)
+Test Suite 'CommitPolicyTests' passed at 2026-11-16 11:26:23.608
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.093 (0.093) seconds
+Test Suite 'GenerationMachineTests' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationMachineTests.testAutoRetryFailureReturnsToSettingsWithNotice' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationMachineTests.testAutoRetryFailureReturnsToSettingsWithNotice' passed (0.0 seconds)
+Test Case 'GenerationMachineTests.testBackgroundSuspendsAndRerunsSameSeed' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationMachineTests.testBackgroundSuspendsAndRerunsSameSeed' passed (0.0 seconds)
+Test Case 'GenerationMachineTests.testCancelConfirmFlowAndStaleResultsIgnored' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationMachineTests.testCancelConfirmFlowAndStaleResultsIgnored' passed (0.0 seconds)
+Test Case 'GenerationMachineTests.testFailureClassification' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationMachineTests.testFailureClassification' passed (0.0 seconds)
+Test Case 'GenerationMachineTests.testReshuffleUsesNextSeedAndCancelReturnsToResult' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationMachineTests.testReshuffleUsesNextSeedAndCancelReturnsToResult' passed (0.0 seconds)
+Test Case 'GenerationMachineTests.testShortagePromptThenRun' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationMachineTests.testShortagePromptThenRun' passed (0.0 seconds)
+Test Case 'GenerationMachineTests.testSystemCancellationIsSilentSuspend' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationMachineTests.testSystemCancellationIsSilentSuspend' passed (0.0 seconds)
+Test Suite 'GenerationMachineTests' passed at 2026-11-16 11:26:23.608
+	 Executed 7 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'GenerationRunnerTests' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationRunnerTests.testEndToEndReproducibleAndMapsCellsToAssets' started at 2026-11-16 11:26:23.608
+Test Case 'GenerationRunnerTests.testEndToEndReproducibleAndMapsCellsToAssets' passed (0.202 seconds)
+Test Case 'GenerationRunnerTests.testPreviewRendererReproducesTileColors' started at 2026-11-16 11:26:23.810
+Test Case 'GenerationRunnerTests.testPreviewRendererReproducesTileColors' passed (0.25 seconds)
+Test Case 'GenerationRunnerTests.testShortageNoticeOnSmallLibrary' started at 2026-11-16 11:26:24.061
+Test Case 'GenerationRunnerTests.testShortageNoticeOnSmallLibrary' passed (0.044 seconds)
+Test Case 'GenerationRunnerTests.testTaskCancellationThrowsCancellationErrorAndMachineStaysSilent' started at 2026-11-16 11:26:24.105
+Test Case 'GenerationRunnerTests.testTaskCancellationThrowsCancellationErrorAndMachineStaysSilent' passed (0.116 seconds)
+Test Suite 'GenerationRunnerTests' passed at 2026-11-16 11:26:24.221
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.613 (0.613) seconds
+Test Suite 'IndexBenchTests' started at 2026-11-16 11:26:24.221
+Test Case 'IndexBenchTests.testBench10kScan' started at 2026-11-16 11:26:24.221
+/workspace/photomosaic/Packages/MosaicAppCore/Tests/MosaicAppCoreTests/IndexBenchTests.swift:9: IndexBenchTests.testBench10kScan : Test skipped: required false value but got true - 设 MOSAIC_BENCH=1 运行
+Test Case 'IndexBenchTests.testBench10kScan' skipped (0.0 seconds)
+Test Suite 'IndexBenchTests' passed at 2026-11-16 11:26:24.221
+	 Executed 1 test, with 1 test skipped and 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'IndexStoreTests' started at 2026-11-16 11:26:24.221
+Test Case 'IndexStoreTests.testB32RealV1FeaturesFileDiscardsAndRebuilds' started at 2026-11-16 11:26:24.221
+Test Case 'IndexStoreTests.testB32RealV1FeaturesFileDiscardsAndRebuilds' passed (0.018 seconds)
+Test Case 'IndexStoreTests.testMF1CommitWritesNewEpochAndManifestRecordsFilename' started at 2026-11-16 11:26:24.239
+Test Case 'IndexStoreTests.testMF1CommitWritesNewEpochAndManifestRecordsFilename' passed (0.003 seconds)
+Test Case 'IndexStoreTests.testMF1CompactionCommitKilledAtEveryStepNeverMismatches' started at 2026-11-16 11:26:24.242
+Test Case 'IndexStoreTests.testMF1CompactionCommitKilledAtEveryStepNeverMismatches' passed (0.047 seconds)
+Test Case 'IndexStoreTests.testMF1KilledBeforeManifestKeepsOldPairAndRemovesOrphan' started at 2026-11-16 11:26:24.289
+Test Case 'IndexStoreTests.testMF1KilledBeforeManifestKeepsOldPairAndRemovesOrphan' passed (0.002 seconds)
+Test Case 'IndexStoreTests.testMF1StaleManifestNeverPairsWithNewFeatures' started at 2026-11-16 11:26:24.291
+Test Case 'IndexStoreTests.testMF1StaleManifestNeverPairsWithNewFeatures' passed (0.041 seconds)
+Test Case 'IndexStoreTests.testMF3PhotoIndexWorksAgainstAnyIndexStore' started at 2026-11-16 11:26:24.332
+Test Case 'IndexStoreTests.testMF3PhotoIndexWorksAgainstAnyIndexStore' passed (0.003 seconds)
+Test Suite 'IndexStoreTests' passed at 2026-11-16 11:26:24.335
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.113 (0.113) seconds
+Test Suite 'InternalToolsTests' started at 2026-11-16 11:26:24.335
+Test Case 'InternalToolsTests.testBuildFlags' started at 2026-11-16 11:26:24.335
+Test Case 'InternalToolsTests.testBuildFlags' passed (0.0 seconds)
+Test Case 'InternalToolsTests.testPlanBatches' started at 2026-11-16 11:26:24.335
+Test Case 'InternalToolsTests.testPlanBatches' passed (0.0 seconds)
+Test Case 'InternalToolsTests.testPolicyPendingOwnerDecision' started at 2026-11-16 11:26:24.335
+Test Case 'InternalToolsTests.testPolicyPendingOwnerDecision' passed (0.0 seconds)
+Test Case 'InternalToolsTests.testSyntheticImagesDeterministicAndDiverse' started at 2026-11-16 11:26:24.335
+Test Case 'InternalToolsTests.testSyntheticImagesDeterministicAndDiverse' passed (0.117 seconds)
+Test Suite 'InternalToolsTests' passed at 2026-11-16 11:26:24.452
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.118 (0.118) seconds
+Test Suite 'L10nKeyTests' started at 2026-11-16 11:26:24.452
+Test Case 'L10nKeyTests.testAllUsedKeysExistInStringsFile' started at 2026-11-16 11:26:24.452
+Test Case 'L10nKeyTests.testAllUsedKeysExistInStringsFile' passed (0.001 seconds)
+Test Case 'L10nKeyTests.testFormatKeysHavePositionalPlaceholders' started at 2026-11-16 11:26:24.453
+Test Case 'L10nKeyTests.testFormatKeysHavePositionalPlaceholders' passed (0.002 seconds)
+Test Case 'L10nKeyTests.testGroupedCount' started at 2026-11-16 11:26:24.455
+Test Case 'L10nKeyTests.testGroupedCount' passed (0.0 seconds)
+Test Suite 'L10nKeyTests' passed at 2026-11-16 11:26:24.456
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.003 (0.003) seconds
+Test Suite 'LibraryDiffTests' started at 2026-11-16 11:26:24.456
+Test Case 'LibraryDiffTests.testAddedModifiedDeletedRetried' started at 2026-11-16 11:26:24.456
+Test Case 'LibraryDiffTests.testAddedModifiedDeletedRetried' passed (0.0 seconds)
+Test Case 'LibraryDiffTests.testDebouncerCoalescesAndCapsDelay' started at 2026-11-16 11:26:24.456
+Test Case 'LibraryDiffTests.testDebouncerCoalescesAndCapsDelay' passed (0.0 seconds)
+Test Case 'LibraryDiffTests.testDuplicateIDsCountedOnceAndNilDates' started at 2026-11-16 11:26:24.456
+Test Case 'LibraryDiffTests.testDuplicateIDsCountedOnceAndNilDates' passed (0.0 seconds)
+Test Case 'LibraryDiffTests.testRemapRows' started at 2026-11-16 11:26:24.456
+Test Case 'LibraryDiffTests.testRemapRows' passed (0.0 seconds)
+Test Suite 'LibraryDiffTests' passed at 2026-11-16 11:26:24.456
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'PerfTests' started at 2026-11-16 11:26:24.456
+Test Case 'PerfTests.testAsyncMeasure' started at 2026-11-16 11:26:24.456
+Test Case 'PerfTests.testAsyncMeasure' passed (0.0 seconds)
+Test Case 'PerfTests.testCapacityBound' started at 2026-11-16 11:26:24.456
+Test Case 'PerfTests.testCapacityBound' passed (0.0 seconds)
+Test Case 'PerfTests.testGenerationPhaseTimer' started at 2026-11-16 11:26:24.456
+Test Case 'PerfTests.testGenerationPhaseTimer' passed (0.0 seconds)
+Test Case 'PerfTests.testMeasureWithManualClockAndReport' started at 2026-11-16 11:26:24.456
+Test Case 'PerfTests.testMeasureWithManualClockAndReport' passed (0.0 seconds)
+Test Case 'PerfTests.testScanThroughputIncludesSkipped' started at 2026-11-16 11:26:24.456
+Test Case 'PerfTests.testScanThroughputIncludesSkipped' passed (0.0 seconds)
+Test Case 'PerfTests.testSystemClockMonotonic' started at 2026-11-16 11:26:24.456
+Test Case 'PerfTests.testSystemClockMonotonic' passed (0.0 seconds)
+Test Suite 'PerfTests' passed at 2026-11-16 11:26:24.456
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'PermissionTests' started at 2026-11-16 11:26:24.456
+Test Case 'PermissionTests.testAppRoute' started at 2026-11-16 11:26:24.456
+Test Case 'PermissionTests.testAppRoute' passed (0.0 seconds)
+Test Case 'PermissionTests.testEffects' started at 2026-11-16 11:26:24.456
+Test Case 'PermissionTests.testEffects' passed (0.0 seconds)
+Test Case 'PermissionTests.testFakeLibraryRequestAuthorizationFlow' started at 2026-11-16 11:26:24.456
+Test Case 'PermissionTests.testFakeLibraryRequestAuthorizationFlow' passed (0.0 seconds)
+Test Case 'PermissionTests.testOnboardingPagesAndFinalButton' started at 2026-11-16 11:26:24.456
+Test Case 'PermissionTests.testOnboardingPagesAndFinalButton' passed (0.0 seconds)
+Test Case 'PermissionTests.testPromptKeys' started at 2026-11-16 11:26:24.456
+Test Case 'PermissionTests.testPromptKeys' passed (0.0 seconds)
+Test Case 'PermissionTests.testStatusToPromptMapping' started at 2026-11-16 11:26:24.456
+Test Case 'PermissionTests.testStatusToPromptMapping' passed (0.0 seconds)
+Test Suite 'PermissionTests' passed at 2026-11-16 11:26:24.456
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'PhotoIndexTests' started at 2026-11-16 11:26:24.456
+Test Case 'PhotoIndexTests.testAlbumSnapshotAndUnreadableAlbum' started at 2026-11-16 11:26:24.456
+Test Case 'PhotoIndexTests.testAlbumSnapshotAndUnreadableAlbum' passed (0.011 seconds)
+Test Case 'PhotoIndexTests.testAllUnavailableYieldsNotDownloadedEmptyState' started at 2026-11-16 11:26:24.467
+Test Case 'PhotoIndexTests.testAllUnavailableYieldsNotDownloadedEmptyState' passed (0.008 seconds)
+Test Case 'PhotoIndexTests.testCancelMidScanKeepsProgressAndResumes' started at 2026-11-16 11:26:24.475
+Test Case 'PhotoIndexTests.testCancelMidScanKeepsProgressAndResumes' passed (0.054 seconds)
+Test Case 'PhotoIndexTests.testCompactionRemapsRows' started at 2026-11-16 11:26:24.528
+Test Case 'PhotoIndexTests.testCompactionRemapsRows' passed (0.013 seconds)
+Test Case 'PhotoIndexTests.testConcurrencyLimitsAndGenerationThrottle' started at 2026-11-16 11:26:24.542
+Test Case 'PhotoIndexTests.testConcurrencyLimitsAndGenerationThrottle' passed (0.082 seconds)
+Test Case 'PhotoIndexTests.testConfigurationClampedToDesignRanges' started at 2026-11-16 11:26:24.624
+Test Case 'PhotoIndexTests.testConfigurationClampedToDesignRanges' passed (0.0 seconds)
+Test Case 'PhotoIndexTests.testCorruptManifestRebuilds' started at 2026-11-16 11:26:24.624
+Test Case 'PhotoIndexTests.testCorruptManifestRebuilds' passed (0.009 seconds)
+Test Case 'PhotoIndexTests.testEmptyLibrary' started at 2026-11-16 11:26:24.633
+Test Case 'PhotoIndexTests.testEmptyLibrary' passed (0.001 seconds)
+Test Case 'PhotoIndexTests.testFeatureVersionChangeDiscardsAndRebuilds' started at 2026-11-16 11:26:24.634
+Test Case 'PhotoIndexTests.testFeatureVersionChangeDiscardsAndRebuilds' passed (0.006 seconds)
+Test Case 'PhotoIndexTests.testFreshScanCountsSkipsAndPersists' started at 2026-11-16 11:26:24.640
+Test Case 'PhotoIndexTests.testFreshScanCountsSkipsAndPersists' passed (0.013 seconds)
+Test Case 'PhotoIndexTests.testIncrementalAddModifyDeleteWithTombstones' started at 2026-11-16 11:26:24.652
+Test Case 'PhotoIndexTests.testIncrementalAddModifyDeleteWithTombstones' passed (0.013 seconds)
+Test Case 'PhotoIndexTests.testOrphanRowsTombstonedOnLoad' started at 2026-11-16 11:26:24.666
+Test Case 'PhotoIndexTests.testOrphanRowsTombstonedOnLoad' passed (0.008 seconds)
+Test Case 'PhotoIndexTests.testPerfSamplesRecordedDuringScan' started at 2026-11-16 11:26:24.673
+Test Case 'PhotoIndexTests.testPerfSamplesRecordedDuringScan' passed (0.01 seconds)
+Test Case 'PhotoIndexTests.testTruncatedFeatureFileRecoversPrefix' started at 2026-11-16 11:26:24.683
+Test Case 'PhotoIndexTests.testTruncatedFeatureFileRecoversPrefix' passed (0.073 seconds)
+Test Suite 'PhotoIndexTests' passed at 2026-11-16 11:26:24.756
+	 Executed 14 tests, with 0 failures (0 unexpected) in 0.3 (0.3) seconds
+Test Suite 'PreviewPlanAndMemoryTests' started at 2026-11-16 11:26:24.756
+Test Case 'PreviewPlanAndMemoryTests.testMF6EachAssetFetchedOnceWithBoundedConcurrencyAndWindow' started at 2026-11-16 11:26:24.756
+Test Case 'PreviewPlanAndMemoryTests.testMF6EachAssetFetchedOnceWithBoundedConcurrencyAndWindow' passed (0.004 seconds)
+Test Case 'PreviewPlanAndMemoryTests.testMF6GroupsCellsByAssetInFirstSeenOrder' started at 2026-11-16 11:26:24.760
+Test Case 'PreviewPlanAndMemoryTests.testMF6GroupsCellsByAssetInFirstSeenOrder' passed (0.001 seconds)
+Test Case 'PreviewPlanAndMemoryTests.testMF6UnavailableThumbnailsAreSkippedAndCancellationThrows' started at 2026-11-16 11:26:24.761
+Test Case 'PreviewPlanAndMemoryTests.testMF6UnavailableThumbnailsAreSkippedAndCancellationThrows' passed (0.001 seconds)
+Test Case 'PreviewPlanAndMemoryTests.testMF7PeakTrackerRecordsPerPhasePeakAndDelta' started at 2026-11-16 11:26:24.762
+Test Case 'PreviewPlanAndMemoryTests.testMF7PeakTrackerRecordsPerPhasePeakAndDelta' passed (0.0 seconds)
+Test Case 'PreviewPlanAndMemoryTests.testMF7SQLiteTriggersAndProjection' started at 2026-11-16 11:26:24.762
+Test Case 'PreviewPlanAndMemoryTests.testMF7SQLiteTriggersAndProjection' passed (0.0 seconds)
+Test Suite 'PreviewPlanAndMemoryTests' passed at 2026-11-16 11:26:24.762
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.006 (0.006) seconds
+Test Suite 'SourceAndGateTests' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testAlbumRowsHideEmpty' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testAlbumRowsHideEmpty' passed (0.0 seconds)
+Test Case 'SourceAndGateTests.testAllPhotosRowTitleAndCountRule' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testAllPhotosRowTitleAndCountRule' passed (0.0 seconds)
+Test Case 'SourceAndGateTests.testEmptyStates' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testEmptyStates' passed (0.0 seconds)
+Test Case 'SourceAndGateTests.testGenerateGate' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testGenerateGate' passed (0.0 seconds)
+Test Case 'SourceAndGateTests.testHiddenEntryTaps' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testHiddenEntryTaps' passed (0.0 seconds)
+Test Case 'SourceAndGateTests.testMainFlowNavigation' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testMainFlowNavigation' passed (0.0 seconds)
+Test Case 'SourceAndGateTests.testScanFlow' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testScanFlow' passed (0.0 seconds)
+Test Case 'SourceAndGateTests.testSettingsAndTargetPolicy' started at 2026-11-16 11:26:24.762
+Test Case 'SourceAndGateTests.testSettingsAndTargetPolicy' passed (0.101 seconds)
+Test Case 'SourceAndGateTests.testSourcePickerReconcile' started at 2026-11-16 11:26:24.863
+Test Case 'SourceAndGateTests.testSourcePickerReconcile' passed (0.0 seconds)
+Test Suite 'SourceAndGateTests' passed at 2026-11-16 11:26:24.863
+	 Executed 9 tests, with 0 failures (0 unexpected) in 0.101 (0.101) seconds
+Test Suite 'debug.xctest' passed at 2026-11-16 11:26:24.863
+	 Executed 94 tests, with 1 test skipped and 0 failures (0 unexpected) in 3.025 (3.025) seconds
+Test Suite 'All tests' passed at 2026-11-16 11:26:24.864
+	 Executed 94 tests, with 1 test skipped and 0 failures (0 unexpected) in 3.025 (3.025) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.2.4 (5ee435b15ad40ec)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
+exit=0
+=== MosaicAccelerate ===
+Building for debugging...
+[0/3] Write sources
+[2/3] Write swift-version-6D5649C0BD1EF214.txt
+[4/32] Compiling MosaicCore TuningDefaults.swift
+[5/32] Compiling MosaicCore MosaicCore.swift
+[6/32] Compiling MosaicCore OverlayBlend.swift
+[7/32] Compiling MosaicCore CRC32.swift
+[8/35] Compiling MosaicCore FeatureSpec.swift
+[9/35] Compiling MosaicCore FeatureVector.swift
+[10/35] Compiling MosaicCore PixelBuffer.swift
+[11/35] Compiling MosaicCore ExportStrips.swift
+[12/35] Compiling MosaicCore GridLayout.swift
+[13/35] Compiling MosaicCore MosaicGrid.swift
+[14/35] Compiling MosaicCore MosaicPipeline.swift
+[15/35] Compiling MosaicCore TargetSampler.swift
+[16/35] Compiling MosaicCore SRGB.swift
+[17/35] Compiling MosaicCore LockedState.swift
+[18/35] Compiling MosaicCore FeatureExtractor.swift
+[19/35] Compiling MosaicCore FeatureMatrix.swift
+[20/35] Compiling MosaicCore MaterialSupply.swift
+[21/35] Compiling MosaicCore ScalarSIMDKernel.swift
+[22/35] Compiling MosaicCore SeededRandom.swift
+[23/35] Compiling MosaicCore TopKResult.swift
+[24/35] Compiling MosaicCore Assignment.swift
+[25/35] Compiling MosaicCore BitMask.swift
+[26/35] Compiling MosaicCore Cancellation.swift
+[27/35] Compiling MosaicCore DistanceKernel.swift
+[28/35] Emitting module MosaicCore
+[29/35] Compiling MosaicCore CIELab.swift
+[30/35] Compiling MosaicCore DisplayP3.swift
+[31/35] Compiling MosaicCore OKLab.swift
+[32/35] Compiling MosaicCore PortableMath.swift
+[33/35] Compiling MosaicCore FeatureFile.swift
+[34/35] Compiling MosaicCore FeatureTable.swift
+[35/35] Compiling MosaicCore LibrarySnapshot.swift
+[37/38] Emitting module MosaicAccelerate
+[38/38] Compiling MosaicAccelerate AccelerateKernel.swift
+Build complete! (4.10s)
+exit=0

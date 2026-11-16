@@ -1,5 +1,74 @@
 # CHANGES
 
+## feat/app-layer：评审 d6fa750 必须修 MF-1～MF-7、架构师 G-1（严格并发 + TSan）/ G-3（AppCoordinator）、QA 跟进
+
+### 对照表
+
+| 编号 | 改动 | 证据（测试 / 文件） |
+|---|---|---|
+| MF-1 压缩后崩溃行号错配 | 每次提交写新的 `features-<epoch>.bin`，`index.json`（formatVersion 2）记 `featuresFile`；清单 rename 成功后才删旧文件；加载/提交时清孤儿 | `IndexStoreTests.testMF1*`（4 个）：压缩提交每一步被杀都不错配、旧清单不配新特征、epoch/文件名、清单前被杀保留旧对并清孤儿 |
+| MF-2 索引进 iCloud 备份 | `Application Support/Index` **目录**设 `isExcludedFromBackup`，每次启动和重建目录时都设；失败只计数不阻断 | `BackupExclusionTests`（B-12）；`AppTests.testIndexDirectoryExcludedFromBackup`（模拟器读回 resourceValues） |
+| MF-3 存储协议 | `protocol IndexStore`（prepare/load/commit/discardAll），`JSONIndexStore` 实现，`IndexRepair` 与存储无关；数组行格式 `{i,d,s,r}` | `IndexStoreTests.testMF3PhotoIndexWorksAgainstAnyIndexStore`（`InMemoryIndexStore`） |
+| MF-4 提交放大 | `CommitPolicy`：占空比闸门（提交耗时 × 20）+ 行数阈值 + 定时（≥300 新行才定时提交） | `CommitPolicyTests`：10 万 @111 张/秒模拟 108 次提交、占空 2.64%（原 112 次 / 56.9× n） |
+| MF-5 内测配置 | 已在 10f2f1f 完成：`Internal: release` + `INTERNAL_TOOLS`（project.yml:43-46），`InfoPlist.strings` 不含 `CFBundleDisplayName`，ios.yml 矩阵检查标记 | 本次复核通过（见下「Internal 配置复核」） |
+| MF-6 预览串行 + 缓存 | `ThumbnailPreviewPlan`：按素材去重、8–16 并发窗口取图、画完即丢，不留缓存 | `PreviewPlanAndMemoryTests` |
+| MF-7 峰值内存 | `PeakMemoryTracker`（0.5 s 采样 `phys_footprint`，只在扫描/生成/预览/导出期间开）+ `SQLiteTriggerCheck`（评审 §3 五项触发条件，外推到 10 万）；性能页显示并可复制 | `PreviewPlanAndMemoryTests`、`testMemorySamplingDuringScanUsesInjectedClock_MF7` |
+| G-1 严格并发 | 三个包 Swift 6 语言模式 + `-warnings-as-errors`；project.yml `SWIFT_TREAT_WARNINGS_AS_ERRORS`；`LockedState` 取代各处 NSLock + `@unchecked`；App 适配器改 actor / 编译器检查的 `Sendable` | 剩余清单见下；TSan 日志 `reports/tsan-linux-swift633.txt` |
+| G-1 TSan CI | linux-core.yml 新 job `tsan`：每个 PR、阻断（需在分支保护设为 required）、跳过 `PerformanceTests` / `IndexBenchTests`。**没有**加 macOS TSan workflow | `.github/workflows/linux-core.yml` |
+| G-3 AppCoordinator | MosaicAppCore `@MainActor AppCoordinator` + `AppDependencies`（`PhotoLibraryClient`、`ThumbnailProviding`、`IndexStore`、`AppClock`、`LifecycleEvents`、`PreferenceStore`、`MosaicGenerating`、`MosaicExporting`、`MemoryFootprintReading`）；`.live` 在 App target（`App/Adapters/LiveDependencies.swift`），fake 在测试；无 `#if TESTING`、无单例；状态可观察（`observe(_:)` / `states()`），假时钟，测试里没有 sleep | `AppCoordinatorTests`（14 个），映射见下 |
+| QA：容器钉 digest | `swift:6.3.3-noble@sha256:1ba0416b…24aa`（三个 job）；2026-11-16 用 registry API `HEAD /v2/library/swift/manifests/6.3.3-noble` 读 `Docker-Content-Digest` 复核，与 QA 所见一致 | linux-core.yml |
+| QA：6.2.4 声明 | `reports/swift-test-55123ea-swift624.txt` 存在且内容为 149/0，已在下方 §13 引用；本分支另附 `reports/swift-test-app-layer-swift624.txt` | — |
+| QA B-32 | 用真实 v1 `features.bin` 夹具（`ArchitectRecheckTests.v1FixtureBase64`）跑两种场景：d6fa750 旧布局、新清单指向 v1 文件头；都丢弃重建，0 个错配 | `IndexStoreTests.testB32RealV1FeaturesFileDiscardsAndRebuilds` |
+| QA B-12 | 见 MF-2 | `BackupExclusionTests` |
+
+### G-3 测试 ↔ QA 用例
+
+| 测试（`AppCoordinatorTests`） | 用例 |
+|---|---|
+| `testStartResolvesRouteBeforeIndexLoadAndCleansExports_B27` | 路由先出、索引后台加载；启动清 tmp/export（B-27） |
+| `testCancelMidScanKeepsProgressAndResumes_B33` | 扫描中取消保留进度、再次继续（B-33） |
+| `testProgressiveReadyAt2000AndGenerateWhileScanning_B07` / `testGenerateBeforeProgressiveThresholdWaitsForScan_B07` | 2000 张渐进可用、边扫边生成（B-07） |
+| `testCancelGenerationThenRegenerate_B20` | 取消生成再生成 + 换一批（B-20 / B-29） |
+| `testGenerationBackgroundExpiryRerunsSameSeedOnActive_B18`、`testEnterBackgroundFlushesScanProgressToDisk_B18`、`testScanBackgroundExpiryPausesAndResumesOnActive_B18`、`testExportInterruptedByBackgroundExpiry_B18` | 进后台 / 宽限到期（B-18） |
+| `testAuthorizationBecomesDeniedThenLimited_B31` | 运行中权限变拒绝 / 受限（B-31） |
+| `testSaveFailuresFollowPriority_B16_B17_B30` | 保存失败优先级：无添加权限 > 空间不足 > 其他（B-16 / B-17 / B-30） |
+| `testConcurrentActionsAreMutuallyExclusive` | 并发点击互斥 |
+| `testMemorySamplingDuringScanUsesInjectedClock_MF7` | 峰值内存采样走注入时钟（MF-7） |
+| `testLibraryChangesAreDebouncedWithInjectedClock_B11` | 相册变化去抖（B-11） |
+
+### 剩余的 `@unchecked Sendable` / `nonisolated(unsafe)` / `assumeIsolated`
+
+`nonisolated(unsafe)`：**0 处**（源码与测试）。
+
+| 位置 | 原因 |
+|---|---|
+| `Packages/MosaicCore/Sources/MosaicCore/Concurrency/LockedState.swift:12` | 唯一的锁封装。`Synchronization.Mutex` 需要 iOS 18，最低系统是 iOS 17；状态只在 `NSLock` 内访问 |
+| `Packages/MosaicCore/Sources/MosaicCore/Matching/ScalarSIMDKernel.swift:243` `KernelPointers` | `DispatchQueue.concurrentPerform` 各迭代写互不重叠的输出区间；裸指针不能是 Sendable。生命周期由外层 `withUnsafe…` 保证 |
+| `Packages/MosaicCore/Sources/MosaicCore/Matching/Assignment.swift:5` `ScanPointers` | 同上（并行扫描，每个分块写自己的槽位） |
+| `Packages/MosaicCore/Sources/MosaicCore/Layout/TargetSampler.swift:50` `SamplerOutput` | 同上（按行分块写特征矩阵） |
+| `App/Adapters/SystemActions.swift:58` `MainActor.assumeIsolated` | `beginBackgroundTask` 到期回调在主线程，且必须在回调返回前同步 `endBackgroundTask`，不能改成异步 `Task`；`assumeIsolated` 有运行时检查 |
+
+原有的 App 层 `@unchecked`（`PhotoKitLibrary`、`PhotoKitThumbnails`、`ResumeOnce`、`LibraryChangeObserver`）和 `LibraryChangeObserver` 里 Timer 的 `assumeIsolated` 都已去掉：前两者改 actor，`ResumeOnce` 基于 `LockedState`，`LibraryChangeObserver` 只持有 `@Sendable` 闭包，去抖移到 `AppCoordinator`（注入时钟）。
+
+### App target（仍是盲写，Linux 上只做 `swiftc -parse`）
+
+- `AppModel` 变成薄适配层：`@Published state` 转发 coordinator 状态，手势转 coordinator 方法；只保留目标图解码和预览绘制。
+- `.live` 依赖：`PhotoKitLibrary`（actor，add-only 授权 + `PHAssetCreationRequest` 保存）、`PhotoKitThumbnails`（actor，`stopAllCaching`）、`AppLifecycle`（scenePhase + `beginBackgroundTask`）、`UserDefaultsPreferences`、`LiveMosaicExporter`（本分支只负责清 tmp/export，条带渲染在 feat/render-export）、`PhysFootprintReader`、`JSONIndexStore` + `FileBackupExclusion`。
+- 视图不再直接改 `model.flow`，全部经 coordinator。
+- 盲写风险新增 R21：actor 化的 PhotoKit 适配器在 Darwin 上的 Sendable 推断（`PHFetchResult` / `PHImageRequestOptions` 只在 actor 内或 nonisolated 局部使用）；R22：`beginBackgroundTask` 回调在 iOS 26 SDK 上若已标 `@MainActor`，`assumeIsolated` 冗余但无害。
+
+### Internal 配置复核
+
+`project.yml` Internal = release + `SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) INTERNAL_TOOLS`，显示名「拼忆内测」；`InternalToolsMarker` 在 `#if INTERNAL_TOOLS` 内；`InfoPlist.strings` 只有两个权限说明，没有 `CFBundleDisplayName`；ios.yml 矩阵对 Release / Internal 分别断言标记有 / 无；fastlane `beta_internal` 检查显示名与标记。
+
+### 验证（box，Linux x86_64）
+
+- Swift 6.3.3：MosaicCore 149/0，MosaicAppCore 94（1 个基准默认跳过）/0，MosaicAccelerate 构建通过 —— `reports/swift-test-app-layer-swift633.txt`
+- Swift 6.2.4：同上 —— `reports/swift-test-app-layer-swift624.txt`
+- TSan（6.3.3，`--sanitize=thread`，跳过基准）：MosaicCore 143/0、MosaicAppCore 93/0，**0 条 ThreadSanitizer 报告** —— `reports/tsan-linux-swift633.txt`
+- actionlint 1.7.7 通过；App / AppTests 全部文件 `swiftc -parse` 通过；`scripts/check-no-network.sh` 通过。
+
+
 ## feat/app-layer：INTERNAL_TOOLS / 发布配置（基于 d6fa750，合入运维草稿 /workspace/pinyi/ios-release/）
 
 架构师 2026-11-16 裁定：性能计时页、导出 8000 档、「马赛克测试」相簿开关只在编译条件 `INTERNAL_TOOLS` 下存在；去掉 `PERF_PAGE`。
@@ -374,7 +443,7 @@ App/
 | S‑8 取消测试时序 | `testSwiftTaskCancellationAsyncAPI` 去掉固定 sleep，改为在第一次匹配进度回调里停住，等测试发出取消后再继续；跨线程延迟测试的回调也等取消真正发出才返回。快机器上也不会先跑完 | `CancellationTests` |
 | O‑a / O‑b / O‑c | 没做（可选项）。O‑c 的已知取舍已写进方案 §3.4 | — |
 
-测试：box 上 Swift 6.3.3 `swift test` **149 个测试，0 失败**（ca6a4ca 为 138 个，新增 11 个：`ArchitectRecheckTests`），源码和测试都没有 warning；6.2.4 也复跑 149/0。actionlint 1.7.12 和 1.7.7 都通过。
+测试：box 上 Swift 6.3.3 `swift test` **149 个测试，0 失败**（ca6a4ca 为 138 个，新增 11 个：`ArchitectRecheckTests`），源码和测试都没有 warning；6.2.4 也复跑 149/0（日志 `reports/swift-test-55123ea-swift624.txt`：55123ea、Swift 6.2.4、`--no-parallel`、Executed 149 tests, 0 failures）。actionlint 1.7.12 和 1.7.7 都通过。
 
 
 ## 上一分支：feat/mosaic-core（a0102be）
