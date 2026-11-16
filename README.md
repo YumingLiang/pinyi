@@ -78,7 +78,7 @@ macOS（未验证，需 Xcode 26 + `brew install xcodegen`）：
 
 ```bash
 xcodegen generate
-xcodebuild test -project PhotoMosaic.xcodeproj -scheme PhotoMosaic \
+xcodebuild test -project PhotoMosaic.xcodeproj -scheme Pinyi \
   -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
 ```
 

@@ -6,11 +6,12 @@ import MosaicAppCore
 /// App 入口。页面与适配器见 App/Views、App/Adapters；逻辑在 Packages/MosaicAppCore（Linux 可测）。
 @main
 struct PhotoMosaicApp: App {
-    @StateObject private var model = AppModel(buildFlags: BuildFlags(showsPerformanceEntryInSettings: PhotoMosaicApp.perfPageInSettings))
+    @StateObject private var model = AppModel(buildFlags: BuildFlags(internalTools: PhotoMosaicApp.hasInternalTools))
 
-    /// 决定 18：内部 / TestFlight 构建（编译条件 `PERF_PAGE`）在设置页显示「性能测试」。
-    static var perfPageInSettings: Bool {
-        #if PERF_PAGE
+    /// 编译条件 `INTERNAL_TOOLS`（Debug / Internal 配置）：性能计时页、导出 8000 档、「马赛克测试」相簿开关。
+    /// Release 不含任何内部工具代码（CI 用二进制标记检查，见 ios.yml / fastlane/Fastfile）。
+    static var hasInternalTools: Bool {
+        #if INTERNAL_TOOLS
         return true
         #else
         return false

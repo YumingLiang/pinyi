@@ -1,5 +1,63 @@
 # CHANGES
 
+## feat/app-layer：INTERNAL_TOOLS / 发布配置（基于 d6fa750，合入运维草稿 /workspace/pinyi/ios-release/）
+
+架构师 2026-11-16 裁定：性能计时页、导出 8000 档、「马赛克测试」相簿开关只在编译条件 `INTERNAL_TOOLS` 下存在；去掉 `PERF_PAGE`。
+
+### 改动
+- **project.yml**
+  - 顶层 `configs: {Debug: debug, Release: release, Internal: release}`；Internal 只多 `SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) INTERNAL_TOOLS`（以及显示名），其余与 Release 相同。
+  - Debug：`$(inherited) DEBUG INTERNAL_TOOLS`，显示名「拼忆调试」（三种包可同时装时一眼区分；Bundle ID 目前三者相同，见风险）。
+  - `APP_DISPLAY_NAME`：Release「拼忆」/ Internal「拼忆内测」/ Debug「拼忆调试」；Info.plist `CFBundleDisplayName: $(APP_DISPLAY_NAME)`。
+  - `VERSIONING_SYSTEM: apple-generic`（fastlane `increment_build_number` 需要）。
+  - Scheme：`Pinyi`（test=Debug，含三组单测；archive=Release）、`Pinyi-Internal`（run/profile/archive=Internal）。旧的 `PhotoMosaic` scheme 不再生成。
+- **显示名与 InfoPlist.strings**：本地化的 `CFBundleDisplayName` 会覆盖 Info.plist 值，内测包在中文系统下会显示「拼忆」。因此从 `zh-Hans.lproj/InfoPlist.strings` 删去显示名，只留两条权限说明；`scripts/gen-localizable.py` 改为校验 copy 里 `app.display_name` == project.yml Release 的 `APP_DISPLAY_NAME`（不一致则失败）。CI 也会在产物里检查 InfoPlist.strings 不含显示名。
+- **App/InternalTools/**（全部 `#if INTERNAL_TOOLS`）
+  - `InternalToolsMarker.swift`（草稿原样，仅首行注释）
+  - `InternalToolsView.swift`：内部工具根视图，`.accessibilityIdentifier(InternalToolsMarker.id)` 实际引用标记；包括 `TestAlbumView`
+  - `PerfView.swift`：从 SettingsAndPerfViews 移过来
+  - `TestAlbumWriter.swift`：PhotoKit 写入 / 删除「马赛克测试」相簿，每批 50 张，JPEG 用 ImageIO 编码
+- **SettingsAndPerfViews / PhotoMosaicApp**：设置页入口、「关于」连点 5 次都在 `#if INTERNAL_TOOLS` 里；`BuildFlags(internalTools:)`。
+- **MosaicAppCore**
+  - `BuildFlags(internalTools:)`
+  - `Internal/TestAlbum.swift`：`TestAlbumPolicy`、`TestAlbumPlan` 分批、`TestAlbumProgress`、确定性合成图 `SyntheticImage`
+  - 测试 `InternalToolsTests`（4 个）
+- **fastlane/Fastfile**（草稿 + 改动见下）和 **fastlane/Appfile**（新增，只读 ENV）。
+- **.github/workflows/ios.yml**
+  - 新 job `ios-config-guard`，matrix：Pinyi/Release、Pinyi-Internal/Internal，`generic/platform=iOS`，不签名。
+  - 编译后用 `strings -a` 查 `PINYI_INTERNAL_TOOLS_MARKER`：Release 有就失败，Internal 没有也失败。同时检查 `CFBundleDisplayName`。
+  - 模拟器测试 job 改用 scheme `Pinyi`。
+  - paths 去掉不存在的 Packages/PhotoIndex、Renderer，加 MosaicAppCore、fastlane。
+  - TestFlight 注释改为 Fastfile 的 Secrets 名。提审不在任何自动流程里。
+
+### 对运维草稿的改动和发现的问题（原文件未改）
+1. 草稿 target / 工程名为 `Pinyi` / `Pinyi.xcodeproj`。仓库保持 target `PhotoMosaic`、工程 `PhotoMosaic.xcodeproj`，只把 scheme 命名为 `Pinyi` / `Pinyi-Internal`。Fastfile 按 scheme 调用，不受影响。
+2. ci-ios-job.yml 用 `macos-15`。改为 `macos-26` + `DEVELOPER_DIR=/Applications/Xcode_26.6.app`，和仓库其他 job 一致。
+3. project.yml.snippet 引用了未定义的 `$(PINYI_BUNDLE_ID)`。仓库保留占位 Bundle ID，Fastfile / Appfile 用 ENV `PINYI_BUNDLE_ID`。**两者必须一致**，待 AndyL 定 ID。
+4. 草稿没处理 InfoPlist.strings 覆盖显示名的问题（见上）。不处理的话，Fastfile `inspect_ipa` 的「内测」检查在中文系统下能过，但用户看到的仍是「拼忆」。
+5. Fastfile 用了 `Dir.mktmpdir`，但没有 `require "tmpdir"`，已补。
+6. Fastfile 缺 Appfile，`match` 需要 app_identifier，已补 Appfile（只读 ENV）。
+7. Fastfile 没有先生成工程，已加 `before_all { xcodegen generate }`（工程不入库）。
+8. `increment_build_number` 依赖 agvtool，需要 `VERSIONING_SYSTEM=apple-generic`，已在 project.yml 加上。
+9. **与决定 18 冲突**：决定 18 要求上架版保留「关于」连点 5 次进入性能页。按架构师新裁定，Release 不编译性能页，连点也无效。需要产品确认（`HiddenEntryTapCounter` 逻辑保留在 MosaicAppCore）。
+10. 决定 13（测试相簿）仍待拍板：功能已实现，但 `TestAlbumPolicy.ownerApproved = false`，拍板前不显示「生成」按钮，只保留删除。
+
+### 盲写风险（Linux 无 Xcode，未实际编译）
+- XcodeGen 自定义 `Internal` 配置下，本地 SPM 包（MosaicCore / MosaicAccelerate / MosaicAppCore）的配置映射：Xcode 对未知配置名默认按 Release 编包。需要实测 Internal 包的优化级别。
+- 标记防剥离：只靠 `.accessibilityIdentifier` 引用，Release 下整个文件不编译。需实测 Internal 包里 `strings` 能找到标记（CI 会验证）。
+- 中文 `APP_DISPLAY_NAME` 在 build setting 和 Info.plist 中的转义。
+- `generic/platform=iOS` + `CODE_SIGNING_ALLOWED=NO` 的产物路径 `build/Build/Products/<Config>-iphoneos/*.app`。
+- `TestAlbumWriter` 的 PhotoKit 事务（每批 50 张；删除会弹系统确认）。
+- `fastlane` 的 `export_method: "app-store"`：新版 Xcode 叫 app-store-connect，fastlane 会自动映射，需留意。
+- Debug / Internal / Release 的 Bundle ID 相同，三者不能同时安装。
+
+### 验证（Linux）
+- MosaicAppCore `swift test`：60 个，1 个跳过（bench），0 失败。
+- App 所有 Swift 文件分别在定义和不定义 `INTERNAL_TOOLS` 时 `swiftc -parse` 通过。
+- `check-no-network.sh` OK。
+- `gen-localizable.py --check` OK（140 / 2）。
+- actionlint 1.7.12 OK。
+
 ## feat/app-layer（基于 55123ea）
 
 日期：2026-11-16（PT）。依据：技术方案 v0.2、产品决定 v0.3（含 00:58、01:10、01:12 补充）、copy_v1.1（只用稳定 key）、QA 用例 B 层。

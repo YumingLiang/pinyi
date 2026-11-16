@@ -1,0 +1,76 @@
+# fastlane（运维草稿 /workspace/pinyi/ios-release/Fastfile 合入；与草稿的差异见 CHANGES「INTERNAL_TOOLS / 发布配置」）。
+# ⚠️ 不含任何密钥。运行时只读环境变量（CI 里来自 GitHub Secrets，名称如下，值绝不入库）：
+#   APP_STORE_CONNECT_API_KEY_KEY_ID / APP_STORE_CONNECT_API_KEY_ISSUER_ID / APP_STORE_CONNECT_API_KEY_KEY（.p8 内容）
+#   MATCH_GIT_URL / MATCH_PASSWORD（match 证书仓库）、PINYI_BUNDLE_ID（见 fastlane/Appfile）、TF_INTERNAL_GROUP（可选）
+# 提交审核不在任何 lane 里；beta_internal 只发 TestFlight 内部组。
+require "tmpdir"
+
+default_platform(:ios)
+
+MARKER = "PINYI_INTERNAL_TOOLS_MARKER"
+
+platform :ios do
+  # [合入时新增] 工程由 XcodeGen 生成、不入库：每个 lane 前先生成（草稿里没有这一步，build_app 会找不到工程）。
+  before_all do
+    sh("cd .. && xcodegen generate --spec project.yml")
+  end
+
+  # ---- 公共：从 ipa 里取 Info.plist 和可执行文件做检查 ----
+  def inspect_ipa(ipa)
+    dir = Dir.mktmpdir
+    sh("unzip -q -o '#{ipa}' -d '#{dir}'")
+    app = Dir["#{dir}/Payload/*.app"].first
+    UI.user_error!("ipa 里找不到 .app") unless app
+    name = sh("/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' '#{app}/Info.plist'", log: false).strip
+    exe  = sh("/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' '#{app}/Info.plist'", log: false).strip
+    has_marker = system("strings -a '#{app}/#{exe}' | grep -q '#{MARKER}'")
+    [name, has_marker]
+  end
+
+  def next_build_number
+    # 同一个 Bundle ID，Internal 和 Release 共用 build 号序列，必须全局递增
+    latest_testflight_build_number(initial_build_number: 0) + 1
+  end
+
+  desc "Internal 配置 → 只上传 TestFlight 内部测试组，不加外部组、不提审"
+  lane :beta_internal do
+    setup_ci if ENV["CI"]
+    app_store_connect_api_key  # 从环境变量 APP_STORE_CONNECT_API_KEY_* 读取
+    match(type: "appstore", readonly: true)
+    increment_build_number(build_number: next_build_number)
+
+    ipa = build_app(scheme: "Pinyi-Internal", configuration: "Internal",
+                    export_method: "app-store", clean: true)
+
+    name, has_marker = inspect_ipa(ipa)
+    UI.user_error!("Internal 包显示名必须带「内测」，实际是 #{name}") unless name.end_with?("内测")
+    UI.user_error!("Internal 包里没有 INTERNAL_TOOLS 标记，配置可能没生效") unless has_marker
+
+    upload_to_testflight(
+      ipa: ipa,
+      distribute_external: false,          # 禁止外部测试组
+      groups: [ENV.fetch("TF_INTERNAL_GROUP", "Internal")],  # 仅内部组
+      submit_beta_review: false,           # 不提交 Beta 审核
+      skip_waiting_for_build_processing: false
+    )
+    # 本 lane 里不调用 deliver / upload_to_app_store / submit_for_review
+  end
+
+  desc "Release 配置（以后用；提审前须 AndyL 明确同意）"
+  lane :release do
+    setup_ci if ENV["CI"]
+    app_store_connect_api_key
+    match(type: "appstore", readonly: true)
+    increment_build_number(build_number: next_build_number)
+
+    ipa = build_app(scheme: "Pinyi", configuration: "Release",
+                    export_method: "app-store", clean: true)
+
+    name, has_marker = inspect_ipa(ipa)
+    UI.user_error!("Release 产物带 INTERNAL_TOOLS 标记，终止") if has_marker
+    UI.user_error!("Release 包显示名带「内测」，终止") if name.include?("内测")
+
+    upload_to_testflight(ipa: ipa, distribute_external: false, submit_beta_review: false)
+    # 提交审核单独做，不放进自动流程
+  end
+end

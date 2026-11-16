@@ -2,6 +2,13 @@
 # ⚠️ 本文件在 Linux 上编写，尚未在 macOS / Xcode 上验证（无 Mac 环境）。首次 macOS CI 运行时需核对。
 name: PhotoMosaic
 
+# 构建配置（运维草稿 /workspace/pinyi/ios-release/project.yml.snippet.yml，架构师定稿）：
+# Internal 的 type 为 release，继承 Release 全部优化默认值，只多 INTERNAL_TOOLS 编译条件和「内测」显示名。
+configs:
+  Debug: debug
+  Release: release
+  Internal: release
+
 options:
   bundleIdPrefix: com.example.placeholder   # TODO(AndyL)：替换为真实反向域名
   deploymentTarget:
@@ -20,8 +27,20 @@ settings:
     DEAD_CODE_STRIPPING: YES
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"             # CI 用 github.run_number 覆盖
+    VERSIONING_SYSTEM: apple-generic        # fastlane increment_build_number（agvtool）需要
     # 签名：CI 模拟器构建传 CODE_SIGNING_ALLOWED=NO；TestFlight 签名将由 fastlane match 注入（尚未配置）。
     # DEVELOPMENT_TEAM: XXXXXXXXXX           # TODO(AndyL)：Apple Developer Team ID（不是密钥，可入库）
+  configs:
+    Debug:
+      APP_DISPLAY_NAME: 拼忆调试
+      # 内部工具（性能计时页、导出 8000 档、「马赛克测试」相簿开关）在 Debug 也编进来。必须带 $(inherited)。
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG INTERNAL_TOOLS
+    Release:
+      APP_DISPLAY_NAME: 拼忆                  # 须与 copy_v1.1.md 的 app.display_name 一致（gen-localizable.py --check 校验）
+    Internal:
+      APP_DISPLAY_NAME: 拼忆内测
+      # 必须带上 $(inherited)，否则会丢掉 Release 原有的条件
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) INTERNAL_TOOLS
 
 packages:
   MosaicCore:
@@ -54,7 +73,9 @@ targets:
     info:
       path: App/Info.plist                   # 由 XcodeGen 生成（已 .gitignore）
       properties:
-        CFBundleDisplayName: 拼忆              # 同 InfoPlist.strings（key app.display_name）；名称风险见 /workspace/pinyi/name_risk_v0.2.md
+        # 显示名随构建配置：Release「拼忆」/ Internal「拼忆内测」/ Debug「拼忆调试」。InfoPlist.strings 不再写
+        # CFBundleDisplayName（否则本地化值会覆盖这里，内测包也显示「拼忆」）。名称风险见 /workspace/pinyi/name_risk_v0.2.md
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
         CFBundleLocalizations:
           - zh-Hans
         CFBundleDevelopmentRegion: zh-Hans
@@ -79,11 +100,6 @@ targets:
         PRODUCT_NAME: PhotoMosaic
         # App 图标：资产目录尚未加入（占位图标见 /workspace/pinyi/icons），加入后设 ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
-      configs:
-        # 决定 18：内部构建在设置页显示「性能测试」入口（编译条件 PERF_PAGE）。
-        # 目前只有 Debug 打开；TestFlight 内部包若走 Release，需要新增一个 Internal 配置再打开（见 CHANGES 风险 R12）。
-        Debug:
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG PERF_PAGE
 
   PhotoMosaicTests:
     type: bundle.unit-test
@@ -103,19 +119,36 @@ targets:
         BUNDLE_LOADER: $(TEST_HOST)
 
 schemes:
-  PhotoMosaic:
+  # Release 归档（上架 / 正式 TestFlight）；日常 CI 的模拟器单元测试也挂在这个 scheme 上（test 用 Debug）。
+  Pinyi:
     build:
       targets:
         PhotoMosaic: all
         PhotoMosaicTests: [test]
     test:
+      config: Debug
       gatherCoverageData: true
       targets:
         - name: PhotoMosaicTests
-        # MosaicCore 自身的 XCTest 也在 iOS 模拟器上跑一遍（XcodeGen 本地包测试目标语法，未经 macOS 验证）
+        # 本地包的 XCTest 也在 iOS 模拟器上跑一遍（XcodeGen 本地包测试目标语法，未经 macOS 验证）
         - package: MosaicCore/MosaicCoreTests
         - package: MosaicAppCore/MosaicAppCoreTests
     run:
       config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
     archive:
       config: Release
+  # Internal 归档（只发 TestFlight 内部组，fastlane beta_internal）。
+  Pinyi-Internal:
+    build:
+      targets:
+        PhotoMosaic: all
+    run:
+      config: Internal
+    profile:
+      config: Internal
+    archive:
+      config: Internal

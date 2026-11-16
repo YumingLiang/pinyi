@@ -15,9 +15,9 @@ on:
       - "App/**"
       - "AppTests/**"
       - "UITests/**"
-      - "Packages/PhotoIndex/**"
-      - "Packages/Renderer/**"
+      - "Packages/MosaicAppCore/**"
       - "Packages/MosaicAccelerate/**"
+      - "fastlane/**"
       - "project.yml"
       - ".github/workflows/ios.yml"
       # 纯 MosaicCore 变化只跑 linux-core（技术方案 §11.3）。
@@ -80,7 +80,7 @@ jobs:
           set -o pipefail
           xcodebuild build-for-testing \
             -project PhotoMosaic.xcodeproj \
-            -scheme PhotoMosaic \
+            -scheme Pinyi \
             -destination "id=${{ steps.sim.outputs.udid }}" \
             -derivedDataPath DerivedData \
             CODE_SIGNING_ALLOWED=NO \
@@ -92,7 +92,7 @@ jobs:
           set -o pipefail
           xcodebuild test-without-building \
             -project PhotoMosaic.xcodeproj \
-            -scheme PhotoMosaic \
+            -scheme Pinyi \
             -destination "id=${{ steps.sim.outputs.udid }}" \
             -derivedDataPath DerivedData \
             -resultBundlePath TestResults.xcresult \
@@ -113,13 +113,70 @@ jobs:
             xcodebuild-*.log
           retention-days: 7
 
+  # Release / Internal 两种配置都做真机架构编译（不签名），并检查内部工具标记：
+  # Release 产物里有 PINYI_INTERNAL_TOOLS_MARKER → 失败；Internal 产物里没有 → 失败。
+  # 合并自运维草稿 /workspace/pinyi/ios-release/ci-ios-job.yml（改动：runner/Xcode 钉 macos-26 + 26.6、工程名
+  # PhotoMosaic.xcodeproj、加 xcodegen 安装步骤拆分、显示名检查、set -euo pipefail）。提审不在任何自动流程里。
+  ios-config-guard:
+    name: iOS ${{ matrix.configuration }} build + INTERNAL_TOOLS guard
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { scheme: Pinyi, configuration: Release, expect_marker: "0", display_name: "拼忆" }
+          - { scheme: Pinyi-Internal, configuration: Internal, expect_marker: "1", display_name: "拼忆内测" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build ${{ matrix.configuration }} (generic iOS, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project PhotoMosaic.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -configuration "${{ matrix.configuration }}" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "xcodebuild-${{ matrix.configuration }}.log"
+
+      - name: Guard INTERNAL_TOOLS marker and display name
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+          EXPECT_MARKER: ${{ matrix.expect_marker }}
+          EXPECT_NAME: ${{ matrix.display_name }}
+        run: |
+          set -euo pipefail
+          APP=$(ls -d "build/Build/Products/${CONFIGURATION}-iphoneos/"*.app | head -n 1)
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Info.plist")
+          if strings -a "$APP/$EXE" | grep -q PINYI_INTERNAL_TOOLS_MARKER; then FOUND=1; else FOUND=0; fi
+          echo "configuration=$CONFIGURATION marker=$FOUND displayName=$NAME"
+          if [ "$FOUND" != "$EXPECT_MARKER" ]; then
+            echo "::error::$CONFIGURATION: INTERNAL_TOOLS marker found=$FOUND, expected=$EXPECT_MARKER"; exit 1
+          fi
+          if [ "$NAME" != "$EXPECT_NAME" ]; then
+            echo "::error::$CONFIGURATION: CFBundleDisplayName=$NAME, expected=$EXPECT_NAME"; exit 1
+          fi
+          # InfoPlist.strings 不得再覆盖显示名（否则内测包在 zh-Hans 下仍显示「拼忆」）
+          if [ -f "$APP/zh-Hans.lproj/InfoPlist.strings" ] && plutil -p "$APP/zh-Hans.lproj/InfoPlist.strings" | grep -q CFBundleDisplayName; then
+            echo "::error::InfoPlist.strings overrides CFBundleDisplayName"; exit 1
+          fi
+
   # ---------------------------------------------------------------------------
-  # TestFlight（占位，不启用）。技术方案 §11.4：单独的 testflight.yml，仅 main 打 tag 或手动触发。
-  # 需要 AndyL 先完成：Apple Developer 账号、App Store Connect API Key、Bundle ID、App 记录、
-  # match 证书私有仓库；并把以下值存进 GitHub Secrets（绝不入库）：
-  #   ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8_BASE64 / MATCH_PASSWORD / MATCH_GIT_DEPLOY_KEY
-  # 步骤草图：
-  #   - bundle exec fastlane match appstore --readonly
-  #   - bundle exec fastlane build_app export_method:app-store
-  #   - bundle exec fastlane upload_to_testflight skip_waiting_for_build_processing:true
+  # TestFlight：fastlane/Fastfile（lane beta_internal = Internal 配置、仅内部组、不提审；lane release 以后用）。
+  # 发布 workflow 由运维负责（不在本仓库自动流程里），需要 AndyL 先完成：Apple Developer 账号、
+  # App Store Connect API Key、Bundle ID、App 记录、match 证书私有仓库；GitHub Secrets 名称（值绝不入库）：
+  #   APP_STORE_CONNECT_API_KEY_KEY_ID / APP_STORE_CONNECT_API_KEY_ISSUER_ID / APP_STORE_CONNECT_API_KEY_KEY /
+  #   MATCH_GIT_URL / MATCH_PASSWORD / PINYI_BUNDLE_ID（可选 PINYI_TEAM_ID、TF_INTERNAL_GROUP）
   # ---------------------------------------------------------------------------
