@@ -173,6 +173,59 @@ jobs:
             echo "::error::InfoPlist.strings overrides CFBundleDisplayName"; exit 1
           fi
 
+  # 与 AndyL 本机 Xcode 27.2 对齐：不签名，只编 Release / Internal，提前拦住新编译器（Swift 6 region isolation 等）的报错。
+  # Xcode 27 只在 GitHub 的预览镜像 `xcode-27`（macOS 27，arm64）上有；2026-11-16 按 runner-images
+  # images/macos/xcode-27-arm64-Readme.md（Image 20261104.0337.1）核实：Xcode 27.2（27B52）在 /Applications/Xcode_27.2.app，默认是 27.1。
+  # 预览镜像可能排队较久或变动；镜像移除 27.2 时这里会明确失败，再按 Readme 更新。公开仓库标准 runner 不收费。
+  ios-xcode27-build:
+    name: iOS ${{ matrix.configuration }} build (Xcode 27.2, unsigned)
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { scheme: Pinyi, configuration: Release }
+          - { scheme: Pinyi-Internal, configuration: Internal }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Xcode 27.2
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::$DEVELOPER_DIR not found on runner"; ls -d /Applications/Xcode*.app; exit 1
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build ${{ matrix.configuration }} (generic iOS, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project PhotoMosaic.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -configuration "${{ matrix.configuration }}" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "xcodebuild-x27-${{ matrix.configuration }}.log"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcode27-${{ matrix.configuration }}
+          path: xcodebuild-x27-*.log
+          retention-days: 7
+
   # ---------------------------------------------------------------------------
   # TestFlight：fastlane/Fastfile（lane beta_internal = Internal 配置、仅内部组、不提审；lane release 以后用）。
   # 发布 workflow 由运维负责（不在本仓库自动流程里），需要 AndyL 先完成：Apple Developer 账号、
