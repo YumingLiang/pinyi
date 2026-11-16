@@ -107,6 +107,32 @@ AppTests（模拟器）：`testImageIOEncoderWritesJPEGFromRawStripFile`、`test
 - R25：`completionWithItemsHandler` 与 `sheet(onDismiss:)` 都会调 `shareFinished()`，第二次是空操作。
 - R26：`export.degraded` 提示（部分原图未下载、导出时降级）**未接**，需要渲染器回报降级格数，留到后续。
 
+## feat/sharp-filter：「不能略糊」——生成时只用本机有 ≥ 256 px 版本的照片（hd-export-req-v0.2 F5 / hd-default-and-sharpness-v0.1 方案 1）
+
+- **做法（不重扫全库）**：照常匹配 → 只探测**实际分到格子上**的照片（去重）→ 不合格的从候选掩码里剔掉 → 用原有匹配器（含放宽链）整图重配 → 再探测新出现的照片，最多重配 3 轮。生成前先把本会话缓存里已知不合格的剔掉，第二次生成通常 0 轮重配、0 次探测。
+  - 重配是**整图**重跑（同种子、新掩码），不是只改受影响的格子：这样单张上限 / 邻域约束全局一致，「换一种拼法」也能复现。代价是每轮多一次生成耗时（见风险）。
+  - 剔除后的快照存进 `GenerationProduct.snapshot`，「换一种拼法」沿用，被剔的不会换回来；新出现的照片照样探测。
+- **探测**：`LocalResolutionProbing` 协议（MosaicAppCore），App 里是 `PhotoKitResolutionProbe`：`requestImage` 256×256、`.aspectFill`、`.highQualityFormat`、`.fast`、`isNetworkAccessAllowed = false`、异步；有错 / `PHImageResultIsInCloudKey` / 无图 / `PHImageResultIsDegradedKey` / 短边 < 256 一律不合格（判定在 `LocalResolutionPolicy.classify`，Linux 单测）。`.fast` 是有意的：`.exact` 会把本机小图缩放到 256，掩盖「本机只有小图」。
+  - `LocalResolutionChecker`：最多 8 个请求同时在飞；Task 取消时 `cancelImageRequest` 并抛 `CancellationError`，取消后到达的结果不入缓存。
+  - `LocalResolutionCache`：本会话按 localIdentifier 缓存；相册变化（`libraryDidChange`）时只清不合格条目（照片可能刚下载回本机），合格的保留。**未**持久化到索引（见风险）。
+- **界面**：来源页显示 `source.excluded_low_res`「有 N 张照片手机上的版本不够清楚，没有用上」（N = 当前来源里被剔除的不同照片数，换来源后不显示）；探测期间进度页正文换成 `generate.progress.checking`「正在挑出手机上够清楚的照片，请稍等。」。
+- **边界**：剔除后一张都不剩 → `NoSharpPhotosError` → `GenerationFailure.noMaterial`（现有「没有可用照片」路径），来源页仍显示 N；剩下 < 200 张时供给判断按剔除后的张数（结果页 `shortage.result` 规则不变：< 200 且放宽了约束）。重配 3 轮后仍有格子分到不合格照片（架构师 PR #5 评审 MUST）：**只把这些格子**换成「已探测且通过」的照片（`MosaicPipeline.refill`，MosaicCore 新增），忽略单张使用上限、尽量避开相邻重复（记 `.capIgnored` / `.neighborhoodIgnored`），其余格子不动；一张通过的都没有才走 `noMaterial`。最终结果里不会有未探测或不合格的照片（`unresolvedCellCount` 恒为 0），兜底格数 `finalFallbackCellCount` 进性能页附注。忽略上限只发生在这一步。
+- **性能页**：新阶段 `sharpnessProbe`「清晰度探测」——各轮探测累计耗时、items = 实际探测张数；附注 `去重探测 / 缓存命中 / 排除 / 重配轮数 / 未解决格数`，性能页显示最近一次附注。重配轮的生成计时附注带「重配第 n 轮」。
+- **评审跟进测试**：`SharpnessFilterTests` 新增 4 个——重度不合格（2/3、90%、只剩 1 张）下每格都是探测通过的照片；兜底只在用完重配轮数后发生；轮数内能解决时结果与直接用剔除后快照生成完全一致（没有额外放宽上限）；每轮只探测本轮新出现的照片（按轮核对探测数）。`CellRefillTests`（MosaicCore，2 个）：只换指定格子、只用允许的素材、可超上限；无可用素材抛 `noCandidates`。
+- **后续（未做）**：探测结果持久化进索引（绑定 epoch），本 PR 只做会话缓存。
+- **产品跟进（「可用照片」= 筛选后）**：
+  - 来源页张数（全部照片 / 相簿行）在扫描完成后减去该来源已知不够清楚的张数（`SourceListLogic.excludingLowRes`）。
+  - 「开始拼图」的 200 张门槛按「索引可用 − 已知不够清楚」判断（`shortage.pregenerate` 生成前提示）。
+  - 生成前还不知道（第一次在该来源生成）、筛选后才不足 200 张时，结果页补显示 `shortage.pregenerate`（`AppState.postFilterShortageNotice`）；生成前已提示过则不重复。
+  - 结果页 `shortage.result` 一直按筛选后的候选数判断；最后兜底补格（`refill`）也把 `availableCandidates` / 供给改为筛选后快照的张数。`GenerationOutcome.availableAfterFilter` 记录筛选后张数。
+  - 「已知」= 最近一次在该来源生成时探测得出的；没探测过的照片无法预知，所以第一次只能在结果页补提示。
+  - 失败页「再试一次」与「开始拼图」同一套张数：索引可用减去该来源已知不够清楚的（`AppCoordinator.retryTapped()`），200 张门槛一致。视图不再把筛选前的 `indexStatus.available` 直接传进状态机。
+  - `LowResExclusion` 改为保存被排除的 ID。相册 / 索引更新后（`refreshStatus` / `refreshAlbums`）丢掉已经不在该来源里的 ID，来源页排除数和可用张数马上重算，不必等到下一次生成。
+- **文案 v1.2**：`generate.progress.checking` 改为「正在挑选清楚的照片…」，`export.size.uhd.desc` 改为「放大看得最清楚。（默认）」，`source.excluded_low_res` 不变；改 `copy_v1.1.md` 后用 `gen-localizable.py` 重新生成，`--check` 通过。
+- **跟进测试**（`SharpnessFilterTests` 再加 3 个）：`LowResExclusion.pruned` 只保留仍在来源里的 ID；失败后 `retryTapped` 按筛选后张数弹出 `shortage.pregenerate`；删除部分被排除的照片并完成相册同步后，来源页排除数 / 可用张数立刻更新。
+- **测试**（`SharpnessFilterTests` 首版 12 个）：最终结果里没有被剔除的照片且每格都有图；N 去重、每张一次生成只探测一次；缓存避免重探（再生成 0 次探测、换拼法不重复、相册变化只清不合格）；探测中取消抛 `CancellationError`、无结果、不入缓存；并发 ≤ 8；全部不合格走 `noMaterial`；只剩 10 张时供给按剔除后判断；到达最多轮数报告未解决格数；未注入探测器时行为不变；快照剔除只动掩码；协调器来源页文案只对当前来源显示。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`App/Adapters/PhotoKitResolutionProbe.swift`、`LiveDependencies`（注入探测器）、来源页 / 进度页 / 性能页三处视图。需真机核对：`.highQualityFormat` + 无网络时 iCloud 照片的回调形态（nil + InCloud，还是降质图）；`.fast` 返回的像素尺寸。
+
 ## feat/app-layer：导出 / 预览格子被非等比拉伸；导出记录糊格子与白格子数量
 
 - **根因**：PhotoKit `.aspectFill` + `targetSize = N×N` 可能返回非正方形（例如 256×341）。共享取图路径 `ImagePixels.opaqueSRGB(cg, maxEdge: N)` 按长边缩到 N，变成 192×256，再画进 N×N 格子——横向拉伸，有效清晰度只有短边，人脸会变形。

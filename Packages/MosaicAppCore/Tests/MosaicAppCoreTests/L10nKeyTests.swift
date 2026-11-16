@@ -30,7 +30,7 @@ final class L10nKeyTests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let text = try String(contentsOf: root.appendingPathComponent("App/Resources/zh-Hans.lproj/Localizable.strings"), encoding: .utf8)
-        for (key, n) in [("source.list.count", 1), ("source.list.count_pending", 1), ("scan.progress", 2), ("scan.progressive.ready", 1)] {
+        for (key, n) in [("source.list.count", 1), ("source.list.count_pending", 1), ("scan.progress", 2), ("scan.progressive.ready", 1), ("source.excluded_low_res", 1)] {
             let line = text.split(separator: "\n").first { $0.hasPrefix("\"\(key)\"") }.map(String.init) ?? ""
             for i in 1...n { XCTAssertTrue(line.contains("%\(i)$@"), "\(key) 缺少 %\(i)$@") }
         }

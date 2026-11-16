@@ -99,6 +99,7 @@ struct SourceStepView: View {
                 Section { Button { SystemActions.presentLimitedLibraryPicker() } label: { Text(L10nKey.sourceAddPhotos) } }
             }
             if let n = model.flow.source.notice { Section { Text(n).foregroundStyle(.red) } }
+            if let line = model.sourceLowResLine { Section { Text(line).font(.footnote).foregroundStyle(.secondary) } }
             if let n = model.transientNotice { Section { Text(n).font(.footnote).foregroundStyle(.secondary) } }
             if let e = model.emptyState {
                 Section { VStack(alignment: .leading) { Text(e.titleKey).bold(); Text(e.bodyKey).font(.footnote) } }
@@ -166,7 +167,7 @@ struct SettingsStepView: View {
             Button(role: .cancel) { model.send(.shortageBack) } label: { Text(L10nKey.shortagePregenerateBack) }
         }
         .alert(Text(L10nKey.generateFailedTitle), isPresented: .constant(model.flow.generation.phase.isFailed)) {
-            Button { model.send(.retryTapped(available: model.indexStatus.available)) } label: { Text(L10nKey.generateFailedRetry) }
+            Button { model.retryTapped() } label: { Text(L10nKey.generateFailedRetry) }
             Button(role: .cancel) { model.send(.backToSettings) } label: { Text(L10nKey.generateFailedBack) }
         } message: { Text(L10nKey.generateFailedBody) }
     }
@@ -183,7 +184,7 @@ struct GenerationProgressView: View {
         VStack(spacing: 20) {
             Text(L10nKey.generateProgressTitle).font(.title2.bold())
             ProgressView(value: model.flow.generation.fraction).padding(.horizontal, 40)
-            Text(L10nKey.generateProgressBody).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text(model.generationProgressBodyKey).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Button(role: .cancel) { model.send(.cancelTapped) } label: { Text(L10nKey.generateProgressCancel) }
         }
         .padding(32)
@@ -202,6 +203,9 @@ struct ResultView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            if model.postFilterShortageNotice {
+                Text(L10nKey.shortagePregenerate).font(.footnote).foregroundStyle(.secondary)
+            }
             if case .result(let o) = model.flow.generation.phase, o.shouldShowShortageNotice {
                 Text(L10nKey.shortageResult).font(.footnote).foregroundStyle(.secondary)
             }

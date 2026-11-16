@@ -92,6 +92,13 @@ public struct AppState: Sendable, Hashable {
     public var exportTier: ExportTier = .default
     /// 每出一个新结果 +1（平台层据此重画预览）。
     public var resultRevision = 0
+    /// 生成进度页的阶段（匹配 / 检查清晰度），决定正文文案。
+    public var generationStage: GenerationStage = .matching
+    /// 最近一次生成（含「换一种拼法」）在哪个来源里排除了多少张不够清楚的照片。
+    public var lowResExclusion: LowResExclusion?
+    /// 结果页提示「照片比较少…」（`shortage.pregenerate`）：生成前按已知数没到 200 的门槛、筛选后才不足 200 时，
+    /// 生成前没机会提示，在结果页补一次。
+    public var postFilterShortageNotice = false
 
     public init(initialSeed: UInt64) { flow = MainFlow(initialSeed: initialSeed) }
 
@@ -100,8 +107,48 @@ public struct AppState: Sendable, Hashable {
         return .full
     }
 
-    public var allPhotosRow: SourceRow { SourceListLogic.allPhotosRow(access: access, status: indexStatus) }
+    /// 来源页首项（可用张数已减去清晰度筛选排除的张数）。
+    public var allPhotosRow: SourceRow { lowResAdjusted(SourceListLogic.allPhotosRow(access: access, status: indexStatus)) }
+    /// 来源页相簿行（同上）。
+    public var displayedAlbumRows: [SourceRow] { albumRows.map(lowResAdjusted) }
+
+    /// 某来源已知不够清楚的张数（最近一次在该来源生成时得到；没生成过为 0）。
+    public func knownLowResCount(for selection: SourceSelection) -> Int {
+        guard let e = lowResExclusion, e.selection == selection else { return 0 }
+        return e.count
+    }
+
+    private func lowResAdjusted(_ row: SourceRow) -> SourceRow {
+        SourceListLogic.excludingLowRes(row, count: knownLowResCount(for: row.selection),
+                                        scanComplete: SourceListLogic.isScanComplete(indexStatus))
+    }
+
+    /// 来源页提示「有 N 张照片手机上的版本不够清楚，没有用上」：只对当前所选来源、N > 0 时显示。
+    public var sourceLowResLine: LocalizedLine? {
+        guard let e = lowResExclusion, e.selection == flow.source.selection, e.count > 0 else { return nil }
+        return LocalizedLine(.sourceExcludedLowRes, [CountFormat.grouped(e.count)])
+    }
+
+    /// 生成进度页正文。
+    public var generationProgressBodyKey: L10nKey { generationStage.bodyKey }
 
     /// 生成进行中（含确认取消弹窗）。
     public var isGenerating: Bool { flow.generation.showsProgress }
+}
+
+/// 某个来源里因手机上版本不够清楚（< 256 px）而没用上的照片（去重）。
+/// 存 ID 而不是只存张数：相册变化后可以丢掉已经不在该来源里的，及时重算来源页张数。
+public struct LowResExclusion: Sendable, Hashable {
+    public var selection: SourceSelection
+    public var assetIDs: Set<String>
+    public var count: Int { assetIDs.count }
+    public init(selection: SourceSelection, assetIDs: Set<String>) {
+        self.selection = selection
+        self.assetIDs = assetIDs
+    }
+
+    /// 只保留仍在该来源里的 ID，重算张数。
+    public func pruned(to sourceAssetIDs: Set<String>) -> LowResExclusion {
+        LowResExclusion(selection: selection, assetIDs: assetIDs.intersection(sourceAssetIDs))
+    }
 }

@@ -6,11 +6,19 @@ public struct GenerationOutcome: Sendable, Hashable {
     /// 结果页是否显示 `shortage.result`（= `MosaicGeneration.shouldShowShortageNotice`：可用 < 200 且实际放宽了约束）。
     public var shouldShowShortageNotice: Bool
     public var cellCount: Int
+    /// 清晰度筛选后实际可用的张数（未启用筛选为 nil）。200 张门槛按它判断。
+    public var availableAfterFilter: Int?
 
-    public init(seed: UInt64, shouldShowShortageNotice: Bool, cellCount: Int) {
+    public init(seed: UInt64, shouldShowShortageNotice: Bool, cellCount: Int, availableAfterFilter: Int? = nil) {
         self.seed = seed
         self.shouldShowShortageNotice = shouldShowShortageNotice
         self.cellCount = cellCount
+        self.availableAfterFilter = availableAfterFilter
+    }
+
+    /// 筛选后是否低于 200 张门槛。
+    public var isBelowThresholdAfterFilter: Bool {
+        availableAfterFilter.map { MaterialSupply.evaluate(availableCount: $0).needsWarning } ?? false
     }
 
     public init(_ g: MosaicGeneration) {
@@ -31,6 +39,7 @@ public enum GenerationFailure: Sendable, Hashable {
         if error is CancellationError { return nil }
         if let e = error as? PhotoIndexError, e == .albumUnreadable { return .albumUnreadable }
         if let e = error as? MosaicError, case .noCandidates = e { return .noMaterial }
+        if error is NoSharpPhotosError { return .noMaterial }
         return .other
     }
 }

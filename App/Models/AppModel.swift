@@ -88,13 +88,16 @@ final class AppModel: ObservableObject {
     var onboarding: OnboardingFlow { state.onboarding }
     var indexStatus: IndexStatus { state.indexStatus }
     var scan: ScanFlow { state.scan }
-    var albumRows: [SourceRow] { state.albumRows }
+    var albumRows: [SourceRow] { state.displayedAlbumRows }   // 可用张数已减去清晰度筛选排除的
+    var postFilterShortageNotice: Bool { state.postFilterShortageNotice }
     var flow: MainFlow { state.flow }
     var emptyState: LibraryEmptyState? { state.emptyState }
     var transientNotice: L10nKey? { state.transientNotice }
     var access: SourceAccess { state.access }
     var allPhotosRow: SourceRow { state.allPhotosRow }
     var authorization: PhotoAuthorization { state.authorization }
+    var sourceLowResLine: LocalizedLine? { state.sourceLowResLine }
+    var generationProgressBodyKey: L10nKey { state.generationProgressBodyKey }
 
     var showScanSheet: Bool {
         get { state.showScanSheet }
@@ -130,6 +133,8 @@ final class AppModel: ObservableObject {
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
+    /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
+    func retryTapped() { Task { await coordinator.retryTapped() } }
 
     // MARK: 导出（紧急版：只保存到相册；失败/重试走协调器，作品页再导出才能保留 exportSource）
 

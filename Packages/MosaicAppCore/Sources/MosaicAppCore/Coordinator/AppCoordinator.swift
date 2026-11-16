@@ -29,6 +29,8 @@ public final class AppCoordinator {
     private var loadTask: Task<Void, Never>?
     private var scanTask: Task<Void, Never>?
     private var generationTask: Task<Void, Never>?
+    /// 最近一次「开始拼图」时用于 200 张门槛判断的张数（筛选后的已知数）。
+    private var gateAvailable: Int?
     private var exportTask: Task<Void, Never>?
     private var lastExportPurpose: ExportPurpose = .save
     private var exportSource: ExportSource?
@@ -239,6 +241,7 @@ public final class AppCoordinator {
         state.indexStatus = st
         state.emptyState = LibraryEmptyState.evaluate(st)
         if let n = LibraryEmptyState.completionNotice(st) { state.transientNotice = n }
+        await pruneLowResExclusion()
     }
 
     public func refreshAlbums() async {
@@ -251,11 +254,13 @@ public final class AppCoordinator {
         state.albumRows = SourceListLogic.albumRows(albums, availableByAlbum: avail,
                                                     scanComplete: SourceListLogic.isScanComplete(state.indexStatus))
         state.flow.source.reconcile(with: [state.allPhotosRow] + state.albumRows)
+        await pruneLowResExclusion()
     }
 
     /// 相册变化（`PHPhotoLibraryChangeObserver`，任意线程 → 平台层转到主线程调用）：2 s 去抖、最长 10 s，
     /// 到点做一次全量 diff + 扫描（决定 11）。时间走注入的时钟。
     public func libraryDidChange() {
+        dependencies.generator.invalidateLocalResolution()   // 不合格的照片可能刚下载回本机
         changeDebouncer.noteChange(at: dependencies.clock.now())
         scheduleDebounce()
     }
@@ -315,8 +320,24 @@ public final class AppCoordinator {
             state.showScanSheet = true
             startScan()
         case .proceed(let n):
-            send(.startTapped(available: n))
+            // 「可用照片」按清晰度筛选后的数：减去该来源已知不够清楚的张数，200 张门槛据此判断。
+            let after = postFilterAvailable(n)
+            gateAvailable = after
+            send(.startTapped(available: after))
         }
+    }
+
+    /// 失败页「再试一次」。张数与「开始拼图」同一套：索引可用减去该来源已知不够清楚的，200 张门槛据此判断。
+    public func retryTapped() async {
+        guard !generateGatePending, !state.export.isBusy, !state.isGenerating else { return }
+        generateGatePending = true
+        defer { generateGatePending = false }
+        if let load = loadTask { await load.value }
+        await refreshStatus()
+        let (avail, _) = await sourceCounts()
+        let after = postFilterAvailable(avail)
+        gateAvailable = after
+        send(.retryTapped(available: after))
     }
 
     private func sourceCounts() async -> (Int, Int) {
@@ -326,6 +347,25 @@ public final class AppCoordinator {
             guard let ids = try? await dependencies.library.assetIDs(inAlbum: id) else { return (0, 0) }
             return (await index.availableCount(assetIDs: ids), ids.count)
         }
+    }
+
+    /// 索引可用张数减去该来源已知不够清楚的张数（「开始拼图」与失败后「再试一次」共用）。
+    private func postFilterAvailable(_ raw: Int) -> Int {
+        max(0, raw - state.knownLowResCount(for: state.flow.source.selection))
+    }
+
+    /// 相册 / 索引更新后：丢掉已经不在该来源里的排除 ID，重算来源页张数。
+    private func pruneLowResExclusion() async {
+        guard let e = state.lowResExclusion else { return }
+        let current: Set<String>
+        switch e.selection {
+        case .allPhotos:
+            current = await index.indexedAssetIDs()
+        case .album(let id):
+            current = Set((try? await dependencies.library.assetIDs(inAlbum: id)) ?? [])
+        }
+        let next = e.pruned(to: current)
+        if next != e { state.lowResExclusion = next.count == 0 ? nil : next }
     }
 
     /// 生成状态机事件（UI 的取消 / 确认 / 换拼法 / 返回等都走这里）。
@@ -371,27 +411,50 @@ public final class AppCoordinator {
         let consumer = Task { @MainActor [weak self] in
             for await f in fractions { self?.send(.progressed(runID: id, fraction: f)) }
         }
+        state.generationStage = .matching
+        let (stages, stageContinuation) = AsyncStream<GenerationStage>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let stage: @Sendable (GenerationStage) -> Void = { stageContinuation.yield($0) }
+        let stageConsumer = Task { @MainActor [weak self] in
+            for await s in stages {
+                guard let self, self.state.flow.generation.currentRunID == id else { continue }
+                if self.state.generationStage != s { self.state.generationStage = s }
+            }
+        }
         generationTask = Task { [weak self] in
-            defer { continuation.finish() }
+            defer { continuation.finish(); stageContinuation.finish() }
             do {
                 let p: GenerationProduct
                 if let previous {
-                    p = try await generator.reshuffle(previous, target: target, settings: settings, seed: seed, progress: progress)
+                    p = try await generator.reshuffle(previous, target: target, settings: settings, seed: seed,
+                                                      progress: progress, stage: stage)
                 } else {
                     let snap = try await index.snapshot(for: selection)
-                    p = try await generator.run(target: target, snapshot: snap, settings: settings, seed: seed, progress: progress)
+                    p = try await generator.run(target: target, snapshot: snap, settings: settings, seed: seed,
+                                                progress: progress, stage: stage)
                 }
                 continuation.finish()
+                stageContinuation.finish()
                 await consumer.value
+                await stageConsumer.value
                 guard let self else { return }
                 if self.state.flow.generation.currentRunID == id {
                     self.product = p
                     self.state.resultRevision += 1
+                    if p.lowRes.enabled {
+                        self.state.lowResExclusion = LowResExclusion(selection: selection, assetIDs: p.lowRes.excludedAssetIDs)
+                    }
+                    // 生成前按已知数没提示过「照片比较少」、筛选后才不足 200 张 → 结果页补提示。
+                    let promptedBefore = self.gateAvailable.map { MaterialSupply.evaluate(availableCount: $0).needsWarning } ?? false
+                    self.state.postFilterShortageNotice = p.outcome.isBelowThresholdAfterFilter && !promptedBefore
                 }
                 self.send(.succeeded(runID: id, p.outcome))
             } catch {
                 continuation.finish()
+                stageContinuation.finish()
                 guard let self else { return }
+                if let e = error as? NoSharpPhotosError, self.state.flow.generation.currentRunID == id {
+                    self.state.lowResExclusion = LowResExclusion(selection: selection, assetIDs: e.excludedAssetIDs)
+                }
                 let failure = GenerationFailure.classify(error)
                 if failure == .albumUnreadable, self.state.flow.generation.currentRunID == id {
                     self.state.flow.source.albumBecameUnreadable()
