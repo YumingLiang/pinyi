@@ -62,20 +62,27 @@ jobs:
   tsan:
     name: ThreadSanitizer (swift test --sanitize=thread, Linux)
     runs-on: ubuntu-latest
-    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
     timeout-minutes: 30
     env:
-      TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1"
+      SWIFT_IMAGE: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
     steps:
       - uses: actions/checkout@v4
 
-      - name: TSan MosaicCore
-        working-directory: Packages/MosaicCore
-        run: swift test --sanitize=thread --skip PerformanceTests
+      # ubuntu-24.04 runner 默认 vm.mmap_rnd_bits=32，TSan 运行时会直接
+      # "FATAL: Please rerun with lower ASLR entropy"。sysctl 只能在宿主上改，所以本 job 不用 job 级 container，
+      # 先在宿主降熵，再用同一个钉了 digest 的镜像 docker run。
+      - name: Lower ASLR entropy for TSan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
 
-      - name: TSan MosaicAppCore
-        working-directory: Packages/MosaicAppCore
-        run: swift test --sanitize=thread --skip IndexBenchTests
+      - name: TSan MosaicCore + MosaicAppCore
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1" \
+            "$SWIFT_IMAGE" bash -euo pipefail -c '
+              swift --version
+              (cd Packages/MosaicCore && swift test --sanitize=thread --skip PerformanceTests)
+              (cd Packages/MosaicAppCore && swift test --sanitize=thread --skip IndexBenchTests)
+            '
 
   # QA A-21：全规模性能基线（10,800 格 × 5 万合成候选，release），单独 job，不拖慢上面的门禁。
   # **只记录、不阻断**：job 级 continue-on-error，且软阈值默认只打印 ::warning::
@@ -95,6 +102,7 @@ jobs:
 
       - name: Full-scale PerformanceTests (release)
         working-directory: Packages/MosaicCore
+        shell: bash   # 容器里默认 sh（dash）不支持 pipefail
         run: |
           set -o pipefail
           nproc

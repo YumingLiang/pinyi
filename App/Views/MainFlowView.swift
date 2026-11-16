@@ -50,8 +50,10 @@ struct TargetStepView: View {
             }
             if let n = model.flow.targetNotice { Text(n).foregroundStyle(.red).font(.footnote) }
             // 决定 15：SwiftUI PhotosPicker（iOS 16+）。PhotosPicker 走系统进程，不需要相册读取权限。
+            // label 闭包是 @Sendable：先在 MainActor 上取值，闭包里只捕获值
+            let buttonKey = model.flow.targetButtonKey
             PhotosPicker(selection: $item, matching: .images, photoLibrary: .shared()) {
-                Text(model.flow.targetButtonKey)
+                Text(buttonKey)
             }
             .buttonStyle(.bordered)
             Button { model.flowSend(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
