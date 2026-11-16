@@ -69,6 +69,7 @@ jobs:
 
       - name: Full-scale PerformanceTests (release)
         working-directory: Packages/MosaicCore
+        shell: bash   # 容器里默认 sh（dash）不支持 pipefail
         run: |
           set -o pipefail
           nproc
