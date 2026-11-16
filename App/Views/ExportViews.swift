@@ -62,44 +62,20 @@ struct ZoomableMosaicView: View {
     }
 }
 
-/// T8：导出尺寸 + 保存 / 分享按钮。
+/// T8：保存 / 分享按钮（与分辨率无关）。导出尺寸 / 档位选择（导出卡，T10/T11）暂停：
+/// AndyL 提「高清导出」，档位待架构师和产品定案，目前沿用协调器的默认长边。
 struct ExportControls: View {
     @EnvironmentObject var model: AppModel
 
-    private var sizes: [ExportSize] {
-        #if INTERNAL_TOOLS
-        return ExportSize.userChoices + [.internal8000]   // 决定 12：8000 仅内部摸底
-        #else
-        return ExportSize.userChoices
-        #endif
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(L10nKey.exportSizeSection).font(.subheadline.bold())
-            Picker(selection: $model.exportSize) {
-                ForEach(sizes, id: \.self) { s in
-                    if let key = s.titleKey { Text(key).tag(s) } else { Text(verbatim: "8000（内部）").tag(s) }
-                }
-            } label: { Text(L10nKey.exportSizeSection) }
-            .pickerStyle(.segmented)
-            Group {
-                switch model.exportSize {
-                case .standard: Text(L10nKey.exportSize4000Desc)
-                case .large: Text(L10nKey.exportSize6000Desc)
-                case .internal8000: Text(verbatim: "长边 8000 像素，仅用于内部摸底内存与耗时。")
-                }
-            }
-            .font(.footnote).foregroundStyle(.secondary)
-            HStack {
-                Button { model.saveTapped() } label: { Text(L10nKey.previewSave).frame(maxWidth: .infinity) }
-                    .buttonStyle(.borderedProminent)
-                Button { model.shareTapped() } label: { Text(L10nKey.previewShare).frame(maxWidth: .infinity) }
-                    .buttonStyle(.bordered)
-            }
-            .controlSize(.large)
-            .disabled(!model.canExport)
+        HStack {
+            Button { model.saveTapped() } label: { Text(L10nKey.previewSave).frame(maxWidth: .infinity) }
+                .buttonStyle(.borderedProminent)
+            Button { model.shareTapped() } label: { Text(L10nKey.previewShare).frame(maxWidth: .infinity) }
+                .buttonStyle(.bordered)
         }
+        .controlSize(.large)
+        .disabled(!model.canExport)
     }
 }
 

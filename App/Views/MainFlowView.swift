@@ -221,7 +221,7 @@ struct ResultView: View {
                     Button { model.send(.reshuffleTapped) } label: { Text(L10nKey.previewReshuffle) }.buttonStyle(.bordered)
                 }
                 .disabled(model.exportPhase.isBusy)
-                // T8：导出尺寸 + 保存 / 分享
+                // T8：保存 / 分享（导出尺寸选择暂停，待「高清导出」定案）
                 ExportControls()
             }
             .padding()

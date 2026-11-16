@@ -96,7 +96,8 @@ extension GenerationRunner: MosaicGenerating {}
 
 // MARK: - 导出
 
-/// 导出档位（用户两档；8000 只在 INTERNAL_TOOLS 构建由平台层提供入口）。
+/// 导出档位（⚠️ 待定：AndyL 提「高清导出」，档位 / 上限待架构师和产品定案，T10/T11 暂停。
+/// 目前只作为协调器的默认长边来源；导出器本身只看 `ExportRequest.longEdge`，不依赖这些值）。
 public enum ExportSize: Int, Sendable, Hashable, CaseIterable, Codable {
     case standard = 4000
     case large = 6000
@@ -118,13 +119,19 @@ public struct ExportRequest: Sendable {
     public var product: GenerationProduct
     public var target: PixelBuffer
     public var overlayAlpha: Double
-    public var size: ExportSize
+    /// 导出长边像素。导出器不假设上限（「高清导出」可能到 2–3 万像素，档位待架构师 / 产品定案，T10/T11 暂停）。
+    public var longEdge: Int
 
-    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, size: ExportSize) {
+    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, longEdge: Int) {
         self.product = product
         self.target = target
         self.overlayAlpha = overlayAlpha
-        self.size = size
+        self.longEdge = longEdge
+    }
+
+    /// 兼容：由（待定的）档位给出长边。
+    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, size: ExportSize) {
+        self.init(product: product, target: target, overlayAlpha: overlayAlpha, longEdge: size.longEdge)
     }
 }
 

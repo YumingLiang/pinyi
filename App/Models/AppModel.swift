@@ -85,10 +85,6 @@ final class AppModel: ObservableObject {
         set { coordinator.setOverlayAlpha(newValue) }
     }
     var exportPhase: ExportPhase { state.export }
-    var exportSize: ExportSize {
-        get { state.exportSize }
-        set { coordinator.setExportSize(newValue) }
-    }
     var canExport: Bool { coordinator.canExport }
 
     // MARK: 动作（转发）

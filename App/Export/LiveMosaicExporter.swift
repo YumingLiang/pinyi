@@ -27,7 +27,7 @@ enum LiveMosaicExporter {
 }
 
 /// 一条条带 = 一块 `width × stripHeight` 的 RGBA8 画布：画该条带内各格的缩略图，再按 α 叠加目标图对应区域。
-/// 同时在内存里的只有这一块画布（6000 档 ≤ 6000×512×4 ≈ 12 MB）和一个取图窗口的缩略图。
+/// 同时在内存里的只有这一块画布（按字节预算切条带，默认 ≤ 16 MB，与导出长边无关）和一个取图窗口的缩略图。
 struct CGStripRenderer: StripRendering {
     let thumbnails: any ThumbnailProviding
 

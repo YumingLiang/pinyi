@@ -1,6 +1,8 @@
 # CHANGES
 
-## feat/render-export：T7 叠加滑杆 + 普通缩放预览、T8 条带导出 / 保存 / 分享（基于 feat/app-layer）
+## feat/render-export：T7 叠加滑杆 + 普通缩放预览、T8 与分辨率无关的导出部分（基于 feat/app-layer）
+
+> **范围调整（2026-11-16）**：AndyL 新提「高清导出」，导出尺寸 / 档位（原 4000 / 6000）待架构师和产品定案，可能到长边 2–3 万像素。本分支 **不硬编码档位、不做导出卡 UI**（T10/T11 暂停）：`ExportRequest` 只带一个 `longEdge: Int`，条带渲染与存储预检不假设尺寸上限，按字节预算逐条流式写盘。协调器暂沿用 `ExportSize` 默认值作为长边来源，定案后只需换掉这一处。
 
 ### 改动
 
@@ -8,7 +10,7 @@
   - `ZoomableMosaicView`：双指缩放 1–6 倍、拖动平移（限制在图内）、双击在 1× / 3× 间切换。不用 CATiledLayer；预览位图长边 ≤ 2400 px，放大时最近邻插值。
   - 结果页加叠加滑杆（0–0.3）。叠加层是裁到网格区域的目标图，SwiftUI 用 `opacity(α)` 叠在马赛克上，拖动实时生效，不重画马赛克。导出时在每条带里用同一个 α 混合（sRGB 编码值上的 α 混合，与 `OverlayBlend` 同公式）。
 - **T8 导出（逻辑在 MosaicAppCore `Export/StripExporter.swift`，Linux 有测试）**
-  - `ExportGeometry`：导出尺寸、每格像素、条带（默认每条 ≤ 512 px，按整行格子对齐）、磁盘预算（raw 暂存 + 2 × JPEG 上界 + 50 MB 余量）、单条带内存峰值（6000 档 < 13 MB）。
+  - `ExportGeometry(layout:longEdge:stripByteBudget:)`：任意长边，每格像素 = ⌊长边 ÷ N⌋；条带高度由**字节预算**（默认 16 MiB 画布）反推整行格子数，长边越大条带越矮，单条带内存与长边无关（最少 1 行格子）；字节数全部 Int64（3 万像素 raw ≈ 2.7 GB 不溢出）；磁盘预算 = raw 暂存 + 2 × JPEG 上界 + 50 MB 余量。
   - `StripExporter`（实现 `MosaicExporting`）：
     - 存储预检不足时直接抛 `insufficientStorage`，不渲染、不建文件。
     - 逐条渲染并追加到 `tmp/export/<uuid>.rgba`，**每条之前 `Task.checkCancellation()`**（B-34）。
@@ -26,13 +28,13 @@
     - 导出中：`export.progress.*`。
   - 协调器新增 `exportFailurePrimaryTapped` / `exportFailureSecondaryTapped` / `exportRetryTapped` / `saveSuccessShareTapped`，并记录上次导出用途。
   - B-27：启动时 `removeStaleExports()` 清空整个 `tmp/export/`。
-  - 8000 档只在 `INTERNAL_TOOLS` 构建的尺寸选择里出现（决定 12）。
+  - 结果页只有「保存」「分享」两个按钮，**没有尺寸选择 / 导出卡**（原 4000 / 6000 / 内部 8000 选择已删，待定案）。
 
 ### 测试（`StripExporterTests`，9 个）
 
 | 测试 | 编号 |
 |---|---|
-| `testGeometryStripsCoverImageAndBudgets` | 条带并集 = 整图、格子全覆盖、预算公式、6000 档单条带 < 13 MB |
+| `testGeometryHasNoSizeCeilingAndBoundedStripMemory` | 长边 1000～30000：条带并集 = 整图、格子全覆盖、单条带 ≤ 字节预算、Int64 预算公式、3 万像素 raw > 2 GB 正确 |
 | `testSuccessWritesStripsInOrderEncodesAndRemovesRaw` | 自上而下顺序写入、只剩输出文件、进度单调到 1 |
 | `testCancelDuringStripLoopStopsAtNextStripBoundary_B34` | B-34：取消后只完成当前条带、不开始下一条、不编码、不留文件 |
 | `testStoragePrecheckFailsBeforeRendering_B17` | B-17 预检 |
@@ -46,8 +48,8 @@ AppTests（模拟器）：`testImageIOEncoderWritesJPEGFromRawStripFile`、`test
 
 ### 盲写风险（macOS CI / 真机核对）
 
-- R23：`CGDataProvider(url:)` + `CGImageDestination` 编码 6000×4500 时 ImageIO 是否仍整张解到内存。需真机看 phys_footprint，若超预算改用 `CGImageDestinationAddImageFromSource` 分块或 HEIC tile。
-- R24：叠加用的目标图是 2048 长边的降采样图，6000 档导出时被放大；α ≤ 0.3，影响有限。
+- R23：`CGDataProvider(url:)` + `CGImageDestination` 编码大图时 ImageIO 是否整张解到内存。条带渲染已流式，但**编码一步**在 2–3 万像素时是瓶颈：30000×22500 raw ≈ 2.7 GB，JPEG 单边上限 65535 px。需真机看 phys_footprint；「高清导出」定案后可能要换分块编码（如 HEIC tile / `CGImageDestinationAddImageFromSource`）——属于 T10/T11 的设计。
+- R24：叠加用的目标图是 2048 长边的降采样图，大长边导出时被放大；α ≤ 0.3，影响有限。
 - R25：`completionWithItemsHandler` 与 `sheet(onDismiss:)` 都会调 `shareFinished()`，第二次是空操作。
 - R26：`export.degraded` 提示（部分原图未下载、导出时降级）**未接**，需要渲染器回报降级格数，留到后续。
 

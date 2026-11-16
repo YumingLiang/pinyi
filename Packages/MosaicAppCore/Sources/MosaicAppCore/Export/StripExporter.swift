@@ -2,6 +2,9 @@ import Foundation
 import MosaicCore
 
 /// 导出几何（T8，技术方案 §4.2）：导出尺寸、每格像素、条带切分、磁盘 / 内存预算。
+///
+/// **不假设尺寸上限**（「高清导出」可能到长边 2–3 万像素）：条带高度按**字节预算**算（默认每条画布 ≤ 16 MB），
+/// 宽图自动变成更矮的条带；最少 1 行格子。像素与字节一律用 Int64 计算，不会溢出。
 public struct ExportGeometry: Sendable, Hashable {
     public let width: Int
     public let height: Int
@@ -9,13 +12,18 @@ public struct ExportGeometry: Sendable, Hashable {
     public let columns: Int
     public let strips: [ExportStrip]
 
-    public init(layout: GridLayout, size: ExportSize, policy: ExportStripPolicy = .default) {
-        let s = layout.exportSize(longEdge: size.longEdge)
+    /// 单条带画布字节预算默认值。
+    public static let defaultStripByteBudget = 16 * 1_048_576
+
+    public init(layout: GridLayout, longEdge: Int, stripByteBudget: Int = ExportGeometry.defaultStripByteBudget) {
+        let s = layout.exportSize(longEdge: longEdge)
         width = s.width
         height = s.height
         cellPixels = s.cellPixels
         columns = layout.columns
-        strips = layout.exportStrips(longEdge: size.longEdge, policy: policy)
+        let bytesPerCellRow = Int64(s.width) * 4 * Int64(max(1, s.cellPixels))
+        let rowsPerStrip = Int(max(1, Int64(stripByteBudget) / max(1, bytesPerCellRow)))
+        strips = layout.exportStrips(longEdge: longEdge, policy: .cellRows(rowsPerStrip))
     }
 
     /// 未压缩 RGBA8 暂存文件大小（条带逐条追加写入，编码时再流式读）。
@@ -31,8 +39,8 @@ public struct ExportGeometry: Sendable, Hashable {
     /// 存储预检所需字节：暂存 raw + 编码文件 + 写入相册时系统复制一份 + 余量。
     public var estimatedDiskBytes: Int64 { rawBytes + 2 * estimatedEncodedBytes + Self.safetyMarginBytes }
 
-    /// 单条带在内存里的峰值字节（RGBA8 画布）。
-    public var peakStripBytes: Int { width * (strips.map(\.pixelHeight).max() ?? 0) * 4 }
+    /// 单条带在内存里的峰值字节（RGBA8 画布）。≤ 预算，除非 1 行格子本身就超过预算。
+    public var peakStripBytes: Int64 { Int64(width) * Int64(strips.map(\.pixelHeight).max() ?? 0) * 4 }
 
     /// 条带覆盖的格子下标（行优先，连续）。
     public func cells(in strip: ExportStrip) -> Range<Int> {
@@ -82,21 +90,21 @@ public struct StripExporter: MosaicExporting {
     public let renderer: any StripRendering
     public let encoder: any RasterEncoding
     public let storage: @Sendable () -> Int64?
-    public let policy: ExportStripPolicy
+    public let stripByteBudget: Int
     /// 进度里条带渲染所占份额（其余是编码）。
     public static let renderShare = 0.9
 
     public init(directory: URL, renderer: any StripRendering, encoder: any RasterEncoding,
-                policy: ExportStripPolicy = .default, storage: @escaping @Sendable () -> Int64?) {
+                stripByteBudget: Int = ExportGeometry.defaultStripByteBudget, storage: @escaping @Sendable () -> Int64?) {
         self.directory = directory
         self.renderer = renderer
         self.encoder = encoder
-        self.policy = policy
+        self.stripByteBudget = stripByteBudget
         self.storage = storage
     }
 
     public func geometry(for request: ExportRequest) -> ExportGeometry {
-        ExportGeometry(layout: request.product.generation.layout, size: request.size, policy: policy)
+        ExportGeometry(layout: request.product.generation.layout, longEdge: request.longEdge, stripByteBudget: stripByteBudget)
     }
 
     public func estimatedBytes(for request: ExportRequest) -> Int64 { geometry(for: request).estimatedDiskBytes }
@@ -119,7 +127,7 @@ public struct StripExporter: MosaicExporting {
                 for strip in geo.strips {
                     try Task.checkCancellation()   // B-34：条带边界
                     let bytes = try await renderer.render(strip, geometry: geo, request: request)
-                    guard bytes.count == geo.width * strip.pixelHeight * 4 else { throw ExportError.encodingFailed }
+                    guard Int64(bytes.count) == Int64(geo.width) * Int64(strip.pixelHeight) * 4 else { throw ExportError.encodingFailed }
                     try handle.write(contentsOf: bytes)
                     progress(Self.renderShare * Double(strip.index + 1) / Double(max(1, count)))
                 }

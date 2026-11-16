@@ -44,7 +44,7 @@ final class StripExporterTests: XCTestCase {
         try? FileManager.default.removeItem(at: indexDir)
     }
 
-    private func request(size: ExportSize = .standard) async throws -> ExportRequest {
+    private func request(longEdge: Int = 1200) async throws -> ExportRequest {
         let idx = PhotoIndex(directory: indexDir, library: FakePhotoLibrary(assetCount: 300), thumbnails: FakeThumbnails(),
                              backupExclusion: RecordingBackupExclusion(), configuration: smallConfig(batch: 100, concurrency: 16, minRows: 1000))
         await idx.load()
@@ -55,33 +55,39 @@ final class StripExporterTests: XCTestCase {
         let target = try PixelBuffer(width: 160, height: 120, bytes: bytes)
         let product = try await GenerationRunner().run(target: target, snapshot: snap,
                                                        settings: GenerationSettings(density: .coarse), seed: 3)
-        return ExportRequest(product: product, target: target, overlayAlpha: 0.2, size: size)
+        return ExportRequest(product: product, target: target, overlayAlpha: 0.2, longEdge: longEdge)
     }
 
     private func files() -> [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted()
     }
 
-    func testGeometryStripsCoverImageAndBudgets() async throws {
+    /// 不假设尺寸上限：长边 1000 → 30000（「高清导出」）都按字节预算切条带，单条带画布 ≤ 预算，Int64 不溢出。
+    func testGeometryHasNoSizeCeilingAndBoundedStripMemory() async throws {
         let req = try await request()
-        for size in ExportSize.allCases {
-            let g = ExportGeometry(layout: req.product.generation.layout, size: size)
-            XCTAssertLessThanOrEqual(max(g.width, g.height), size.longEdge)
+        let layout = req.product.generation.layout
+        let budget = ExportGeometry.defaultStripByteBudget
+        for longEdge in [1_000, 4_000, 6_000, 12_000, 20_000, 30_000] {
+            let g = ExportGeometry(layout: layout, longEdge: longEdge)
+            XCTAssertLessThanOrEqual(max(g.width, g.height), longEdge)
+            XCTAssertGreaterThan(max(g.width, g.height), longEdge - max(layout.columns, layout.rows), "向下取整只损失不到 1 格")
             XCTAssertEqual(g.strips.map(\.pixelHeight).reduce(0, +), g.height, "条带并集 = 整张图")
-            XCTAssertEqual(g.strips.map { g.cells(in: $0).count }.reduce(0, +), req.product.generation.layout.cellCount)
-            // 每条 ≤ 512 px 高（格子比 512 大时退化为 1 行）
-            XCTAssertLessThanOrEqual(g.peakStripBytes, g.width * max(512, g.cellPixels) * 4)
+            XCTAssertEqual(g.strips.map { g.cells(in: $0).count }.reduce(0, +), layout.cellCount)
+            let oneRow = Int64(g.width) * 4 * Int64(g.cellPixels)
+            XCTAssertLessThanOrEqual(g.peakStripBytes, max(Int64(budget), oneRow), "单条带 ≤ 预算（最少 1 行格子）")
+            XCTAssertEqual(g.rawBytes, Int64(g.width) * Int64(g.height) * 4)
             XCTAssertEqual(g.estimatedDiskBytes, g.rawBytes + 2 * g.estimatedEncodedBytes + ExportGeometry.safetyMarginBytes)
         }
-        let g6000 = ExportGeometry(layout: req.product.generation.layout, size: .large)
-        XCTAssertLessThan(g6000.peakStripBytes, 13 * 1_048_576, "6000 档单条带画布 < 13 MB（不整张进内存）")
+        let huge = ExportGeometry(layout: layout, longEdge: 30_000)
+        XCTAssertGreaterThan(huge.rawBytes, Int64(Int32.max), "3 万像素的 raw 超过 2 GB，仍正确计算")
+        XCTAssertGreaterThan(huge.strips.count, 20, "宽图自动切成更多更矮的条带")
     }
 
     func testSuccessWritesStripsInOrderEncodesAndRemovesRaw() async throws {
         let req = try await request()
         let renderer = FakeStripRenderer()
         let encoder = CopyEncoder()
-        let exporter = StripExporter(directory: dir, renderer: renderer, encoder: encoder, storage: { nil })
+        let exporter = StripExporter(directory: dir, renderer: renderer, encoder: encoder, stripByteBudget: 64 * 1024, storage: { nil })
         let fractions = Locked<[Double]>([])
         let url = try await exporter.export(req) { f in fractions.update { $0.append(f) } }
         let g = exporter.geometry(for: req)
@@ -101,13 +107,13 @@ final class StripExporterTests: XCTestCase {
 
     /// B-34：条带循环取消——取消后不再开始下一条，删掉半截文件，抛 CancellationError，不调编码器。
     func testCancelDuringStripLoopStopsAtNextStripBoundary_B34() async throws {
-        let req = try await request(size: .large)
-        let g = ExportGeometry(layout: req.product.generation.layout, size: .large)
-        XCTAssertGreaterThan(g.strips.count, 3)
+        let req = try await request()
         let gate = GatePoint()
         let renderer = FakeStripRenderer(stopAt: 1, gate: gate)
         let encoder = CopyEncoder()
-        let exporter = StripExporter(directory: dir, renderer: renderer, encoder: encoder, storage: { nil })
+        // 小预算 → 条带多，验证流式逐条写盘与条带边界取消
+        let exporter = StripExporter(directory: dir, renderer: renderer, encoder: encoder, stripByteBudget: 64 * 1024, storage: { nil })
+        XCTAssertGreaterThan(exporter.geometry(for: req).strips.count, 3)
         let task = Task { try await exporter.export(req) { _ in } }
         await gate.reached.wait()
         XCTAssertEqual(files().count, 1, "渲染中只有 raw 暂存文件")
@@ -139,7 +145,7 @@ final class StripExporterTests: XCTestCase {
     /// 写入中磁盘写满（CocoaError.fileWriteOutOfSpace / ENOSPC）→ insufficientStorage，清理干净。
     func testDiskFullDuringWriteMapsToInsufficientStorage_B17() async throws {
         let req = try await request()
-        let exporter = StripExporter(directory: dir, renderer: FakeStripRenderer(failCocoaAt: 1), encoder: CopyEncoder(), storage: { nil })
+        let exporter = StripExporter(directory: dir, renderer: FakeStripRenderer(failCocoaAt: 1), encoder: CopyEncoder(), stripByteBudget: 64 * 1024, storage: { nil })
         do {
             _ = try await exporter.export(req) { _ in }
             XCTFail()
