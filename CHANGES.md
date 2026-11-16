@@ -19,7 +19,10 @@
   - 生成前还不知道（第一次在该来源生成）、筛选后才不足 200 张时，结果页补显示 `shortage.pregenerate`（`AppState.postFilterShortageNotice`）；生成前已提示过则不重复。
   - 结果页 `shortage.result` 一直按筛选后的候选数判断；最后兜底补格（`refill`）也把 `availableCandidates` / 供给改为筛选后快照的张数。`GenerationOutcome.availableAfterFilter` 记录筛选后张数。
   - 「已知」= 最近一次在该来源生成时探测得出的；没探测过的照片无法预知，所以第一次只能在结果页补提示。
+  - 失败页「再试一次」与「开始拼图」同一套张数：索引可用减去该来源已知不够清楚的（`AppCoordinator.retryTapped()`），200 张门槛一致。视图不再把筛选前的 `indexStatus.available` 直接传进状态机。
+  - `LowResExclusion` 改为保存被排除的 ID。相册 / 索引更新后（`refreshStatus` / `refreshAlbums`）丢掉已经不在该来源里的 ID，来源页排除数和可用张数马上重算，不必等到下一次生成。
 - **文案 v1.2**：`generate.progress.checking` 改为「正在挑选清楚的照片…」，`export.size.uhd.desc` 改为「放大看得最清楚。（默认）」，`source.excluded_low_res` 不变；改 `copy_v1.1.md` 后用 `gen-localizable.py` 重新生成，`--check` 通过。
+- **跟进测试**（`SharpnessFilterTests` 再加 3 个）：`LowResExclusion.pruned` 只保留仍在来源里的 ID；失败后 `retryTapped` 按筛选后张数弹出 `shortage.pregenerate`；删除部分被排除的照片并完成相册同步后，来源页排除数 / 可用张数立刻更新。
 - **测试**（`SharpnessFilterTests` 首版 12 个）：最终结果里没有被剔除的照片且每格都有图；N 去重、每张一次生成只探测一次；缓存避免重探（再生成 0 次探测、换拼法不重复、相册变化只清不合格）；探测中取消抛 `CancellationError`、无结果、不入缓存；并发 ≤ 8；全部不合格走 `noMaterial`；只剩 10 张时供给按剔除后判断；到达最多轮数报告未解决格数；未注入探测器时行为不变；快照剔除只动掩码；协调器来源页文案只对当前来源显示。
 - **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`App/Adapters/PhotoKitResolutionProbe.swift`、`LiveDependencies`（注入探测器）、来源页 / 进度页 / 性能页三处视图。需真机核对：`.highQualityFormat` + 无网络时 iCloud 照片的回调形态（nil + InCloud，还是降质图）；`.fast` 返回的像素尺寸。
 

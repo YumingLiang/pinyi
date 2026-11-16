@@ -211,9 +211,10 @@ public struct LowResReport: Sendable, Hashable {
 
 /// 剔除不够清楚的照片后一张可用的都不剩（走「没有可用照片」路径，`GenerationFailure.noMaterial`）。
 public struct NoSharpPhotosError: Error, Sendable, Hashable {
-    /// 被排除的张数（来源页仍要显示）。
-    public var excludedCount: Int
-    public init(excludedCount: Int) { self.excludedCount = excludedCount }
+    /// 被排除的照片（来源页据此显示张数，相册变化后可剪掉已不在来源里的）。
+    public var excludedAssetIDs: Set<String>
+    public var excludedCount: Int { excludedAssetIDs.count }
+    public init(excludedAssetIDs: Set<String>) { self.excludedAssetIDs = excludedAssetIDs }
 }
 
 /// 生成过程中的阶段（进度页文案用）。

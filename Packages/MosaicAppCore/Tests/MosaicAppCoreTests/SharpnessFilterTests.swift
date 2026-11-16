@@ -451,4 +451,89 @@ final class SharpnessFilterTests: XCTestCase {
         XCTAssertFalse(c.state.postFilterShortageNotice)
         c.stop()
     }
+
+    // MARK: 失败后「再试一次」与相册变化后排除数
+
+    func testLowResExclusionDropsIdsNoLongerInSource() {
+        let e = LowResExclusion(selection: .allPhotos, assetIDs: ["a1", "a2", "a3", "gone"])
+        let kept = e.pruned(to: ["a1", "a3", "a9"])
+        XCTAssertEqual(kept.assetIDs, ["a1", "a3"])
+        XCTAssertEqual(kept.count, 2)
+        XCTAssertEqual(kept.selection, .allPhotos)
+        XCTAssertEqual(e.pruned(to: ["x"]).count, 0)
+        XCTAssertEqual(e.pruned(to: e.assetIDs), e, "来源没变时排除集不变")
+        let album = LowResExclusion(selection: .album(id: "trip"), assetIDs: ["a1", "a2"])
+        XCTAssertEqual(album.pruned(to: ["a2"]).selection, .album(id: "trip"))
+        XCTAssertEqual(album.pruned(to: ["a2"]).assetIDs, ["a2"])
+    }
+
+    @MainActor
+    func testRetryTappedUsesPostFilterCountForShortageGate() async throws {
+        // 210 张：生成前 ≥ 200；筛选后不足 200。第一次成功后记下排除数，第二次故意失败，
+        // 「再试一次」必须按筛选后张数走 200 张门槛（否则会直接开跑、不出现「照片比较少」）。
+        let bad = Set((10..<210).map { "a\($0)" })
+        let probe = FakeResolutionProbe(unusable: bad)
+        let gen = GatedGenerator(runner: GenerationRunner(sharpness: LocalResolutionChecker(probe: probe)))
+        let h = CoordinatorHarness(assets: 210, generator: gen)
+        let c = h.coordinator
+        c.setTarget(try CoordinatorHarness.target())
+        c.start()
+        await c.settle()
+        await c.generateTapped()
+        await c.settle()
+        guard case .result = c.state.flow.generation.phase else { return XCTFail("\(c.state.flow.generation.phase)") }
+        let excluded = c.state.lowResExclusion?.count ?? 0
+        XCTAssertGreaterThan(excluded, 10)
+        XCTAssertLessThan(210 - excluded, MaterialSupply.insufficientThreshold)
+        XCTAssertGreaterThanOrEqual(c.state.indexStatus.available, MaterialSupply.insufficientThreshold)
+
+        c.send(.backToSettings)
+        gen.failFromCall.set(2)
+        await c.generateTapped()
+        XCTAssertTrue(c.state.flow.generation.shortagePrompt)
+        c.send(.shortageContinue)
+        await c.settle()
+        guard case .failed = c.state.flow.generation.phase else { return XCTFail("\(c.state.flow.generation.phase)") }
+        XCTAssertEqual(c.state.lowResExclusion?.count, excluded, "普通失败不改排除数")
+
+        await c.retryTapped()
+        XCTAssertTrue(c.state.flow.generation.shortagePrompt, "再试一次按筛选后张数，应再提示「照片比较少」")
+        c.send(.shortageBack)
+        XCTAssertEqual(c.state.indexStatus.available, 210, "索引张数仍是筛选前的")
+        c.stop()
+    }
+
+    @MainActor
+    func testExcludedCountUpdatesWhenLibraryDropsExcludedPhotos() async throws {
+        let probe = FakeResolutionProbe(unusable: everyThird(300))
+        let gen = GatedGenerator(runner: GenerationRunner(sharpness: LocalResolutionChecker(probe: probe)))
+        let h = CoordinatorHarness(assets: 300, generator: gen)
+        let c = h.coordinator
+        c.setTarget(try CoordinatorHarness.target())
+        c.start()
+        await c.settle()
+        await c.generateTapped()
+        await c.settle()
+        guard case .result = c.state.flow.generation.phase else { return XCTFail("\(c.state.flow.generation.phase)") }
+        let ids = c.state.lowResExclusion?.assetIDs ?? []
+        XCTAssertFalse(ids.isEmpty)
+        let before = ids.count
+        XCTAssertEqual(c.state.allPhotosRow.count, 300 - before)
+        // 删掉一部分被排除的，再删一张从未排除的；排除数只应去掉已不在来源里的。
+        let dropped = Set(ids.sorted().prefix(max(1, ids.count / 2)))
+        let sharpGone = "a1"
+        XCTAssertFalse(ids.contains(sharpGone), "a1 不在每 3 张一剔的集合里")
+        h.library.delete(dropped.union([sharpGone]))
+        c.libraryDidChange()
+        while h.clock.sleeperCount == 0 { await Task.yield() }
+        h.clock.advance(2)
+        await waitFor(c, "删除后索引更新") { $0.indexStatus.available == 300 - dropped.count - 1 }
+        await c.settle()
+        let after = c.state.lowResExclusion?.assetIDs ?? []
+        XCTAssertEqual(after, ids.subtracting(dropped))
+        XCTAssertEqual(c.state.lowResExclusion?.count, before - dropped.count)
+        XCTAssertEqual(c.state.allPhotosRow.count, (300 - dropped.count - 1) - (before - dropped.count))
+        XCTAssertEqual(c.state.sourceLowResLine, LocalizedLine(.sourceExcludedLowRes, [CountFormat.grouped(before - dropped.count)]))
+        c.stop()
+    }
 }

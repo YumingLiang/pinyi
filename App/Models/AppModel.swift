@@ -112,6 +112,8 @@ final class AppModel: ObservableObject {
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
+    /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
+    func retryTapped() { Task { await coordinator.retryTapped() } }
 
     // MARK: 导出（紧急版：只保存到相册）
 

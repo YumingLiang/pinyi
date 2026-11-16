@@ -164,7 +164,7 @@ struct SettingsStepView: View {
             Button(role: .cancel) { model.send(.shortageBack) } label: { Text(L10nKey.shortagePregenerateBack) }
         }
         .alert(Text(L10nKey.generateFailedTitle), isPresented: .constant(model.flow.generation.phase.isFailed)) {
-            Button { model.send(.retryTapped(available: model.indexStatus.available)) } label: { Text(L10nKey.generateFailedRetry) }
+            Button { model.retryTapped() } label: { Text(L10nKey.generateFailedRetry) }
             Button(role: .cancel) { model.send(.backToSettings) } label: { Text(L10nKey.generateFailedBack) }
         } message: { Text(L10nKey.generateFailedBody) }
     }

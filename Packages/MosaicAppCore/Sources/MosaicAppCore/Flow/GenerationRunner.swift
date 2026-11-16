@@ -176,14 +176,14 @@ public struct GenerationRunner: Sendable {
         var round = 0
         while true {
             stage?(.matching)
-            if snap.availableCount == 0, !excluded.isEmpty { throw NoSharpPhotosError(excludedCount: excluded.count) }
+            if snap.availableCount == 0, !excluded.isEmpty { throw NoSharpPhotosError(excludedAssetIDs: excluded) }
             let g: MosaicGeneration
             do {
                 g = try await generateOnce(target: target, snapshot: snap, settings: settings, seed: seed,
                                            noteSuffix: round == 0 ? "" : " 重配第 \(round) 轮",
                                            progress: scaled(segment(round, probing: false)))
             } catch let e as MosaicError {
-                if case .noCandidates = e, !excluded.isEmpty { throw NoSharpPhotosError(excludedCount: excluded.count) }
+                if case .noCandidates = e, !excluded.isEmpty { throw NoSharpPhotosError(excludedAssetIDs: excluded) }
                 throw e
             }
             let cellIDs = GenerationProduct.cellAssetIDs(g, snap)
@@ -221,7 +221,7 @@ public struct GenerationRunner: Sendable {
             for row in 0..<min(snap.assetIDsByRow.count, allowed.count) where snap.library.mask[row] {
                 if let id = snap.assetIDsByRow[row], passed.contains(id) { allowed[row] = true }
             }
-            if allowed.setCount == 0 { throw NoSharpPhotosError(excludedCount: excluded.count) }
+            if allowed.setCount == 0 { throw NoSharpPhotosError(excludedAssetIDs: excluded) }
             let filled = try await pipeline.refill(g, target: target, snapshot: snap.library, cells: badCells, allowed: allowed)
             report.finalFallbackCellCount = badCells.count
             return finish(filled, snap, excluded, round)

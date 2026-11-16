@@ -136,12 +136,19 @@ public struct AppState: Sendable, Hashable {
     public var isGenerating: Bool { flow.generation.showsProgress }
 }
 
-/// 某个来源里因手机上版本不够清楚（< 256 px）而没用上的照片数（去重）。
+/// 某个来源里因手机上版本不够清楚（< 256 px）而没用上的照片（去重）。
+/// 存 ID 而不是只存张数：相册变化后可以丢掉已经不在该来源里的，及时重算来源页张数。
 public struct LowResExclusion: Sendable, Hashable {
     public var selection: SourceSelection
-    public var count: Int
-    public init(selection: SourceSelection, count: Int) {
+    public var assetIDs: Set<String>
+    public var count: Int { assetIDs.count }
+    public init(selection: SourceSelection, assetIDs: Set<String>) {
         self.selection = selection
-        self.count = count
+        self.assetIDs = assetIDs
+    }
+
+    /// 只保留仍在该来源里的 ID，重算张数。
+    public func pruned(to sourceAssetIDs: Set<String>) -> LowResExclusion {
+        LowResExclusion(selection: selection, assetIDs: assetIDs.intersection(sourceAssetIDs))
     }
 }
