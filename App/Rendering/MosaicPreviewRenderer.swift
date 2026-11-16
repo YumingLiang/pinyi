@@ -18,7 +18,8 @@ enum MosaicPreviewRenderer {
         return ImagePixels.cgImage(p)
     }
 
-    /// 缩略图预览。
+    /// 缩略图预览。在调用方的隔离域（MainActor）上画，取图在后台有界并发。
+    @MainActor
     static func thumbnails(_ product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double,
                            thumbnails: any ThumbnailProviding) async -> CGImage? {
         let g = product.generation
@@ -29,21 +30,20 @@ enum MosaicPreviewRenderer {
                                   bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
         ctx.setFillColor(CGColor(colorSpace: cs, components: [1, 1, 1, 1])!)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
-        // 同一张素材可能被多格使用：按 id 去重取图。
-        var cache: [String: CGImage] = [:]
-        let ids = product.cellAssetIDs
-        for cell in 0..<g.layout.cellCount {
-            if Task.isCancelled { return nil }
-            guard let id = ids[cell] else { continue }
-            if cache[id] == nil, case .image(let pb) = await thumbnails.thumbnail(for: id, request: .scan),
-               let cg = ImagePixels.cgImage(pb) {
-                cache[id] = cg
+        // MF-6：按素材分组、有界并发（12）取图，每取到一张画完它的所有格子即丢弃，不留全量缓存。
+        let plan = ThumbnailPreviewPlan(cellAssetIDs: product.cellAssetIDs, maxConcurrent: 12)
+        let grid = g.layout.grid
+        do {
+            try await plan.run(fetch: { id in await thumbnails.thumbnail(for: id, request: .scan) }) { group, pb in
+                guard let img = ImagePixels.cgImage(pb) else { return }
+                for cell in group.cells {
+                    let (cx, cy) = grid.position(of: cell)
+                    // CG 坐标原点在左下；缩略图已是 aspectFill 正方形附近
+                    ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
+                }
             }
-            guard let img = cache[id] else { continue }
-            let (cx, cy) = g.layout.grid.position(of: cell)
-            // CG 坐标原点在左下
-            let rect = CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp)
-            ctx.draw(img, in: rect)   // 缩略图已是 aspectFill 正方形附近；中心裁切由 PhotoKit 的 aspectFill 完成
+        } catch {
+            return nil   // 被取消
         }
         let alpha = OverlayBlendLimits.clamp(overlayAlpha)
         if alpha > 0, let t = ImagePixels.cgImage(target) {
