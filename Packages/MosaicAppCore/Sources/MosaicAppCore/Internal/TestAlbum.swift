@@ -49,23 +49,28 @@ public struct TestAlbumProgress: Sendable, Hashable {
 /// 并且颜色由 index 经黄金比例旋转得到，相邻 index 颜色差异大。
 public enum SyntheticImage {
     public static func make(index: Int, size: Int = TestAlbumPolicy.imageSize) -> PixelBuffer {
-        let s = max(2, size)
-        let half = s / 2
+        make(index: index, width: size, height: size)
+    }
+
+    /// 任意宽高的确定性合成图（扫描特征快照用非正方形源，例如 256×341）。
+    public static func make(index: Int, width: Int, height: Int) -> PixelBuffer {
+        let w = max(2, width), h = max(2, height)
+        let halfW = w / 2, halfH = h / 2
         let colors = (0..<4).map { quadrant(index: index, q: $0) }
-        var bytes = [UInt8](repeating: 255, count: s * s * 4)
-        for y in 0..<s {
-            for x in 0..<s {
-                let q = (y < half ? 0 : 2) + (x < half ? 0 : 1)
+        var bytes = [UInt8](repeating: 255, count: w * h * 4)
+        for y in 0..<h {
+            for x in 0..<w {
+                let q = (y < halfH ? 0 : 2) + (x < halfW ? 0 : 1)
                 let c = colors[q]
                 // 对角渐变 ±12，避免整块纯色
-                let g = Int((Double(x + y) / Double(2 * s - 2) - 0.5) * 24)
-                let o = (y * s + x) * 4
+                let g = Int((Double(x + y) / Double(w + h - 2) - 0.5) * 24)
+                let o = (y * w + x) * 4
                 bytes[o] = clamp(Int(c.0) + g)
                 bytes[o + 1] = clamp(Int(c.1) + g)
                 bytes[o + 2] = clamp(Int(c.2) + g)
             }
         }
-        return try! PixelBuffer(width: s, height: s, bytes: bytes)
+        return try! PixelBuffer(width: w, height: h, bytes: bytes)
     }
 
     static func quadrant(index: Int, q: Int) -> (UInt8, UInt8, UInt8) {

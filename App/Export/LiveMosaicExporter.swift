@@ -71,6 +71,7 @@ struct LiveMosaicExporter: MosaicExporting {
             var r = ThumbnailRequest(targetPixelSize: cp)
             r.fastFormat = false
             r.fastResize = false
+            r.centerCropToSquare = true
             return r
         }()
 
@@ -89,7 +90,7 @@ struct LiveMosaicExporter: MosaicExporting {
                         if case .image(let pb) = await thumbs.thumbnail(for: id, request: hq) {
                             return (i, pb, .highQuality)
                         }
-                        if case .image(let pb) = await thumbs.thumbnail(for: id, request: .scan) {
+                        if case .image(let pb) = await thumbs.thumbnail(for: id, request: .scanDisplay) {
                             return (i, pb, .blurryFallback)
                         }
                         return (i, nil, .blank)

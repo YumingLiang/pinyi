@@ -7,7 +7,8 @@
   - 纯函数 `CenterSquareCrop`（MosaicAppCore，Linux 单测）：按短边居中裁方（奇数余量起点向下取整）；输出边长 = min(短边, 目标)，短边不足时保持原生正方形，由绘制端等比放大，绝不非等比缩放。
   - `ImagePixels.opaqueSRGBCenteredSquare` 按该矩形 `CGImage.cropping` 后再走原有白底 sRGB 路径。`PhotoKitThumbnails` 在 `aspectFill` 时走这条路径（预览、导出、扫描取图共用）。目标图降采样仍用原来的 `opaqueSRGB`（不裁方）。
   - 紧急版导出统计两类格子：高清取不到而退回 128px `.scan` 缩略图的「糊格子」，以及完全没有图的「白格子」（无资产、取图失败、位图转换失败）。数量写入 `os_log`（category "export"，不含资产标识）和内测性能页「最近一次导出」；「复制为文本」一并带上。
-- **测试**：`CenterSquareCropTests`（横/竖/正方形、奇数边、短边 < N 不放大、大于 N 缩小、非法输入）；`ExportFillStatsTests`（分类与累加）；`PerfTests.testLatestExportNote`。
+  - 扫描建索引仍走 14ac550 的按长边缩小（`ThumbnailRequest.scan.centerCropToSquare = false`），避免已建索引特征失效。预览 / 导出绘制用 `scanDisplay` / 导出请求打开裁方。
+- **测试**：`CenterSquareCropTests`（横/竖/正方形、奇数边、短边 < N 不放大、大于 N 缩小、非法输入）；`ExportFillStatsTests`（分类与累加）；`PerfTests.testLatestExportNote`；`ScanFeatureSnapshotTests`（256×341 合成图按长边缩到 96×128 后特征与 14ac550 快照逐 bit 相同，`featureVersion` 仍为 2；先裁方再缩小则不匹配）。
 
 
 ## feat/app-layer：P0 预览「第二次放大失效」（真机 32ec2b5 Internal）

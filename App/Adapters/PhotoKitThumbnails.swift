@@ -49,8 +49,8 @@ actor PhotoKitThumbnails: ThumbnailProviding {
                 let degraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
                 if let image, let cg = image.cgImage {
                     if degraded && !fast { return }   // 等最终图
-                    // aspectFill 结果可能不是正方形：按短边居中裁方，避免画进格子时被拉伸。
-                    let pixels = request.aspectFill
+                    // 预览 / 导出绘制才居中裁方；扫描建索引保持 14ac550 的按长边缩小（特征不变）。
+                    let pixels = request.centerCropToSquare
                         ? ImagePixels.opaqueSRGBCenteredSquare(cg, maxEdge: request.targetPixelSize)
                         : ImagePixels.opaqueSRGB(cg, maxEdge: request.targetPixelSize)
                     once.resume(pixels.map { .image($0) } ?? .failed)

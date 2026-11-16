@@ -34,7 +34,7 @@ enum MosaicPreviewRenderer {
         let plan = ThumbnailPreviewPlan(cellAssetIDs: product.cellAssetIDs, maxConcurrent: 12)
         let grid = g.layout.grid
         do {
-            try await plan.run(fetch: { id in await thumbnails.thumbnail(for: id, request: .scan) }) { group, pb in
+            try await plan.run(fetch: { id in await thumbnails.thumbnail(for: id, request: .scanDisplay) }) { group, pb in
                 guard let img = ImagePixels.cgImage(pb) else { return }
                 for cell in group.cells {
                     let (cx, cy) = grid.position(of: cell)
