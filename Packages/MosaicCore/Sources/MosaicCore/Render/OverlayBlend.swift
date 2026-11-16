@@ -31,10 +31,16 @@ public enum OverlayBlend {
     }
 
     /// 整块混合：两张同尺寸缓冲区（任意通道布局）→ 新的 RGBA8 缓冲区（alpha = 255）。
+    ///
+    /// 两张图的颜色空间不一致时（例如 P3 目标图 + sRGB 块），先把**都**转换到 sRGB 再按编码值混合，
+    /// 结果标为 sRGB（评审 ca6a4ca S-1 / 拍板 (4)）；一致时按原颜色空间混合。
     /// - Throws: 尺寸不同时抛 `MosaicError.invalidPixelBuffer`。
     public static func blend(tile: PixelBuffer, target: PixelBuffer, alpha: Float) throws -> PixelBuffer {
         guard tile.width == target.width, tile.height == target.height else {
             throw MosaicError.invalidPixelBuffer("overlay size mismatch \(tile.width)×\(tile.height) vs \(target.width)×\(target.height)")
+        }
+        if tile.colorSpace != target.colorSpace {
+            return try blend(tile: tile.convertedToSRGB(), target: target.convertedToSRGB(), alpha: alpha)
         }
         var out = [UInt8](repeating: 255, count: tile.width * tile.height * 4)
         for y in 0..<tile.height {

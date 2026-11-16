@@ -24,7 +24,7 @@ final class LowDetailPenaltyTests: XCTestCase {
         let lib = [at(distance: 0.001), at(distance: 0.002)]
         XCTAssertEqual(try assignOne(library: lib, variance: nil).tiles, [0])
         XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001]).tiles, [1])
-        var off = AssignmentConfiguration().withAbsolutePenalties(usage: 0.005, lowDetail: 0)
+        let off = AssignmentConfiguration().withAbsolutePenalties(usage: 0.005, lowDetail: 0)
         XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001], config: off).tiles, [0])
         // 报告的距离仍是纯颜色距离，不含惩罚。
         XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001]).distances[0], 0.002, accuracy: 1e-6)

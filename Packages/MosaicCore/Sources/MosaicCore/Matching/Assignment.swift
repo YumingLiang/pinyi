@@ -89,9 +89,12 @@ public struct AssignmentConfiguration: Hashable, Sendable {
     public var lowDetailPenaltyRelative: Float?
     /// 纯色惩罚绝对值 μ（只在 `lowDetailPenaltyRelative == nil` 时生效，仅供测试）。
     public var lowDetailPenalty: Float
-    /// 方差参考值 σ²_ref（L 归一到 0…1）：方差 ≥ 它的素材不受惩罚。默认 0.0004（σ_L = 0.02），
-    /// 与 `FeatureExtractor.lowDetailVarianceThreshold` / `FeatureFlags.lowDetail` 阈值一致。方差不随距离尺度变化。
+    /// 方差参考值 σ²_ref（L 归一到 0…1）：方差 ≥ 它的素材不受惩罚。默认 `TuningDefaults.lowDetailVarianceReference`
+    /// = 0.0004（σ_L = 0.02），`FeatureExtractor.lowDetailVarianceThreshold`（`FeatureFlags.lowDetail`）用同一常量。
+    /// 方差不随距离尺度变化。⚠️ 待真机调参。
     public var lowDetailVarianceReference: Float
+    /// 惩罚尺度的最后兜底（见 `PenaltyScale`）：所有候选与目标距离全为 0 时使用。默认 1e‑3。
+    public var degeneratePenaltyScale: Float
     /// 分配循环每处理多少个格子检查一次取消（另外每次扩 k / 批量加深 / 全库搜索前也检查）。默认 64。
     public var cancellationCheckInterval: Int
 
@@ -109,10 +112,11 @@ public struct AssignmentConfiguration: Hashable, Sendable {
         batchQueryGroupSize: Int = 1024,
         perCellExpansionLimit: Int = 256,
         exhaustiveCellLimit: Int = 256,
-        usagePenaltyRelative: Float? = 0.1,
-        lowDetailPenaltyRelative: Float? = 0.04,
+        usagePenaltyRelative: Float? = TuningDefaults.usagePenaltyRelative,
+        lowDetailPenaltyRelative: Float? = TuningDefaults.lowDetailPenaltyRelative,
         lowDetailPenalty: Float = 0.002,
-        lowDetailVarianceReference: Float = 0.0004,
+        lowDetailVarianceReference: Float = TuningDefaults.lowDetailVarianceReference,
+        degeneratePenaltyScale: Float = TuningDefaults.degeneratePenaltyScale,
         cancellationCheckInterval: Int = 64
     ) {
         self.k = k
@@ -131,6 +135,7 @@ public struct AssignmentConfiguration: Hashable, Sendable {
         self.lowDetailPenaltyRelative = lowDetailPenaltyRelative
         self.lowDetailPenalty = lowDetailPenalty
         self.lowDetailVarianceReference = lowDetailVarianceReference
+        self.degeneratePenaltyScale = degeneratePenaltyScale
         self.cancellationCheckInterval = cancellationCheckInterval
     }
 
@@ -180,6 +185,9 @@ public struct AssignmentConfiguration: Hashable, Sendable {
         guard lowDetailPenalty >= 0, lowDetailPenalty.isFinite else {
             throw MosaicError.invalidConfiguration("lowDetailPenalty must be finite and >= 0")
         }
+        guard degeneratePenaltyScale > 0, degeneratePenaltyScale.isFinite else {
+            throw MosaicError.invalidConfiguration("degeneratePenaltyScale must be > 0")
+        }
         guard lowDetailVarianceReference > 0, lowDetailVarianceReference.isFinite else {
             throw MosaicError.invalidConfiguration("lowDetailVarianceReference must be > 0")
         }
@@ -216,6 +224,45 @@ public enum FallbackLevel: Int, CaseIterable, Comparable, Hashable, Sendable {
     public static func < (lhs: FallbackLevel, rhs: FallbackLevel) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
+/// 相对惩罚的尺度 s（技术方案 §3.4 第 3 步；评审 ca6a4ca MF-2）。
+///
+/// 1. `top1Median`：只在 top‑1 距离 **> 0** 的格子上取 top‑1 距离的下中位数。
+///    （若直接对全部格子取中位数，目标图一半以上是纯黑/纯白、相册里又有完全同色的纯色图时，
+///    中位数 = 0 ⇒ λ_eff = μ_eff = 0，使用惩罚和纯色惩罚整体失效。）
+/// 2. `kthMedian`：所有格子 top‑1 都为 0 时，退到每格**第 k 名**（主轮 k，默认 32；候选不足 k 时取最后一名有限值）
+///    距离的下中位数。
+/// 3. `degenerateConstant`：仍为 0（全部候选都与目标完全相同）时，用 `AssignmentConfiguration.degeneratePenaltyScale`
+///    （默认 1e‑3 ≈ 12 维平方距离下每维 OKLab 差 0.009，低于可察觉差 ~0.02；此时距离全为 0，任何正数都只起"分摊使用次数"的作用）。
+/// 1、2 级与特征整体缩放成正比，因此缩放不变性保持；3 级只在距离全为 0 时出现，缩放后仍全为 0，同样不变。
+public enum PenaltyScale {
+    /// 尺度来源。
+    public enum Source: String, Hashable, Sendable {
+        case top1Median, kthMedian, degenerateConstant
+    }
+
+    static func column(_ r: TopKResult, _ rank: Int) -> [Float] {
+        guard r.k > 0 else { return [] }
+        return (0..<r.queryCount).map { q in
+            var j = min(rank, r.k - 1)
+            while j > 0, !r.distances[q * r.k + j].isFinite { j -= 1 }
+            return r.distances[q * r.k + j]
+        }
+    }
+
+    static func lowerMedian(_ xs: [Float]) -> Float {
+        let v = xs.filter { $0.isFinite }.sorted()
+        return v.isEmpty ? 0 : v[(v.count - 1) / 2]
+    }
+
+    static func resolve(_ r: TopKResult, degenerate: Float) -> (value: Float, source: Source) {
+        let m1 = lowerMedian(column(r, 0).filter { $0 > 0 })
+        if m1 > 0 { return (m1, .top1Median) }
+        let mk = lowerMedian(column(r, r.k - 1))
+        if mk > 0 { return (mk, .kthMedian) }
+        return (degenerate, .degenerateConstant)
+    }
+}
+
 /// 分配结果统计，供结果页提示与性能页展示。
 public struct AssignmentStatistics: Hashable, Sendable {
     /// 格子数。
@@ -232,12 +279,16 @@ public struct AssignmentStatistics: Hashable, Sendable {
     public var maxUses: Int
     /// 所有格子匹配距离之和。
     public var totalDistance: Double
-    /// 本次所有格子 top‑1 距离的中位数（M3 的尺度）。
+    /// 本次 top‑1 距离 **> 0** 的格子上 top‑1 距离的下中位数（全为 0 时为 0）。
     public var top1MedianDistance: Float
     /// 实际生效的使用次数惩罚 λ_eff。
     public var effectiveUsagePenalty: Float
     /// 实际生效的纯色惩罚 μ_eff（未提供亮度方差时为 0）。
     public var effectiveLowDetailPenalty: Float
+    /// 实际使用的惩罚尺度 s（λ_eff = α·s、μ_eff = β·s），见 `PenaltyScale`（评审 ca6a4ca MF-2）。
+    public var penaltyScale: Float = 0
+    /// 惩罚尺度取自哪一级回退。
+    public var penaltyScaleSource: PenaltyScale.Source = .top1Median
 
     /// 平均匹配距离。
     public var meanDistance: Double { cellCount == 0 ? 0 : totalDistance / Double(cellCount) }
@@ -250,7 +301,7 @@ public struct AssignmentStatistics: Hashable, Sendable {
         count(at: .relaxedNeighborhood) + count(at: .capIgnored) + count(at: .neighborhoodIgnored)
     }
     /// 是否实际放宽过约束（技术方案 v0.2 §3.4 `relaxedConstraints`）。结果页是否提示由 App 判断，
-    /// 见 `ShortageHint.shouldShowResultHint`（决定 v0.3：可用 < 200 且实际放宽才显示 `shortage.result`）。
+    /// 见 `shouldShowShortageNotice` / `ShortageHint.shouldShow`（决定 v0.3：可用 < 200 且实际放宽才显示 `shortage.result`）。
     public var relaxedConstraints: Bool { relaxationCount > 0 }
     /// 放宽了邻域的格子数（主邻域不再保证）：`.relaxedNeighborhood` + `.capIgnored` + `.neighborhoodIgnored`。
     public var neighborhoodRelaxedCount: Int {
@@ -392,10 +443,11 @@ public struct GreedyAssigner: Sendable {
                                        p(MosaicProgress(phase: .matching, completed: done, total: total)) } })
         try check.check()
 
-        // M3：惩罚系数相对于本次 top‑1 距离中位数（确定、可复现；整体缩放特征时结果不变）。
+        // M3 + MF-2：惩罚系数相对于本次距离尺度（确定、可复现；整体缩放特征时结果不变）。
         let median = GreedyAssigner.top1Median(topK)
-        let lambda = config.usagePenaltyRelative.map { $0 * median } ?? config.usagePenalty
-        let mu: Float = lightnessVariance == nil ? 0 : (config.lowDetailPenaltyRelative.map { $0 * median } ?? config.lowDetailPenalty)
+        let scale = PenaltyScale.resolve(topK, degenerate: config.degeneratePenaltyScale)
+        let lambda = config.usagePenaltyRelative.map { $0 * scale.value } ?? config.usagePenalty
+        let mu: Float = lightnessVariance == nil ? 0 : (config.lowDetailPenaltyRelative.map { $0 * scale.value } ?? config.lowDetailPenalty)
         // 每张素材的静态（与使用次数无关）惩罚：μ · flatness(i)。
         let staticPenalty: [Float]? = lightnessVariance.flatMap { v -> [Float]? in
             guard mu > 0 else { return nil }
@@ -540,18 +592,17 @@ public struct GreedyAssigner: Sendable {
             totalDistance: distances.reduce(0) { $0 + Double($1) },
             top1MedianDistance: median,
             effectiveUsagePenalty: lambda,
-            effectiveLowDetailPenalty: staticPenalty == nil ? 0 : mu
+            effectiveLowDetailPenalty: staticPenalty == nil ? 0 : mu,
+            penaltyScale: scale.value,
+            penaltyScaleSource: scale.source
         )
         return MosaicAssignment(grid: grid, tiles: assigned, distances: distances, levels: levels,
                                 statistics: stats, seed: config.seed)
     }
 
-    /// 所有格子 top‑1 距离的中位数（下中位数，确定）。
+    /// top‑1 距离 > 0 的格子上 top‑1 距离的下中位数（确定）；全为 0 时返回 0。
     static func top1Median(_ r: TopKResult) -> Float {
-        guard r.k > 0, r.queryCount > 0 else { return 0 }
-        var xs = (0..<r.queryCount).map { r.distances[$0 * r.k] }
-        xs.sort()
-        return xs[(xs.count - 1) / 2]
+        PenaltyScale.lowerMedian(PenaltyScale.column(r, 0).filter { $0 > 0 })
     }
 
     // MARK: - 内部

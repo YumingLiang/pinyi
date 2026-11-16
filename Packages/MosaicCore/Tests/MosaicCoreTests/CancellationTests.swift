@@ -33,6 +33,8 @@ func gradientImage(width: Int, height: Int) throws -> PixelBuffer {
     return try PixelBuffer(width: width, height: height, bytes: bytes)
 }
 
+/// 原缺陷 7（D7）/ 技术方案 §5.1：可取消生成。**不是 A-16**；
+/// 其中 `testRerunAfterCancelIsIdenticalToUncancelledRun` 只是「取消不破坏可复现性」的附加覆盖。
 final class CancellationTests: XCTestCase {
     private func fixture(library: Int = 2_000, cols: Int = 30, rows: Int = 20)
         throws -> (grid: MosaicGrid, cells: FeatureMatrix, lib: FeatureMatrix) {
@@ -118,11 +120,13 @@ final class CancellationTests: XCTestCase {
         let token = CancellationToken()
         let cancelAt = Box<UInt64>(0)
         let trigger = DispatchSemaphore(value: 0)
+        let ack = DispatchSemaphore(value: 0)   // S-8：回调等到取消真正发出再返回，快机器上也不会先跑完
         let fired = Box<Bool>(false)
         DispatchQueue.global().async {
             trigger.wait()
             cancelAt.mutate { $0 = DispatchTime.now().uptimeNanoseconds }
             token.cancel()
+            ack.signal()
         }
         var thrown: Error?
         do {
@@ -131,7 +135,7 @@ final class CancellationTests: XCTestCase {
                 if p.phase == .matching, p.completed >= 3 {
                     var first = false
                     fired.mutate { if !$0 { $0 = true; first = true } }
-                    if first { trigger.signal() }
+                    if first { trigger.signal(); ack.wait() }
                 }
             }
         } catch { thrown = error }
@@ -147,14 +151,22 @@ final class CancellationTests: XCTestCase {
         let records = syntheticVectors(count: 20_000, seed: 5).map { FeatureRecord(vector: $0, lightnessVariance: 0.001) }
         let table = FeatureTable(records: records)
         let pipeline = MosaicPipeline()
+        // 评审 ca6a4ca S-8：不靠固定 sleep。进入匹配阶段的第一次进度回调里**停住**，直到测试发出取消，
+        // 因此无论机器多快，任务都不可能在取消前跑完。
         let started = Box<Bool>(false)
+        let go = DispatchSemaphore(value: 0)
         let task = Task.detached {
-            try await pipeline.generate(target: img, density: .fine, table: table, seed: 1) { _ in started.mutate { $0 = true } }
+            try await pipeline.generate(target: img, density: .fine, table: table, seed: 1) { p in
+                guard p.phase == .matching else { return }
+                var first = false
+                started.mutate { if !$0 { $0 = true; first = true } }
+                if first { go.wait() }
+            }
         }
         while !started.value { try await Task.sleep(nanoseconds: 1_000_000) }
-        try await Task.sleep(nanoseconds: 20_000_000)
         let t0 = DispatchTime.now().uptimeNanoseconds
         task.cancel()
+        go.signal()
         do {
             _ = try await task.value
             XCTFail("expected cancellation")

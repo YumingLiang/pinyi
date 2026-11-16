@@ -20,8 +20,10 @@ jobs:
   mosaic-core:
     name: MosaicCore (swift test on Linux)
     runs-on: ubuntu-latest
-    # 与 Xcode 26 自带的 Swift 6.2 对齐（以 Xcode 的 `swift --version` 为准，升级 Xcode 时同步）。
-    container: swift:6.2
+    # 钉到具体 tag：Docker Hub 官方镜像 `swift:6.3.3-noble`（2026-11-16 用 registry API 核实存在，
+    # 多架构 index digest sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa）。与 ios.yml 所用 macos-26 runner 的默认 Xcode 26.6（自带 Swift 6.3.3）对齐；
+    # 升级 Xcode 时同步改这里。不用浮动 tag（6.3 / latest），避免 CI 无声换编译器。
+    container: swift:6.3.3-noble
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -50,22 +52,29 @@ jobs:
         run: swift build
 
   # QA A-21：全规模性能基线（10,800 格 × 5 万合成候选，release），单独 job，不拖慢上面的门禁。
-  # 软阈值（box 8 核实测的约 2 倍余量）只在 MOSAIC_BENCH=1 时生效；耗时只防 Linux 回归，不作 iPhone 11 证据。
+  # **只记录、不阻断**：job 级 continue-on-error，且软阈值默认只打印 ::warning::
+  # （设 MOSAIC_BENCH_ASSERT=1 才断言；runner 核数与 box 8 核不同，阈值未在 runner 上标定）。
+  # ⚠️ Linux 耗时只防回归，不能作为 iPhone 11 性能退出线（中档 ≤ 10 秒、首扫 ≤ 90 秒）的证据，需真机验证。
   mosaic-core-bench:
-    name: MosaicCore full-scale bench (A-21, release)
+    name: MosaicCore full-scale bench (A-21, release, informational)
     runs-on: ubuntu-latest
-    container: swift:6.2
+    container: swift:6.3.3-noble
     timeout-minutes: 30
+    continue-on-error: true
     env:
       MOSAIC_BENCH: "1"
+      MOSAIC_BENCH_ASSERT: "0"
     steps:
       - uses: actions/checkout@v4
 
       - name: Full-scale PerformanceTests (release)
         working-directory: Packages/MosaicCore
         run: |
+          set -o pipefail
+          nproc
           swift test -c release --filter 'PerformanceTests|FeatureFileTests.testLargeFile50kRecords|CancellationTests' 2>&1 | tee bench.txt
           grep '\[bench\]' bench.txt > bench-summary.txt || true
+          cat bench-summary.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload bench output
         if: always()

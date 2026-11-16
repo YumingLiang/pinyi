@@ -16,10 +16,11 @@ public struct FeatureExtractor: Sendable {
     /// 平均方式（默认 `.linearLight`）。
     public var averaging: Averaging
     /// 亮度方差低于该阈值时打上 `.lowDetail` 标志（亮度已归一化到约 0…1）。
+    /// 默认与打分用的 σ²_ref 同源：`TuningDefaults.lowDetailVarianceReference`。
     public var lowDetailVarianceThreshold: Float
 
     /// 创建提取器。
-    public init(colorSpace: FeatureColorSpace = .oklab, averaging: Averaging = .linearLight, lowDetailVarianceThreshold: Float = 0.0004) {
+    public init(colorSpace: FeatureColorSpace = .oklab, averaging: Averaging = .linearLight, lowDetailVarianceThreshold: Float = TuningDefaults.lowDetailVarianceReference) {
         self.colorSpace = colorSpace
         self.averaging = averaging
         self.lowDetailVarianceThreshold = lowDetailVarianceThreshold

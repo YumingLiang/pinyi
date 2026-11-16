@@ -20,6 +20,7 @@ public enum SRGB {
     }
 
     /// 8 位 sRGB 值 → 线性光的查找表（256 项），用于逐像素快速解码。
+    /// 运行时用 libm `pow` 生成：同平台确定，跨平台可能差 1 ulp（不要求跨平台逐位一致，按容差比较）。
     public static let linearLUT: [Float] = (0..<256).map { toLinear(Float($0) / 255) }
 
     /// 用查找表把 8 位 sRGB 分量解码为线性光。

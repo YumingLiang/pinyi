@@ -59,13 +59,13 @@ let next = try pipeline.reshuffle(gen, target: targetPixels, table: table)
 
 ## 测试方法
 
-Linux（box 上已装 Swift 6.2.4，路径 `~/.local/swift-6.2.4/usr/bin`；与 Xcode 26 自带的 Swift 6.2 对齐）：
+Linux：CI 钉 `swift:6.3.3-noble`，与 `macos-26` runner 默认的 Xcode 26.6（Swift 6.3.3）一致。box 上装的是 `~/.local/swift-6.3.3/usr/bin`（另有 6.2.4）。Linux 耗时只防回归，**不能**作为 iPhone 11 性能证据，需真机验证：
 
 ```bash
 cd Packages/MosaicCore
 swift build
 swift test                                   # 全部单元测试
-MOSAIC_BENCH=1 swift test -c release --filter PerformanceTests   # A-21 全规模基准：10,800 格 × 5 万素材（CI 单独 job）
+MOSAIC_BENCH=1 swift test -c release --filter PerformanceTests   # A-21 全规模基准（CI 单独 job，只记录不阻断；加 MOSAIC_BENCH_ASSERT=1 才断言软阈值）
 cd ../MosaicAccelerate && swift build        # Linux 上为空模块，只验证可编译
 cd ../.. && ./scripts/check-no-network.sh    # 零网络守护
 python3 scripts/gen-localizable.py --check   # .strings 与文案表一致

@@ -54,6 +54,7 @@ final class SupplyAndReshuffleTests: XCTestCase {
         return (try PixelBuffer(width: w, height: h, bytes: bytes), FeatureMatrix(vectors: syntheticVectors(count: 1500, seed: 5)))
     }
 
+    /// A-16（及 A-17 换一种拼法）：同种子重跑 pipeline 逐格一致。
     func testReshuffleChangesResultSameSeedReproduces() throws {
         let (target, lib) = try fixture()
         let pipeline = MosaicPipeline(assigner: GreedyAssigner(configuration: AssignmentConfiguration(seed: 2026)))
@@ -123,6 +124,7 @@ final class SupplyAndReshuffleTests: XCTestCase {
     }
 
     /// T2：延后队列的处理是确定的——与分组大小无关、同种子逐格一致。
+    /// A-16 前提（A-15 相关）：延后队列结果与分组大小无关。
     func testDeferredQueueDeterministicAcrossGroupSizes() throws {
         let grid = try MosaicGrid(columns: 30, rows: 20)
         let cells = FeatureMatrix(vectors: Array(repeating: FeatureVector(uniform: SIMD3(0.6, 0.02, 0.05)), count: grid.cellCount))

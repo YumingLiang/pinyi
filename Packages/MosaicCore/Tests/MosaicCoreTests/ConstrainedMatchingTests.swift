@@ -7,6 +7,7 @@ final class ConstrainedMatchingTests: XCTestCase {
 
     // MARK: - 可复现性（A-16 / A-17）
 
+    /// A-16：同种子、同输入 ⇒ 分配完全一致（QA 骨架移植）。
     func testSameSeedSameInputYieldsIdenticalAssignment() throws {
         let fixture = SyntheticFixture.diverseGrid(columns: 16, rows: 12, candidateCount: 400)
         let constraints = AssignmentConfiguration(seed: 0xA11CE5EED)

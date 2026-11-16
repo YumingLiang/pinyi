@@ -1,6 +1,9 @@
 # macOS：XcodeGen 生成工程 → iOS 模拟器 build + 单元测试（技术方案 §11.3 ios.yml）。
 # ⚠️ 草稿：在 Linux 上编写，未在任何 macOS runner 上运行过。首次运行时需核对：
-#   - runner 标签 `macos-26` 与 Xcode 26 的安装路径（技术方案 §9.1：上传 App Store Connect 须 Xcode 26 + iOS 26 SDK）；
+#   - runner：`macos-26`（arm64 标准 runner，= 当前 macos-latest）。2026-11-16 按 actions/runner-images
+#     images/macos/macos-26-arm64-Readme.md（Image 20261102.0473.1，macOS 26.7.2）核实：默认 Xcode 26.6（17F113，
+#     自带 Swift 6.3.3，iOS 26.5 SDK），路径 /Applications/Xcode_26.6.app；另有 26.0.1–26.5。
+#     Xcode 27 只在预览 runner `xcode-27` 上，暂不用。技术方案 §9.1：上传 App Store Connect 须 Xcode 26 + iOS 26 SDK。
 #   - XcodeGen 对本地包测试目标（`package: MosaicCore/MosaicCoreTests`）的支持；
 #   - 模拟器设备选择脚本。
 # 费用：标准 macOS runner 约 0.062 美元/分钟（私有仓库从包含额度扣除），因此用 paths 过滤 + 并发取消控制触发。
@@ -30,18 +33,20 @@ permissions:
 jobs:
   ios-simulator:
     name: iOS build + test (simulator)
-    runs-on: macos-26            # 未核实具体标签；不可用时改为带 Xcode 26 的 macos-15 镜像
+    runs-on: macos-26            # 已核实（见文件头）；钉具体版本，不用 macos-latest 以免镜像迁移时无声换 Xcode
     timeout-minutes: 30
+    env:
+      # 钉具体 Xcode（与 linux-core.yml 的 swift:6.3.3-noble 同为 Swift 6.3.3）。runner 只保留每个 minor 的最新 patch，
+      # 镜像移除 26.6 时这里会明确失败，再按 runner-images 的 Readme 更新。
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode 26
+      - name: Check Xcode 26.6
         run: |
-          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$XCODE" ]; then
-            echo "::error::No Xcode 26 found on runner"; ls /Applications; exit 1
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::$DEVELOPER_DIR not found on runner"; ls -d /Applications/Xcode*.app; exit 1
           fi
-          sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
           swift --version
 

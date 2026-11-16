@@ -52,6 +52,7 @@ final class MatchingTests: XCTestCase {
         }
     }
 
+    /// A-16 前提：内核结果与线程数 / 分块无关。
     func testTopKIsSortedAndParallelEqualsSerial() throws {
         let lib = FeatureMatrix(vectors: syntheticVectors(count: 5000, seed: 21))
         let queries = FeatureMatrix(vectors: syntheticVectors(count: 200, seed: 22))

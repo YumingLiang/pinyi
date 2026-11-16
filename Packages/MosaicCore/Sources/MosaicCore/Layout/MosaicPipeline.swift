@@ -31,7 +31,7 @@ public struct MosaicPipeline: Sendable {
         self.assigner = assigner
     }
 
-    /// 生成马赛克。
+    /// 生成马赛克（`FeatureMatrix` 入口：**测试 / 内部用**，不做口径校验、不带方差；App 只走 `snapshot:` 入口，评审 S-4/S-5）。
     /// - Parameters:
     ///   - target: 目标图（建议先用 ImageIO 降采样，例如长边 ≤ 2048）。
     ///   - density: 密度档位。
@@ -92,9 +92,24 @@ public struct MosaicPipeline: Sendable {
                             lightnessVariance: snapshot.table.lightnessVariance, cancellation: cancellation, progress: progress)
     }
 
-    /// Swift 并发入口：Task 被取消时（例如 App 进后台、后台任务到期）立刻通知内核各工作线程停止，
-    /// 抛 `CancellationError`。重活在当前执行器上同步进行，App 侧应在 `Task.detached(priority: .userInitiated)`
-    /// 或自建 actor 中调用，避免占住主线程。
+    /// Swift 并发入口（**推荐的 App 入口**，评审 ca6a4ca S-4）：快照 + 口径校验 + 方差 + 可取消。
+    ///
+    /// Task 被取消时（例如 App 进后台、后台任务到期）立刻通知内核各工作线程停止，抛 `CancellationError`。
+    /// 执行位置（评审 S-3）：nonisolated async 函数在 Swift 6 下跑在**全局并发池**，同步重活会占住一个协作线程
+    /// （内核另用 `concurrentPerform` 并行）。App 侧不要从 MainActor 直接 `await` 后就做别的 UI 等待；
+    /// 建议在 `Task.detached(priority: .userInitiated)` 或专用 `DispatchQueue` 中调用。
+    public func generate(target: PixelBuffer, density: Density, snapshot: LibrarySnapshot, seed: UInt64? = nil,
+                         progress: MosaicProgressHandler? = nil) async throws -> MosaicGeneration {
+        let token = CancellationToken()
+        return try await withTaskCancellationHandler {
+            try generate(target: target, density: density, snapshot: snapshot, seed: seed,
+                         cancellation: token, progress: progress)
+        } onCancel: {
+            token.cancel()
+        }
+    }
+
+    /// `FeatureTable` 版 Swift 并发入口（执行位置说明同 `snapshot:` 版）。
     public func generate(target: PixelBuffer, density: Density, table: FeatureTable, mask: BitMask? = nil,
                          seed: UInt64? = nil, progress: MosaicProgressHandler? = nil) async throws -> MosaicGeneration {
         let token = CancellationToken()
@@ -106,7 +121,7 @@ public struct MosaicPipeline: Sendable {
         }
     }
 
-    /// `FeatureMatrix` 版本的 Swift 并发入口（不启用纯色惩罚，除非传入 `lightnessVariance`）。
+    /// `FeatureMatrix` 版本的 Swift 并发入口（测试 / 内部用；不启用纯色惩罚，除非传入 `lightnessVariance`）。
     public func generate(target: PixelBuffer, density: Density, library: FeatureMatrix, mask: BitMask? = nil,
                          seed: UInt64? = nil, lightnessVariance: [Float]? = nil,
                          progress: MosaicProgressHandler? = nil) async throws -> MosaicGeneration {
@@ -121,10 +136,28 @@ public struct MosaicPipeline: Sendable {
 
     /// 「换一种拼法」：同一目标图、同一素材快照、同一参数，只把种子换成 `MosaicSeed.next(after:)`
     /// （或指定的 `newSeed`）。
+    /// `FeatureMatrix` 版（测试 / 内部用）：若首次生成传了 `lightnessVariance`，这里也须传同一份，否则打分口径不同（评审 S-4）。
     public func reshuffle(_ previous: MosaicGeneration, target: PixelBuffer, library: FeatureMatrix,
-                          mask: BitMask? = nil, newSeed: UInt64? = nil) throws -> MosaicGeneration {
+                          mask: BitMask? = nil, newSeed: UInt64? = nil,
+                          lightnessVariance: [Float]? = nil) throws -> MosaicGeneration {
         try generate(target: target, density: previous.density, library: library, mask: mask,
-                     seed: newSeed ?? MosaicSeed.next(after: previous.seed))
+                     seed: newSeed ?? MosaicSeed.next(after: previous.seed),
+                     lightnessVariance: lightnessVariance, cancellation: nil, progress: nil)
+    }
+
+    /// 「换一种拼法」（快照版，推荐的 App 入口；可取消）。
+    public func reshuffle(_ previous: MosaicGeneration, target: PixelBuffer, snapshot: LibrarySnapshot,
+                          newSeed: UInt64? = nil, cancellation: CancellationToken? = nil,
+                          progress: MosaicProgressHandler? = nil) throws -> MosaicGeneration {
+        try generate(target: target, density: previous.density, snapshot: snapshot,
+                     seed: newSeed ?? MosaicSeed.next(after: previous.seed), cancellation: cancellation, progress: progress)
+    }
+
+    /// 「换一种拼法」（快照版 Swift 并发入口）。
+    public func reshuffle(_ previous: MosaicGeneration, target: PixelBuffer, snapshot: LibrarySnapshot,
+                          newSeed: UInt64? = nil, progress: MosaicProgressHandler? = nil) async throws -> MosaicGeneration {
+        try await generate(target: target, density: previous.density, snapshot: snapshot,
+                           seed: newSeed ?? MosaicSeed.next(after: previous.seed), progress: progress)
     }
 
     /// 「换一种拼法」（`FeatureTable` 版，可取消）。

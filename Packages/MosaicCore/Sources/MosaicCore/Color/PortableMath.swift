@@ -1,7 +1,10 @@
-/// 跨平台逐位一致的数学函数（评审 S3）。
+/// 不依赖 libm 的数学函数（评审 S3）。
 ///
-/// glibc 与 Darwin 的 libm `cbrt` 可能相差 1 ulp，特征不保证跨平台逐位一致、平局可能翻转。
-/// 这里只用 IEEE 754 基本运算（加减乘除，Swift 默认不做 FMA 收缩），结果在所有平台上逐位相同。
+/// glibc 与 Darwin 的 libm `cbrt` 可能相差 1 ulp。这里的 `cbrt` 只用 IEEE 754 基本运算
+/// （加减乘除，Swift 默认不做 FMA 收缩），**这一个函数**在各平台上结果相同。
+/// 但整条特征链路**不保证**跨平台逐位一致：sRGB 8 位 → 线性光的查找表（`SRGB.linearLUT`）仍在运行时用
+/// libm `pow` 生成，glibc / Darwin 可能差 1 ulp。按评审 ca6a4ca 拍板 (6)：只要求**同平台**逐位确定，
+/// 跨平台用容差比较（分配差异率 ≤ 2%、平均匹配距离相对差 ≤ 1e‑3、颜色转换 1e‑4）。
 public enum PortableMath {
     /// 立方根（Double）：指数/尾数初值 + 3 次 Halley 迭代（三阶收敛），相对误差 < 1e-15。
     @inlinable

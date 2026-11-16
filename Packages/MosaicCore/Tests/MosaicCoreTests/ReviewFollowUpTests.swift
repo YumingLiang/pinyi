@@ -253,6 +253,7 @@ final class ReviewFollowUpTests: XCTestCase {
 
     // MARK: S2 / S4 / S6
 
+    /// A-16 前提：并行取样与串行逐位一致。
     func testS2ParallelSamplerEqualsSerial() throws {
         let img = try gradientImage(width: 403, height: 301)
         let layout = try Layout.grid(width: 403, height: 301, density: .medium)

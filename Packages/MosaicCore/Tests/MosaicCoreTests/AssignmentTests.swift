@@ -121,6 +121,7 @@ final class AssignmentTests: XCTestCase {
 
     // MARK: - 可复现性
 
+    /// A-16：同种子 + 同快照 + 同参数 ⇒ 逐格一致（另含换种子结果不同）。
     func testSameSeedSameResultDifferentSeedDifferentResult() throws {
         let grid = try MosaicGrid(columns: 40, rows: 30)
         let cells = makeCells(grid, seed: 17)
