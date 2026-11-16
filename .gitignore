@@ -17,3 +17,5 @@ App/Info.plist
 *.cer
 # 系统
 .DS_Store
+# 本地签名覆盖（Team ID / Bundle ID），见 Config/Local.xcconfig.example
+Config/Local.xcconfig
