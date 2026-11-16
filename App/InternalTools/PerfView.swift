@@ -33,6 +33,12 @@ struct PerfView: View {
                     }
                 }
             }
+            // 最近一次导出的方案与格子填充（糊 = 退回 128px 扫描缩略图，白 = 完全没有图）
+            if let note = model.perf.latestNote(of: .exportTotal) {
+                Section(header: Text(verbatim: "最近一次导出")) {
+                    Text(verbatim: note).font(.footnote).textSelection(.enabled)
+                }
+            }
             // MF-7：各阶段峰值内存（phys_footprint，0.5 s 采样）
             Section(header: Text(verbatim: "峰值内存（phys_footprint）")) {
                 ForEach(MemoryPhase.allCases, id: \.self) { p in
@@ -73,7 +79,8 @@ struct PerfView: View {
         let mem = MemoryPhase.allCases.compactMap { p in
             peaks[p].map { "memory\t\(p.rawValue)\tpeak_bytes=\($0.peakBytes)\tdelta_bytes=\($0.deltaBytes)" }
         }
-        return ([report.plainText(deviceNote: deviceNote)] + mem + [SQLiteTriggerCheck.plainText(triggers)]).joined(separator: "\n")
+        let export = model.perf.latestNote(of: .exportTotal).map { "export\t\($0)" }
+        return ([report.plainText(deviceNote: deviceNote)] + mem + [export].compactMap { $0 } + [SQLiteTriggerCheck.plainText(triggers)]).joined(separator: "\n")
     }
 
     private var deviceNote: String {

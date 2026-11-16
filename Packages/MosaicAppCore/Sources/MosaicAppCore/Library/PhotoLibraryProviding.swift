@@ -71,9 +71,18 @@ public struct ThumbnailRequest: Sendable, Hashable {
     public let isNetworkAccessAllowed = false
     /// `PHCachingImageManager.allowsCachingHighQualityImages` —— false。
     public let allowsCachingHighQualityImages = false
+    /// 取回后按短边居中裁成正方形（预览 / 导出绘制用）。扫描建索引必须为 false：
+    /// 14ac550 的扫描路径是 `opaqueSRGB(maxEdge:)` 按长边等比缩小（结果可非方），再由 `FeatureExtractor` 取中心正方形；先裁方再缩小会改变特征，与已建索引不一致。
+    public var centerCropToSquare = false
 
     public init(targetPixelSize: Int = 128) { self.targetPixelSize = targetPixelSize }
     public static let scan = ThumbnailRequest()
+    /// 预览 / 导出绘制：128px 扫描缩略图，但居中裁方，避免画进格子时拉伸。
+    public static var scanDisplay: ThumbnailRequest {
+        var r = ThumbnailRequest.scan
+        r.centerCropToSquare = true
+        return r
+    }
 }
 
 /// 取缩略图的结果（技术方案 §2.9）。

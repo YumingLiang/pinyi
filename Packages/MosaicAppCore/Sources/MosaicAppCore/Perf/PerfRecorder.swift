@@ -33,7 +33,7 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
     case scanCommitTotal
     /// 清晰度探测（「不能略糊」）：一次生成内各轮探测累计耗时；items = 实际探测张数，note = `LowResReport.perfNote`。
     case sharpnessProbe
-    /// 导出端到端（取图 + 画整张 + JPEG）；note = `ExportPlan.logDescription` + 文件大小。峰值 phys_footprint 见 `MemoryPhase.export`。
+    /// 导出端到端（取图 + 画整张 + JPEG）；note = `ExportPlan.logDescription` + 糊格子/白格子 + 文件大小。峰值 phys_footprint 见 `MemoryPhase.export`。
     case exportTotal
 
     /// 性能页上的显示名（内部页面，不进文案表）。
@@ -141,6 +141,15 @@ public final class PerfRecorder: Sendable {
     }
 
     public func allSamples() -> [PerfSample] { samples.get() }
+
+    /// 最近一条指定阶段的样本（导出附注里有每格像素、糊格子 / 白格子数量）。
+    public func latestSample(of phase: PerfPhase) -> PerfSample? {
+        allSamples().last { $0.phase == phase }
+    }
+
+    public func latestNote(of phase: PerfPhase) -> String? {
+        latestSample(of: phase)?.note
+    }
 
     public func reset() { samples.set([]) }
 

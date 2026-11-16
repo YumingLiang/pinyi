@@ -26,6 +26,17 @@
 - **测试**（`SharpnessFilterTests` 首版 12 个）：最终结果里没有被剔除的照片且每格都有图；N 去重、每张一次生成只探测一次；缓存避免重探（再生成 0 次探测、换拼法不重复、相册变化只清不合格）；探测中取消抛 `CancellationError`、无结果、不入缓存；并发 ≤ 8；全部不合格走 `noMaterial`；只剩 10 张时供给按剔除后判断；到达最多轮数报告未解决格数；未注入探测器时行为不变；快照剔除只动掩码；协调器来源页文案只对当前来源显示。
 - **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`App/Adapters/PhotoKitResolutionProbe.swift`、`LiveDependencies`（注入探测器）、来源页 / 进度页 / 性能页三处视图。需真机核对：`.highQualityFormat` + 无网络时 iCloud 照片的回调形态（nil + InCloud，还是降质图）；`.fast` 返回的像素尺寸。
 
+## feat/app-layer：导出 / 预览格子被非等比拉伸；导出记录糊格子与白格子数量
+
+- **根因**：PhotoKit `.aspectFill` + `targetSize = N×N` 可能返回非正方形（例如 256×341）。共享取图路径 `ImagePixels.opaqueSRGB(cg, maxEdge: N)` 按长边缩到 N，变成 192×256，再画进 N×N 格子——横向拉伸，有效清晰度只有短边，人脸会变形。
+- **修法**：
+  - 纯函数 `CenterSquareCrop`（MosaicAppCore，Linux 单测）：按短边居中裁方（奇数余量起点向下取整）；输出边长 = min(短边, 目标)，短边不足时保持原生正方形，由绘制端等比放大，绝不非等比缩放。
+  - `ImagePixels.opaqueSRGBCenteredSquare` 按该矩形 `CGImage.cropping` 后再走原有白底 sRGB 路径。`PhotoKitThumbnails` 在 `aspectFill` 时走这条路径（预览、导出、扫描取图共用）。目标图降采样仍用原来的 `opaqueSRGB`（不裁方）。
+  - 紧急版导出统计两类格子：高清取不到而退回 128px `.scan` 缩略图的「糊格子」，以及完全没有图的「白格子」（无资产、取图失败、位图转换失败）。数量写入 `os_log`（category "export"，不含资产标识）和内测性能页「最近一次导出」；「复制为文本」一并带上。
+  - 扫描建索引仍走 14ac550 的按长边缩小（`ThumbnailRequest.scan.centerCropToSquare = false`），避免已建索引特征失效。预览 / 导出绘制用 `scanDisplay` / 导出请求打开裁方。
+- **测试**：`CenterSquareCropTests`（横/竖/正方形、奇数边、短边 < N 不放大、大于 N 缩小、非法输入）；`ExportFillStatsTests`（分类与累加）；`PerfTests.testLatestExportNote`；`ScanFeatureSnapshotTests`（256×341 合成图按长边缩到 96×128 后特征与 14ac550 快照逐 bit 相同，`featureVersion` 仍为 2；先裁方再缩小则不匹配）。
+
+
 ## feat/app-layer：P0 预览「第二次放大失效」（真机 32ec2b5 Internal）
 
 - **根因**：`ResultView` 用 `MagnificationGesture().onChanged { scale = max(1, min(8, $0)) }`。手势值是**相对本次手势开始**的倍数（每次从 1 起），旧代码直接把它当绝对倍数、也没有 `onEnded` 累乘进基准——第二次捏合一开始 scale 就被设回 ≈1，图弹回原大小；上限 8 也太小，细网格放到顶也看不清单格。
