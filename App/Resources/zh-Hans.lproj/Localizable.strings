@@ -273,17 +273,20 @@
 /* 区域标题（copy_v1.1.md:260） */
 "export.size.section" = "导出尺寸";
 
-/* 默认档名称（copy_v1.1.md:261） */
-"export.size.4000" = "标准";
+/* 高清导出档位（product/hd-export-req-v0.2 §A3；原 export.size.4000 / 6000 作废）。
+   v0.2 把「（默认）」写在高清说明里，但 §F 拍板默认改为超清，这里移到超清，待产品确认。 */
+"export.size.share" = "分享";
+"export.size.share.desc" = "长边约 4000 像素，适合发微信。";
+"export.size.hd" = "高清";
+"export.size.hd.desc" = "放大能看清每张小照片。";
+"export.size.uhd" = "超清";
+"export.size.uhd.desc" = "放大看得更清楚，文件很大，导出要久一些。（默认）";
 
-/* 说明（copy_v1.1.md:262） */
-"export.size.4000.desc" = "长边约 4000 像素，文件更小，适合保存和分享。（默认）";
+/* 固定提示（v0.2 §F1-2 只给了文字，key 待产品确认） */
+"export.size.large_hint" = "文件较大，导出需要一会儿";
 
-/* 较大档名称（copy_v1.1.md:263） */
-"export.size.6000" = "更细";
-
-/* 说明（copy_v1.1.md:264） */
-"export.size.6000.desc" = "长边约 6000 像素，放大更清楚，文件会大一些。";
+/* 结果页导出按钮（v0.2 §B2「结果页主按钮仍是『导出』」，key 待产品确认） */
+"preview.export" = "导出";
 
 /* 部分原图未在本地、导出时块被降级（copy_v1.1.md:265） */
 "export.degraded" = "有些照片还没下载到这台手机，导出后这些小块会稍模糊";

@@ -31,6 +31,8 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
     case scanTotal
     /// 一轮扫描期间提交累计耗时（与 `scanTotal` 同 note；首扫占比 > 5% 是 SQLite 触发条件之一，MF-4 / MF-7）。
     case scanCommitTotal
+    /// 导出端到端（取图 + 画整张 + JPEG）；note = `ExportPlan.logDescription` + 文件大小。峰值 phys_footprint 见 `MemoryPhase.export`。
+    case exportTotal
 
     /// 性能页上的显示名（内部页面，不进文案表）。
     public var label: String {
@@ -49,6 +51,7 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
         case .previewRender: return "预览绘制"
         case .scanTotal: return "扫描·总计"
         case .scanCommitTotal: return "扫描·提交累计"
+        case .exportTotal: return "导出·总计"
         }
     }
 }

@@ -111,10 +111,16 @@ public extension L10nKey {
     static let shortageResult = L10nKey(rawValue: "shortage.result")
     // 导出 / 保存 / 分享（文案 §4.9、§4.10、§5.3）
     static let exportSizeSection = L10nKey(rawValue: "export.size.section")
-    static let exportSize4000 = L10nKey(rawValue: "export.size.4000")
-    static let exportSize4000Desc = L10nKey(rawValue: "export.size.4000.desc")
-    static let exportSize6000 = L10nKey(rawValue: "export.size.6000")
-    static let exportSize6000Desc = L10nKey(rawValue: "export.size.6000.desc")
+    // 高清导出档位（product/hd-export-req-v0.2 §A3；原 export.size.4000 / 6000 作废）
+    static let exportSizeShare = L10nKey(rawValue: "export.size.share")
+    static let exportSizeShareDesc = L10nKey(rawValue: "export.size.share.desc")
+    static let exportSizeHD = L10nKey(rawValue: "export.size.hd")
+    static let exportSizeHDDesc = L10nKey(rawValue: "export.size.hd.desc")
+    static let exportSizeUHD = L10nKey(rawValue: "export.size.uhd")
+    static let exportSizeUHDDesc = L10nKey(rawValue: "export.size.uhd.desc")
+    /// ⚠️ v0.2 §F1-2 只给了文字「文件较大，导出需要一会儿」，没给 key，暂用此名。
+    static let exportSizeLargeHint = L10nKey(rawValue: "export.size.large_hint")
+    static let previewExport = L10nKey(rawValue: "preview.export")
     static let exportDegraded = L10nKey(rawValue: "export.degraded")
     static let exportProgressTitle = L10nKey(rawValue: "export.progress.title")
     static let exportProgressHint = L10nKey(rawValue: "export.progress.hint")
@@ -180,7 +186,7 @@ public extension L10nKey {
         emptyNoPhotosTitle, emptyNoPhotosBody, emptyNoPhotosOK, emptyNotDownloadedTitle, emptyNotDownloadedBody, emptyNotDownloadedRetry,
         settingsTitle, settingsPerformance, settingsAbout, aboutTitle, aboutBody, appDisplayName,
         commonCancel, commonDone, commonBack, commonOK, commonClose, commonRetry,
-        exportSizeSection, exportSize4000, exportSize4000Desc, exportSize6000, exportSize6000Desc, exportDegraded, exportProgressTitle, exportProgressHint, exportInterrupted, exportRetry, saveSuccessTitle, saveSuccessBody, saveSuccessDone, saveSuccessShare, shareSheetTitle, shareSuggestSave, saveDiskFullTitle, saveDiskFullBody, saveDiskFullOK, saveAddDeniedTitle, saveAddDeniedBody, saveAddDeniedSettings, saveAddDeniedShare, saveFailed, saveFailedRetry,
+        exportSizeSection, exportSizeShare, exportSizeShareDesc, exportSizeHD, exportSizeHDDesc, exportSizeUHD, exportSizeUHDDesc, exportSizeLargeHint, previewExport, exportDegraded, exportProgressTitle, exportProgressHint, exportInterrupted, exportRetry, saveSuccessTitle, saveSuccessBody, saveSuccessDone, saveSuccessShare, shareSheetTitle, shareSuggestSave, saveDiskFullTitle, saveDiskFullBody, saveDiskFullOK, saveAddDeniedTitle, saveAddDeniedBody, saveAddDeniedSettings, saveAddDeniedShare, saveFailed, saveFailedRetry,
     ]
 }
 

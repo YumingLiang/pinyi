@@ -96,7 +96,7 @@ extension GenerationRunner: MosaicGenerating {}
 
 // MARK: - 导出
 
-/// 导出档位（用户两档；8000 只在 INTERNAL_TOOLS 构建由平台层提供入口）。
+/// ⚠️ 已作废（由 `ExportTier` 取代），保留类型只为兼容旧引用。
 public enum ExportSize: Int, Sendable, Hashable, CaseIterable, Codable {
     case standard = 4000
     case large = 6000
@@ -107,8 +107,8 @@ public enum ExportSize: Int, Sendable, Hashable, CaseIterable, Codable {
 
     public var titleKey: L10nKey? {
         switch self {
-        case .standard: return .exportSize4000
-        case .large: return .exportSize6000
+        case .standard: return .exportSizeShare
+        case .large: return .exportSizeHD
         case .internal8000: return nil
         }
     }
@@ -118,13 +118,19 @@ public struct ExportRequest: Sendable {
     public var product: GenerationProduct
     public var target: PixelBuffer
     public var overlayAlpha: Double
-    public var size: ExportSize
+    public var tier: ExportTier
 
-    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, size: ExportSize) {
+    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, tier: ExportTier) {
         self.product = product
         self.target = target
         self.overlayAlpha = overlayAlpha
-        self.size = size
+        self.tier = tier
+    }
+
+    /// 尺寸方案；平台层分配位图前传入 `os_proc_available_memory()`，上限随可用内存变化。
+    public func plan(availableMemoryBytes: Int64?) -> ExportPlan {
+        let g = product.generation.layout
+        return ExportPlan(tier: tier, columns: g.columns, rows: g.rows, availableMemoryBytes: availableMemoryBytes)
     }
 }
 

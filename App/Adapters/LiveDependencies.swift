@@ -23,7 +23,7 @@ extension AppDependencies {
             lifecycle: lifecycle,
             preferences: UserDefaultsPreferences(),
             generator: GenerationRunner(pipeline: MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())), perf: perf),
-            exporter: LiveMosaicExporter(thumbnails: thumbnails),
+            exporter: LiveMosaicExporter(thumbnails: thumbnails, perf: perf),
             memory: PhysFootprintReader(),
             perf: perf,
             initialSeed: UInt64.random(in: 1...UInt64.max)

@@ -292,7 +292,10 @@ public final class AppCoordinator {
     public func setOverlayAlpha(_ a: Double) { state.flow.settings.overlayAlpha = OverlayBlendLimits.clamp(a) }
     public func setShowScanSheet(_ on: Bool) { state.showScanSheet = on }
     public func setPresentedEmptyState(_ e: LibraryEmptyState?) { state.presentedEmptyState = e }
-    public func setExportSize(_ s: ExportSize) { state.exportSize = s }
+    public func setExportTier(_ t: ExportTier) {
+        guard !state.export.isBusy else { return }
+        state.exportTier = t
+    }
 
     // MARK: - 生成
 
@@ -450,7 +453,7 @@ public final class AppCoordinator {
         let exporter = dependencies.exporter
         let library = dependencies.library
         let request = ExportRequest(product: product, target: target, overlayAlpha: state.flow.settings.overlayAlpha,
-                                    size: state.exportSize)
+                                    tier: state.exportTier)
         if let free = exporter.availableBytes(), free < exporter.estimatedBytes(for: request) {
             state.export = .failed(.diskFull)
             return
