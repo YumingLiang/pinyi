@@ -83,24 +83,77 @@ final class SupplyAndReshuffleTests: XCTestCase {
         XCTAssertEqual(explicit.seed, 7)
     }
 
-    /// 平滑渐变目标图：相邻格的 128 近邻高度重叠，上限 2 很快用尽。
-    /// 方案原回退链（无全库搜索）会在素材充足（1500 张 ≥ 1200 格）时仍"忽略上限"并误报素材不足；
-    /// 补充的全库搜索级别可避免。
-    func testExhaustiveSearchAvoidsFalseShortage() throws {
+    /// 评审 M1 / T2：平滑渐变目标图（1,500 张、1,200 格、cap 2），相邻格的 128 近邻高度重叠，上限很快用尽。
+    /// 方案原回退链（只到 k = 128）会在素材充足时"忽略上限"并误报不足（评审实测 262 格）；
+    /// 分批加深（512 → 2048）后放宽次数为 0，且不需要逐格全库搜索。
+    func testBatchDeepeningAvoidsFalseShortage() throws {
         let (target, lib) = try fixture()
-        var strict = AssignmentConfiguration(seed: 2026)
-        strict.exhaustiveSearchBeforeRelaxing = false
-        let withoutSearch = try MosaicPipeline(assigner: GreedyAssigner(configuration: strict))
-            .generate(target: target, density: .coarse, library: lib)
-        XCTAssertGreaterThan(withoutSearch.assignment.statistics.count(at: .capIgnored), 0)
-        XCTAssertTrue(withoutSearch.assignment.statistics.relaxedConstraints)
+        // 与评审探针同口径：绝对 λ = 0.005。
+        let base = AssignmentConfiguration(seed: 2026).withAbsolutePenalties(usage: 0.005, lowDetail: 0)
+        func run(_ c: AssignmentConfiguration) throws -> MosaicAssignment {
+            try MosaicPipeline(assigner: GreedyAssigner(configuration: c)).generate(target: target, density: .coarse, library: lib).assignment
+        }
+        var legacy = base
+        legacy.batchDepths = []
+        legacy.exhaustiveCellLimit = 0
+        let old = try run(legacy)
+        print("[M1] legacy chain levels=\(old.statistics.levelCounts)")
+        XCTAssertGreaterThan(old.statistics.capIgnoredCount, 0)
+        XCTAssertTrue(old.statistics.relaxedConstraints)
 
-        let withSearch = try MosaicPipeline(assigner: GreedyAssigner(configuration: AssignmentConfiguration(seed: 2026)))
-            .generate(target: target, density: .coarse, library: lib)
-        XCTAssertGreaterThan(withSearch.assignment.statistics.count(at: .exhaustiveSearch), 0)
-        XCTAssertFalse(withSearch.assignment.statistics.relaxedConstraints)
-        XCTAssertEqual(neighborhoodViolations(withSearch.assignment, .eight), 0)
-        XCTAssertLessThanOrEqual(useCounts(withSearch.assignment, libraryCount: lib.count).max()!, 2)
+        var noExhaustive = base
+        noExhaustive.exhaustiveCellLimit = 0
+        let deep = try run(noExhaustive)
+        print("[M1] batch-deepening levels=\(deep.statistics.levelCounts)")
+        XCTAssertGreaterThan(deep.statistics.count(at: .batchDeepened), 0)
+        XCTAssertEqual(deep.statistics.relaxationCount, 0)
+        XCTAssertEqual(deep.statistics.count(at: .exhaustiveSearch), 0)
+        XCTAssertEqual(neighborhoodViolations(deep, .eight), 0)
+        XCTAssertLessThanOrEqual(useCounts(deep, libraryCount: lib.count).max()!, 2)
+
+        // 评审数据点：fallbackK = 512（逐格）也能降到 0。
+        var k512 = legacy
+        k512.fallbackK = 512
+        XCTAssertEqual(try run(k512).statistics.relaxationCount, 0)
+
+        // 默认配置（相对 λ + 全部回退级）同样不放宽；结果可复现。
+        let def = try run(AssignmentConfiguration(seed: 2026))
+        XCTAssertFalse(def.statistics.relaxedConstraints)
+        XCTAssertEqual(try run(AssignmentConfiguration(seed: 2026)), def)
+    }
+
+    /// T2：延后队列的处理是确定的——与分组大小无关、同种子逐格一致。
+    func testDeferredQueueDeterministicAcrossGroupSizes() throws {
+        let grid = try MosaicGrid(columns: 30, rows: 20)
+        let cells = FeatureMatrix(vectors: Array(repeating: FeatureVector(uniform: SIMD3(0.6, 0.02, 0.05)), count: grid.cellCount))
+        let lib = FeatureMatrix(vectors: syntheticVectors(count: 3000, seed: 5))
+        var c = AssignmentConfiguration(seed: 9)
+        c.cap = .limited(1)
+        let a = try GreedyAssigner(configuration: c).assign(grid: grid, cellFeatures: cells, library: lib)
+        XCTAssertGreaterThan(a.statistics.count(at: .batchDeepened), 0)
+        for g in [1, 7, 100, 5000] {
+            var cg = c
+            cg.batchQueryGroupSize = g
+            XCTAssertEqual(try GreedyAssigner(configuration: cg).assign(grid: grid, cellFeatures: cells, library: lib), a, "group \(g)")
+        }
+        XCTAssertEqual(neighborhoodViolations(a, .eight), 0)
+    }
+
+    /// M1 第 5 步：剩余 ≤ exhaustiveCellLimit 时才逐格全库搜索；超过则跳过全库、直接放宽。
+    func testExhaustiveOnlyWhenFewCellsRemain() throws {
+        let grid = try MosaicGrid(columns: 30, rows: 20)
+        let cells = FeatureMatrix(vectors: Array(repeating: FeatureVector(uniform: SIMD3(0.6, 0.02, 0.05)), count: grid.cellCount))
+        let lib = FeatureMatrix(vectors: syntheticVectors(count: 3000, seed: 5))
+        var c = AssignmentConfiguration(seed: 9, batchDepths: [64])
+        c.k = 8; c.fallbackK = 16; c.cap = .limited(1)
+        c.exhaustiveCellLimit = 10_000
+        let a = try GreedyAssigner(configuration: c).assign(grid: grid, cellFeatures: cells, library: lib)
+        XCTAssertGreaterThan(a.statistics.count(at: .exhaustiveSearch), 0)
+        XCTAssertFalse(a.statistics.relaxedConstraints)
+        c.exhaustiveCellLimit = 5
+        let b = try GreedyAssigner(configuration: c).assign(grid: grid, cellFeatures: cells, library: lib)
+        XCTAssertEqual(b.statistics.count(at: .exhaustiveSearch), 0)
+        XCTAssertGreaterThan(b.statistics.relaxationCount, 5)
     }
 
     func testSeedDerivationSequenceIsDistinct() {

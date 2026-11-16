@@ -55,19 +55,24 @@ final class ColorTests: XCTestCase {
     }
 
     /// 参考值：Bruce Lindbloom 计算器（sRGB, D65）。
-    func testCIELabReferenceValues() {
-        let red = CIELab(srgbRed: 1, green: 0, blue: 0)
-        XCTAssertClose(red.L, 53.2408, accuracy: 1e-2)
-        XCTAssertClose(red.a, 80.0925, accuracy: 1e-2)
-        XCTAssertClose(red.b, 67.2032, accuracy: 1e-2)
-        let blue = CIELab(srgbRed: 0, green: 0, blue: 1)
-        XCTAssertClose(blue.L, 32.2970, accuracy: 1e-2)
-        XCTAssertClose(blue.a, 79.1875, accuracy: 1e-2)
-        XCTAssertClose(blue.b, -107.8602, accuracy: 1e-2)
-        let white = CIELab(srgbRed: 1, green: 1, blue: 1)
-        XCTAssertClose(white.L, 100, accuracy: 1e-2)
-        XCTAssertClose(white.a, 0, accuracy: 1e-2)
-        XCTAssertClose(white.b, 0, accuracy: 1e-2)
+    /// A-03：CIELAB 对照表，容差 1e-4（QA 要求）。参考值由同一组常数（Lindbloom sRGB→XYZ 矩阵、
+    /// D65 白点 0.95047/1/1.08883、CIE 分段函数）用 Python 双精度独立计算，保留 6 位小数。
+    func testA03CIELabReferenceValues() {
+        let table: [((Float, Float, Float), (Double, Double, Double))] = [
+            ((1, 0, 0), (53.240794, 80.092460, 67.203197)),
+            ((0, 1, 0), (87.734722, -86.182716, 83.179321)),
+            ((0, 0, 1), (32.297011, 79.187520, -107.860162)),
+            ((1, 1, 1), (100.000004, -0.000017, 0.000007)),   // 矩阵行和非精确归一，白点不严格为 0
+            ((0, 0, 0), (0.0, 0.0, 0.0)),
+            ((0.5, 0.5, 0.5), (53.388967, -0.000010, 0.000004)),
+            ((0.2, 0.4, 0.6), (42.008146, -0.151708, -32.846036)),
+        ]
+        for (rgb, ref) in table {
+            let c = CIELab(srgbRed: rgb.0, green: rgb.1, blue: rgb.2)
+            XCTAssertClose(c.L, ref.0, accuracy: 1e-4, "L \(rgb)")
+            XCTAssertClose(c.a, ref.1, accuracy: 1e-4, "a \(rgb)")
+            XCTAssertClose(c.b, ref.2, accuracy: 1e-4, "b \(rgb)")
+        }
     }
 
     func testColorSpaceDispatch() {

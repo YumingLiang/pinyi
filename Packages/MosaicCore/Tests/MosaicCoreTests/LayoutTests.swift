@@ -83,14 +83,61 @@ final class LayoutTests: XCTestCase {
     func testExtremePanorama() throws {
         let g = try assertRules(2000, 100, .coarse) // 20:1, s = 50 → M = 2
         XCTAssertEqual([g.columns, g.rows], [40, 2])
-        let g1 = try assertRules(4000, 100, .coarse) // 40:1, s = 100 → M = 1, r = 0
-        XCTAssertEqual(g1.rows, 1)
-        XCTAssertFalse(g1.shortEdgeUnderflow)
-        // 短边不足一格：M 钳为 1，不裁不补（待架构师确认的特例）。
-        let g2 = try Layout.grid(width: 3000, height: 50, density: .coarse) // s = 75 > 50
-        XCTAssertEqual(g2.rows, 1)
-        XCTAssertTrue(g2.shortEdgeUnderflow)
-        XCTAssertEqual(g2.cropRect, CropRect(x: 0, y: 0, width: 3000, height: 50))
+    }
+
+    /// A-18 / T5：刚好 N:1 的边界（s = 短边），常规分支即 1×N、零裁切，与方案 A 结果一致。
+    func testExactlyNToOneBoundary() throws {
+        for d in [Density.coarse, .medium, .fine] {
+            let n = d.columns
+            let g = try assertRules(n * 50, 50, d)
+            XCTAssertEqual([g.columns, g.rows], [n, 1])
+            XCTAssertFalse(g.shortEdgeUnderflow)
+            XCTAssertEqual(g.croppedAmount, 0)
+            XCTAssertEqual(g.cellSize, 50)
+            let v = try assertRules(50, n * 50, d)
+            XCTAssertEqual([v.columns, v.rows], [1, n])
+            // 刚超过 N:1 一个像素 → 方案 A，裁 1 px（两侧各 0.5）。
+            let over = try Layout.grid(width: n * 50 + 1, height: 50, density: d)
+            XCTAssertTrue(over.shortEdgeUnderflow)
+            XCTAssertEqual([over.columns, over.rows], [n, 1])
+            XCTAssertEqual(over.cropRect, CropRect(x: 0.5, y: 0, width: Double(n * 50), height: 50))
+        }
+    }
+
+    /// 产品决定 v0.3 补充决定 9「方案 A」/ 评审 M4 / A-18 T5：极端长图格子取短边、1 行 N 格、长边居中裁切、不拉伸。
+    func testExtremeLongImagePlanA() throws {
+        // 横向 3000×50 粗档：s 若按长边为 75 > 50 → 方案 A：格边 50，40 格占 2000，左右各裁 500。
+        let g = try Layout.grid(width: 3000, height: 50, density: .coarse)
+        XCTAssertTrue(g.shortEdgeUnderflow)
+        XCTAssertEqual([g.columns, g.rows], [40, 1])
+        XCTAssertEqual(g.cellSize, 50)
+        XCTAssertEqual(g.cropRect, CropRect(x: 500, y: 0, width: 2000, height: 50))
+        XCTAssertEqual(g.croppedAmount, 1000)
+        for i in 0..<g.cellCount {
+            let r = g.cellRect(i)
+            XCTAssertEqual(r.width, r.height, accuracy: 1e-9, "正方形格")
+            XCTAssertEqual(g.cellPixelRegion(i), PixelRegion(x: 500 + 50 * i, y: 0, width: 50, height: 50))
+        }
+        // 导出比例严格 40:1（不再是之前的 4000×100 拉伸）。
+        let e = g.exportSize(longEdge: 4000)
+        XCTAssertEqual([e.width, e.height, e.cellPixels], [4000, 100, 100])
+        XCTAssertEqual(Double(e.width) / Double(e.height), Double(g.cropRect.width) / Double(g.cropRect.height), accuracy: 1e-12)
+
+        // 竖向 50×3000：1 列 40 格，上下各裁 500。
+        let v = try Layout.grid(width: 50, height: 3000, density: .coarse)
+        XCTAssertTrue(v.shortEdgeUnderflow)
+        XCTAssertEqual([v.columns, v.rows], [1, 40])
+        XCTAssertEqual(v.cropRect, CropRect(x: 0, y: 500, width: 50, height: 2000))
+        XCTAssertEqual(v.cellPixelRegion(39), PixelRegion(x: 0, y: 500 + 39 * 50, width: 50, height: 50))
+        let ve = v.exportSize(longEdge: 6000)
+        XCTAssertEqual([ve.width, ve.height], [150, 6000])
+
+        // 细档、非整数：7 × 1000 → 120 格 × 7 = 840，两侧各裁 80。
+        let f = try Layout.grid(width: 1000, height: 7, density: .fine)
+        XCTAssertEqual(f.cropRect, CropRect(x: 80, y: 0, width: 840, height: 7))
+        // 取样后的特征可直接用（端到端不抛错）。
+        let img = try PixelBuffer.solid(width: 3000, height: 50, red: 10, green: 200, blue: 30)
+        XCTAssertEqual(try TargetSampler().cellFeatures(of: img, layout: g).count, 40)
     }
 
     func testCellPixelRegionsCoverCropWithoutGapsOrOverflow() throws {
@@ -118,7 +165,32 @@ final class LayoutTests: XCTestCase {
         XCTAssertEqual(p.width, 4500)
         XCTAssertEqual(p.height, 6000)
         let odd = try Layout.grid(width: 1000, height: 1000, density: .fine).exportSize(longEdge: 4000) // 4000/120 = 33
-        XCTAssertEqual(odd.width, 3960) // 不拉伸，长边向下取整
+        XCTAssertEqual(odd.width, 3960) // 不拉伸，长边向下取整（决定 v0.3 导出尺寸最终规则）
+    }
+
+    /// A-20 / T6：导出尺寸表格化断言（4000/6000 × 三档 × 横/竖/1:1）。
+    /// 规则（决定 v0.3 01:12）：每格像素 = floor(标称 ÷ N)，导出 = 每格 × 格数；长边在标称 99%–100%。
+    func testExportSizeTable() throws {
+        // (标称, 档位) → 期望每格像素、长边
+        let expected: [(Int, Density, Int, Int)] = [
+            (4000, .coarse, 100, 4000), (4000, .medium, 50, 4000), (4000, .fine, 33, 3960),
+            (6000, .coarse, 150, 6000), (6000, .medium, 75, 6000), (6000, .fine, 50, 6000),
+        ]
+        for (nominal, d, cell, long) in expected {
+            for (w, h) in [(4032, 3024), (3024, 4032), (2000, 2000)] {
+                let g = try Layout.grid(width: w, height: h, density: d)
+                let e = g.exportSize(longEdge: nominal)
+                XCTAssertEqual(e.cellPixels, cell, "\(nominal) \(d) \(w)x\(h)")
+                XCTAssertEqual(max(e.width, e.height), long)
+                XCTAssertEqual(e.width, cell * g.columns)
+                XCTAssertEqual(e.height, cell * g.rows)
+                let ratio = Double(max(e.width, e.height)) / Double(nominal)
+                XCTAssertTrue(ratio >= 0.99 && ratio <= 1.0, "长边在标称 99%–100%：\(ratio)")
+            }
+        }
+        // 4000 细档横图：3960 × 2970
+        let e = try Layout.grid(width: 4032, height: 3024, density: .fine).exportSize(longEdge: 4000)
+        XCTAssertEqual([e.width, e.height], [3960, 2970])
     }
 
     func testInvalidSize() {

@@ -11,12 +11,15 @@ public struct FeatureTable: Sendable, Equatable {
     public private(set) var aspectRatio: [Float]
     /// 每行标志位。
     public private(set) var flags: [FeatureFlags]
+    /// 特征口径（评审 S4）。
+    public var spec: FeatureSpec = .current
 
     /// 触发压缩的空洞率阈值（方案：> 20%）。
     public static let compactionThreshold = 0.2
 
     /// 由记录构造（只支持 12 维）。
-    public init(records: [FeatureRecord]) {
+    public init(records: [FeatureRecord], spec: FeatureSpec = .current) {
+        self.spec = spec
         matrix = FeatureMatrix(records: records)
         lightnessVariance = records.map(\.lightnessVariance)
         aspectRatio = records.map(\.aspectRatio)
@@ -25,7 +28,9 @@ public struct FeatureTable: Sendable, Equatable {
 
     /// 由各列直接构造。
     /// - Throws: 列长度与 `matrix.count` 不一致时抛 `MosaicError.countMismatch`。
-    public init(matrix: FeatureMatrix, lightnessVariance: [Float], aspectRatio: [Float], flags: [FeatureFlags]) throws {
+    public init(matrix: FeatureMatrix, lightnessVariance: [Float], aspectRatio: [Float], flags: [FeatureFlags],
+                spec: FeatureSpec = .current) throws {
+        self.spec = spec
         for c in [lightnessVariance.count, aspectRatio.count, flags.count] where c != matrix.count {
             throw MosaicError.countMismatch(expected: matrix.count, actual: c)
         }
@@ -82,8 +87,9 @@ public struct FeatureTable: Sendable, Equatable {
         }
         // 维度与长度由构造保证，不会抛错。
         let m = (try? FeatureMatrix(dimension: dim, count: n, soa: soa)) ?? matrix
-        let t = FeatureTable(uncheckedMatrix: m, lightnessVariance: keep.map { lightnessVariance[$0] },
+        var t = FeatureTable(uncheckedMatrix: m, lightnessVariance: keep.map { lightnessVariance[$0] },
                              aspectRatio: keep.map { aspectRatio[$0] }, flags: keep.map { flags[$0] })
+        t.spec = spec
         return (t, map)
     }
 
@@ -96,8 +102,10 @@ public struct FeatureTable: Sendable, Equatable {
             for i in 0..<prefix { soa[d * prefix + i] = matrix.storage[d * count + i] }
         }
         let m = (try? FeatureMatrix(dimension: dim, count: prefix, soa: soa)) ?? matrix
-        return FeatureTable(uncheckedMatrix: m, lightnessVariance: Array(lightnessVariance.prefix(prefix)),
-                            aspectRatio: Array(aspectRatio.prefix(prefix)), flags: Array(flags.prefix(prefix)))
+        var t = FeatureTable(uncheckedMatrix: m, lightnessVariance: Array(lightnessVariance.prefix(prefix)),
+                             aspectRatio: Array(aspectRatio.prefix(prefix)), flags: Array(flags.prefix(prefix)))
+        t.spec = spec
+        return t
     }
 
     init(uncheckedMatrix: FeatureMatrix, lightnessVariance: [Float], aspectRatio: [Float], flags: [FeatureFlags]) {

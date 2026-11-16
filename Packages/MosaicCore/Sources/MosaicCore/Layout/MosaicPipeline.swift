@@ -11,6 +11,8 @@ public struct MosaicGeneration: Hashable, Sendable {
 
     /// 生成所用种子。
     public var seed: UInt64 { assignment.seed }
+    /// 结果页是否显示 `shortage.result`（见 `AssignmentStatistics.shouldShowShortageNotice`）。
+    public var shouldShowShortageNotice: Bool { assignment.statistics.shouldShowShortageNotice }
 }
 
 /// 端到端便捷入口：目标图像素 → 网格划分（§3.6）→ 每格特征 → 约束分配。
@@ -70,16 +72,24 @@ public struct MosaicPipeline: Sendable {
     }
 
     /// 以 `FeatureTable`（`features.bin` 读出的形态）为素材：自动带亮度方差并排除 tombstone 行。
+    /// - Throws: 另外在素材口径与取样器口径不一致时抛 `MosaicError.featureSpecMismatch`（评审 S4）。
     public func generate(target: PixelBuffer, density: Density, table: FeatureTable, mask: BitMask? = nil,
                          seed: UInt64? = nil, cancellation: CancellationToken? = nil,
                          progress: MosaicProgressHandler? = nil) throws -> MosaicGeneration {
-        if let mask, mask.count != table.count {
-            throw MosaicError.countMismatch(expected: table.count, actual: mask.count)
+        try generate(target: target, density: density, snapshot: LibrarySnapshot(table: table, sourceMask: mask),
+                     seed: seed, cancellation: cancellation, progress: progress)
+    }
+
+    /// 以快照为素材（推荐的 App 入口，评审 S6）：只会选中快照内（来源 ∧ 已扫描 ∧ 未删除）的行。
+    public func generate(target: PixelBuffer, density: Density, snapshot: LibrarySnapshot, seed: UInt64? = nil,
+                         cancellation: CancellationToken? = nil,
+                         progress: MosaicProgressHandler? = nil) throws -> MosaicGeneration {
+        let targetSpec = sampler.extractor.spec
+        guard snapshot.table.spec == targetSpec else {
+            throw MosaicError.featureSpecMismatch(library: snapshot.table.spec, target: targetSpec)
         }
-        let live = table.liveMask
-        let m = mask.map { $0.intersection(live) } ?? live
-        return try generate(target: target, density: density, library: table.matrix, mask: m, seed: seed,
-                            lightnessVariance: table.lightnessVariance, cancellation: cancellation, progress: progress)
+        return try generate(target: target, density: density, library: snapshot.table.matrix, mask: snapshot.mask, seed: seed,
+                            lightnessVariance: snapshot.table.lightnessVariance, cancellation: cancellation, progress: progress)
     }
 
     /// Swift 并发入口：Task 被取消时（例如 App 进后台、后台任务到期）立刻通知内核各工作线程停止，

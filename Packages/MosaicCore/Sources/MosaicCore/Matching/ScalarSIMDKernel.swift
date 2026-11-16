@@ -160,12 +160,14 @@ public struct ScalarSIMDKernel: DistanceKernel {
                 var count = heapCount[qi]
                 for j in 0..<len {
                     let idx = t0 + j
-                    if let words = maskWords, (words[idx >> 6] >> UInt64(idx & 63)) & 1 == 0 { continue }
                     let dist = scratch[j]
                     let uidx = UInt32(truncatingIfNeeded: idx)
+                    // 评审 S5：先与堆顶比较（堆满后绝大多数候选在这里被淘汰），再查掩码。
+                    if count == k, !isWorse(hd[0], hi[0], than: dist, uidx) { continue }
+                    if let words = maskWords, (words[idx >> 6] >> UInt64(idx & 63)) & 1 == 0 { continue }
                     if count < k {
                         heapPush(hd, hi, &count, dist, uidx)
-                    } else if isWorse(hd[0], hi[0], than: dist, uidx) {
+                    } else {
                         hd[0] = dist
                         hi[0] = uidx
                         siftDown(hd, hi, count, 0)

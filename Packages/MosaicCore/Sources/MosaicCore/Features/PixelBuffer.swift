@@ -21,6 +21,8 @@ public struct PixelBuffer: Sendable {
     public let layout: Layout
     /// 原始字节。
     public let bytes: [UInt8]
+    /// 像素的 RGB 颜色空间（A-04）。默认 `.sRGB`；`.displayP3` 时特征提取会先转到 sRGB。
+    public var colorSpace: RGBColorSpace = .sRGB
 
     /// 创建像素缓冲区。
     ///
@@ -48,6 +50,41 @@ public struct PixelBuffer: Sendable {
         self.bytesPerRow = stride
         self.layout = layout
         self.bytes = bytes
+    }
+
+    /// 指定颜色空间的构造。
+    public init(width: Int, height: Int, bytesPerRow: Int? = nil, layout: Layout = .rgba8, colorSpace: RGBColorSpace,
+                bytes: [UInt8]) throws {
+        try self.init(width: width, height: height, bytesPerRow: bytesPerRow, layout: layout, bytes: bytes)
+        self.colorSpace = colorSpace
+    }
+
+    /// (x, y) 处像素的线性 **sRGB**（P3 缓冲区先线性化再矩阵转换并钳到 sRGB 色域；sRGB 缓冲区不做二次转换）。
+    @inlinable
+    public func linearSRGB(x: Int, y: Int) -> LinearRGB {
+        let p = rgb(x: x, y: y)
+        let lin = LinearRGB(srgb8Red: p.r, green: p.g, blue: p.b)
+        switch colorSpace {
+        case .sRGB: return lin
+        case .displayP3: return DisplayP3.toLinearSRGB(lin)
+        }
+    }
+
+    /// 转成 8 位 sRGB 缓冲区（RGBA8，紧密排列）；已是 sRGB 时原样返回。
+    public func convertedToSRGB() -> PixelBuffer {
+        if colorSpace == .sRGB { return self }
+        var out = [UInt8](repeating: 255, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let e = linearSRGB(x: x, y: y).srgb
+                let o = (y * width + x) * 4
+                out[o] = UInt8((min(max(e.r, 0), 1) * 255).rounded())
+                out[o + 1] = UInt8((min(max(e.g, 0), 1) * 255).rounded())
+                out[o + 2] = UInt8((min(max(e.b, 0), 1) * 255).rounded())
+            }
+        }
+        // 尺寸与字节数由构造保证。
+        return (try? PixelBuffer(width: width, height: height, layout: .rgba8, colorSpace: .sRGB, bytes: out)) ?? self
     }
 
     /// 便捷构造：整张图填充同一 sRGB 颜色（主要用于测试与合成数据）。

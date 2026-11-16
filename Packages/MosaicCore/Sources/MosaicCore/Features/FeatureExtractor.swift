@@ -41,6 +41,9 @@ public struct FeatureExtractor: Sendable {
         var lightnessSqSum: Double = 0
         var pixelCount = 0
 
+        // 单遍（评审 S1）：每个像素线性化一次，同时累加子块均值与亮度；亮度只算 L 分量。
+        // 段长 ≥ 2 时各子块互不重叠；只有 1 像素宽/高时子块共享像素，每个像素被等权重复计入，均值与方差不变。
+        let lScale = Double(colorSpace.lightnessScale)
         for by in 0..<2 {
             let ys = FeatureExtractor.span(index: by, parts: 2, length: r.height)
             for bx in 0..<2 {
@@ -49,15 +52,20 @@ public struct FeatureExtractor: Sendable {
                 var n = 0
                 for y in ys {
                     for x in xs {
-                        let p = buffer.rgb(x: r.x + x, y: r.y + y)
-                        let lin = LinearRGB(srgb8Red: p.r, green: p.g, blue: p.b)
+                        let lin = buffer.linearSRGB(x: r.x + x, y: r.y + y)
+                        let l: Double
                         switch averaging {
                         case .linearLight:
                             acc += SIMD3<Double>(Double(lin.r), Double(lin.g), Double(lin.b))
+                            l = Double(colorSpace.lightness(lin)) * lScale
                         case .perceptual:
                             let c = colorSpace.convert(lin)
                             acc += SIMD3<Double>(Double(c.x), Double(c.y), Double(c.z))
+                            l = Double(c.x) * lScale
                         }
+                        lightnessSum += l
+                        lightnessSqSum += l * l
+                        pixelCount += 1
                         n += 1
                     }
                 }
@@ -70,18 +78,6 @@ public struct FeatureExtractor: Sendable {
                     color = SIMD3<Float>(Float(mean.x), Float(mean.y), Float(mean.z))
                 }
                 blocks[by * 2 + bx] = color
-            }
-        }
-
-        // 亮度方差：对整个区域逐像素计算（只算一次，不随子块重叠重复计）。
-        for y in 0..<r.height {
-            for x in 0..<r.width {
-                let p = buffer.rgb(x: r.x + x, y: r.y + y)
-                let lin = LinearRGB(srgb8Red: p.r, green: p.g, blue: p.b)
-                let l = Double(colorSpace.convert(lin).x * colorSpace.lightnessScale)
-                lightnessSum += l
-                lightnessSqSum += l * l
-                pixelCount += 1
             }
         }
         let meanL = lightnessSum / Double(pixelCount)

@@ -34,19 +34,33 @@ final class PerformanceTests: XCTestCase {
         XCTAssertEqual(neighborhoodViolations(a, .eight), 0)
     }
 
-    /// 最坏情况：整张目标图同一颜色（如大片天空），每格的 128 近邻很快被上限用尽，大量格子走全库搜索。
-    func testWorstCaseUniformTargetTiming() throws {
-        let cols = fullScale ? 120 : 30
-        let rows = fullScale ? 90 : 20
-        let library = fullScale ? 50_000 : 3_000
+    /// 最坏情况（评审 M1 / S8）：整张目标图同一颜色（如大片天空）、合成 5 万张、cap = 1。
+    /// 每格的 128 近邻很快被用尽，大量格子走「分批加深」。`MOSAIC_BENCH=1` 时检查 release 软阈值。
+    private func worstCase(cols: Int, rows: Int, library: Int, softLimitMs: Double?) throws {
         let grid = try MosaicGrid(columns: cols, rows: rows)
         let lib = FeatureMatrix(vectors: syntheticVectors(count: library, seed: 5))
         let cells = FeatureMatrix(vectors: Array(repeating: FeatureVector(uniform: SIMD3(0.6, 0.02, 0.05)), count: grid.cellCount))
+        var config = AssignmentConfiguration()
+        config.cap = .limited(1)
         let start = DispatchTime.now().uptimeNanoseconds
-        let a = try GreedyAssigner().assign(grid: grid, cellFeatures: cells, library: lib)
+        let a = try GreedyAssigner(configuration: config).assign(grid: grid, cellFeatures: cells, library: lib)
         let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
-        print("[bench] worst-case uniform \(cols)x\(rows) × \(library): \(String(format: "%.1f", ms)) ms; levels=\(a.statistics.levelCounts)")
-        XCTAssertFalse(a.statistics.relaxedConstraints)
+        let st = a.statistics
+        print("[bench] worst-case uniform \(cols)x\(rows) × \(library), cap=1: \(String(format: "%.1f", ms)) ms; levels=\(st.levelCounts); neighborhoodRelaxed=\(st.neighborhoodRelaxedCount) capIgnored=\(st.capIgnoredCount) maxUses=\(st.maxUses)")
+        XCTAssertEqual(neighborhoodViolations(a, .four), 0, "放宽后仍保证 4 邻域不重复")
+        if fullScale, let softLimitMs { XCTAssertLessThan(ms, softLimitMs, "release 软阈值（box）") }
+    }
+
+    func testWorstCaseUniformTargetTiming() throws {   // 细档 120×90
+        try worstCase(cols: fullScale ? 120 : 30, rows: fullScale ? 90 : 20, library: fullScale ? 50_000 : 3_000, softLimitMs: 2_500)
+    }
+
+    func testWorstCaseUniformMediumTiming() throws {   // 中档 80×60
+        try worstCase(cols: fullScale ? 80 : 20, rows: fullScale ? 60 : 15, library: fullScale ? 50_000 : 3_000, softLimitMs: 1_500)
+    }
+
+    func testWorstCaseUniformSquareMediumTiming() throws {   // 中档 1:1 上界 80×80
+        try worstCase(cols: fullScale ? 80 : 20, rows: fullScale ? 80 : 20, library: fullScale ? 50_000 : 3_000, softLimitMs: 1_500)
     }
 
     /// 新路径：带亮度方差打分 + 取消令牌 + 进度回调的完整分配，与旧 API 耗时对比；另测取消延迟。

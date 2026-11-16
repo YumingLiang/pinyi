@@ -27,9 +27,10 @@ public struct CropRect: Hashable, Sendable {
 /// - 短边余量 `r = 短边 − M·s` 两侧居中裁掉（每侧 r/2 ≤ s/2）；不拉伸、不补边；
 /// - 不限制宽高比。
 ///
-/// 特例（方案未覆盖，待架构师确认）：极端长图使 `短边 < s` 时 `M` 被钳为 1，此时余量为负，
-/// 无法既"正方形"又"不补边"。本实现选择**不裁、不补**：唯一一行格子取整个短边高度
-/// （格子取样区域为 `s × 短边` 的长方形），并把 `shortEdgeUnderflow` 置为 true 供上层决定。
+/// 极端长图（产品决定 v0.3 补充决定 9「方案 A」，2026-11-16 01:10 定稿）：宽高比超过 N:1、
+/// 短边排不满一格（`短边 < 长边 ÷ N`）时，**格子边长取短边**，排 1 行（竖图为 1 列）N 格，
+/// 长边多出的 `长边 − N × 短边` 两侧居中裁掉；不拉伸、不补边、不拒绝、不提示。
+/// 刚好 N:1 时 `s = 短边`，走常规分支，结果与方案 A 相同（1 × N、零裁切）。
 public struct GridLayout: Hashable, Sendable {
     /// 网格（列 × 行）。
     public let grid: MosaicGrid
@@ -41,7 +42,7 @@ public struct GridLayout: Hashable, Sendable {
     public let imageWidth: Int
     /// 原图高。
     public let imageHeight: Int
-    /// 短边是否不足一个格子（见类型说明中的特例）。
+    /// 是否触发了极端长图方案 A（格子边长取短边、长边居中裁切）。仅作内部/诊断标记，UI 不据此提示。
     public let shortEdgeUnderflow: Bool
 
     /// 列数。
@@ -52,9 +53,9 @@ public struct GridLayout: Hashable, Sendable {
     public var cellCount: Int { grid.cellCount }
     /// 目标图是否横向（宽 ≥ 高）。正方形按横向处理。
     public var isLandscape: Bool { imageWidth >= imageHeight }
-    /// 短边方向被裁掉的总像素数（两侧之和；特例时为 0）。
+    /// 被裁掉的总像素数（两侧之和）：常规为短边方向的余量；方案 A 时为长边方向的余量。
     public var croppedAmount: Double {
-        isLandscape ? Double(imageHeight) - cropRect.height : Double(imageWidth) - cropRect.width
+        (Double(imageWidth) - cropRect.width) + (Double(imageHeight) - cropRect.height)
     }
 
     /// 第 `index` 个格子在目标图中的浮点矩形。
@@ -80,9 +81,11 @@ public struct GridLayout: Hashable, Sendable {
         return PixelRegion(x: x, y: y, width: w, height: h)
     }
 
-    /// 导出尺寸：格子像素边长 = 导出长边 ÷ N（取整），短边 = M × 该边长（技术方案 v0.2 §3.6）。
-    /// - Parameter longEdge: 用户选择的导出长边（4000 默认 / 6000）。
-    /// - Returns: 导出图宽高与每格像素边长。长边可能比 `longEdge` 少几个像素（N 不整除时向下取整，不拉伸）。
+    /// 导出尺寸（产品决定 v0.3「导出尺寸最终规则」2026-11-16 01:12，唯一正式策略）：
+    /// 每格像素 = floor(标称长边 ÷ 长边格数)；导出尺寸 = 每格像素 × 格数；不做最后缩放、不做余数分摊。
+    /// 例：4000 + 细档 → 33 px/格 → 长边 3960（标称的 99%）。长边恒在标称值的 99%–100%（N ≤ 120、标称 ≥ 4000 时）。
+    /// - Parameter longEdge: 用户选择的导出标称长边（4000 默认 / 6000；8000 仅性能页摸底）。
+    /// - Returns: 导出图宽高与每格像素边长。
     public func exportSize(longEdge: Int) -> (width: Int, height: Int, cellPixels: Int) {
         let n = isLandscape ? columns : rows
         let m = isLandscape ? rows : columns
@@ -108,9 +111,19 @@ public enum Layout {
         let longPx = landscape ? width : height
         let shortPx = landscape ? height : width
         let exactM = shortPx * n / longPx
-        let m = max(1, exactM)
-        let underflow = exactM == 0
-        let usedShort = underflow ? short : Double(m * longPx) / Double(n)
+        if exactM == 0 {
+            // 方案 A：格子边长 = 短边，1 × N，长边居中裁掉 long − N·short。
+            let usedLong = Double(n) * short
+            let offset = (long - usedLong) / 2
+            let grid = landscape ? try MosaicGrid(columns: n, rows: 1) : try MosaicGrid(columns: 1, rows: n)
+            let crop = landscape
+                ? CropRect(x: offset, y: 0, width: usedLong, height: short)
+                : CropRect(x: 0, y: offset, width: short, height: usedLong)
+            return GridLayout(grid: grid, cellSize: short, cropRect: crop,
+                              imageWidth: width, imageHeight: height, shortEdgeUnderflow: true)
+        }
+        let m = exactM
+        let usedShort = Double(m * longPx) / Double(n)
         let offset = (short - usedShort) / 2
 
         let grid = landscape ? try MosaicGrid(columns: n, rows: m) : try MosaicGrid(columns: m, rows: n)
@@ -118,6 +131,6 @@ public enum Layout {
             ? CropRect(x: 0, y: offset, width: long, height: usedShort)
             : CropRect(x: offset, y: 0, width: usedShort, height: long)
         return GridLayout(grid: grid, cellSize: s, cropRect: crop,
-                          imageWidth: width, imageHeight: height, shortEdgeUnderflow: underflow)
+                          imageWidth: width, imageHeight: height, shortEdgeUnderflow: false)
     }
 }

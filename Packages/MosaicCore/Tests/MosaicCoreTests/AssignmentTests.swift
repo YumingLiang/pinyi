@@ -19,7 +19,7 @@ final class AssignmentTests: XCTestCase {
         XCTAssertFalse(a.statistics.relaxedConstraints)
         XCTAssertFalse(a.statistics.needsRepetition)
         XCTAssertEqual(a.statistics.distinctTilesUsed, 1200)
-        XCTAssertEqual(a.statistics.count(at: .primary) + a.statistics.count(at: .expandedCandidates) + a.statistics.count(at: .exhaustiveSearch), 1200)
+        XCTAssertEqual(a.statistics.count(at: .primary) + a.statistics.count(at: .expandedCandidates) + a.statistics.count(at: .batchDeepened) + a.statistics.count(at: .exhaustiveSearch), 1200)
     }
 
     /// 素材少于格子数：自动上限 = ceil(1200/300×2) = 8；仍满足相邻不重复。
@@ -161,7 +161,7 @@ final class AssignmentTests: XCTestCase {
         let grid = try MosaicGrid(columns: 8, rows: 8)
         let cellVectors = syntheticVectors(count: 64, seed: 21)
         let lib = FeatureMatrix(vectors: syntheticVectors(count: 500, seed: 22) + cellVectors)
-        let config = AssignmentConfiguration(usagePenalty: 0, cap: .unlimited, neighborhood: .none, relaxedNeighborhood: .none)
+        let config = AssignmentConfiguration(cap: .unlimited, neighborhood: .none, relaxedNeighborhood: .none).withAbsolutePenalties(usage: 0, lowDetail: 0)
         let a = try GreedyAssigner(configuration: config).assign(grid: grid, cellFeatures: FeatureMatrix(vectors: cellVectors), library: lib)
         XCTAssertEqual(a.tiles, (0..<64).map { 500 + $0 })
         XCTAssertEqual(a.statistics.totalDistance, 0)
@@ -175,7 +175,7 @@ final class AssignmentTests: XCTestCase {
         var vs = [target]
         for i in 1...20 { vs.append(FeatureVector(uniform: SIMD3(0.5 + Float(i) * 0.01, 0, 0))) }
         let lib = FeatureMatrix(vectors: vs)
-        let base = AssignmentConfiguration(usagePenalty: 0, cap: .unlimited, neighborhood: .none, relaxedNeighborhood: .none)
+        let base = AssignmentConfiguration(cap: .unlimited, neighborhood: .none, relaxedNeighborhood: .none).withAbsolutePenalties(usage: 0, lowDetail: 0)
         let a0 = try GreedyAssigner(configuration: base).assign(grid: grid, cellFeatures: cells, library: lib)
         XCTAssertEqual(Set(a0.tiles), [0])
         var penalized = base

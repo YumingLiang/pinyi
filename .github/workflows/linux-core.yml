@@ -48,3 +48,30 @@ jobs:
       - name: Build MosaicAccelerate (Linux 上为空模块，只验证可解析/编译)
         working-directory: Packages/MosaicAccelerate
         run: swift build
+
+  # QA A-21：全规模性能基线（10,800 格 × 5 万合成候选，release），单独 job，不拖慢上面的门禁。
+  # 软阈值（box 8 核实测的约 2 倍余量）只在 MOSAIC_BENCH=1 时生效；耗时只防 Linux 回归，不作 iPhone 11 证据。
+  mosaic-core-bench:
+    name: MosaicCore full-scale bench (A-21, release)
+    runs-on: ubuntu-latest
+    container: swift:6.2
+    timeout-minutes: 30
+    env:
+      MOSAIC_BENCH: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Full-scale PerformanceTests (release)
+        working-directory: Packages/MosaicCore
+        run: |
+          swift test -c release --filter 'PerformanceTests|FeatureFileTests.testLargeFile50kRecords|CancellationTests' 2>&1 | tee bench.txt
+          grep '\[bench\]' bench.txt > bench-summary.txt || true
+
+      - name: Upload bench output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mosaic-core-bench
+          path: |
+            Packages/MosaicCore/bench.txt
+            Packages/MosaicCore/bench-summary.txt

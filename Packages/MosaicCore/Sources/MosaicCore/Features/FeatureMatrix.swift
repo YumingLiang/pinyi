@@ -73,6 +73,17 @@ public struct FeatureMatrix: Sendable, Equatable {
         FeatureMatrix(uncheckedDimension: dimension, count: 1, storage: row(index))
     }
 
+    /// 按下标列表取出若干向量组成新矩阵（SoA，顺序与 `indices` 一致；用于分批加深）。
+    public func gather(_ indices: [Int]) -> FeatureMatrix {
+        let m = indices.count
+        var out = [Float](repeating: 0, count: dimension * m)
+        for d in 0..<dimension {
+            let base = d * count
+            for (j, i) in indices.enumerated() { out[d * m + j] = storage[base + i] }
+        }
+        return FeatureMatrix(uncheckedDimension: dimension, count: m, storage: out)
+    }
+
     private init(uncheckedDimension dimension: Int, count: Int, storage: [Float]) {
         self.dimension = dimension
         self.count = count

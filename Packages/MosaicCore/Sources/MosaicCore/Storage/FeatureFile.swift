@@ -47,15 +47,17 @@ public struct FeatureFileHeader: Sendable, Equatable {
     /// 容器格式版本。
     public var formatVersion: UInt16
     /// 特征定义版本（`MosaicCoreInfo.featureVersion`），不一致时方案要求全部特征重算（§2.5）。
-    public var featureVersion: UInt32
+    public var featureVersion: UInt32 { spec.featureVersion }
     /// 特征维度（当前固定 12）。
     public var dimension: Int
     /// 记录数（含 tombstone）。
     public var recordCount: Int
     /// 每块记录数。
     public var chunkSize: Int
-    /// 写入时的颜色空间。
-    public var colorSpace: FeatureColorSpace
+    /// 写入时的特征口径（颜色空间 + 平均方式 + 特征版本，评审 S4）。
+    public var spec: FeatureSpec
+    /// 写入时的颜色空间（= `spec.colorSpace`）。
+    public var colorSpace: FeatureColorSpace { spec.colorSpace }
     /// 写入时 tombstone 行数（冗余字段，便于不读正文就判断是否需要压缩）。
     public var tombstoneCount: Int
 }
@@ -74,7 +76,7 @@ public enum FeatureFileError: Error, Equatable, Sendable {
     case unsupportedFormatVersion(found: UInt16, supported: UInt16)
     /// 特征定义版本不一致。
     case featureVersionMismatch(found: UInt32, expected: UInt32)
-    /// 维度或颜色空间与期望不符。
+    /// 维度、颜色空间或平均方式与期望不符。
     case incompatibleLayout(String)
     /// 文件被截断：按头部应有 `expectedBytes`，实际 `actualBytes`。
     case truncated(expectedBytes: Int, actualBytes: Int)
@@ -135,9 +137,10 @@ public enum FeatureFile {
     // MARK: 写
 
     /// 编码为字节（不落盘）。
-    public static func encode(_ table: FeatureTable, colorSpace: FeatureColorSpace = .oklab,
-                              featureVersion: UInt32 = MosaicCoreInfo.featureVersion,
+    /// 头部口径取自 `table.spec`。
+    public static func encode(_ table: FeatureTable,
                               chunkSize: Int = FeatureFileFormat.defaultChunkSize) throws -> [UInt8] {
+        let featureVersion = table.spec.featureVersion
         guard chunkSize > 0 else { throw MosaicError.invalidConfiguration("chunkSize 必须 > 0") }
         let n = table.count
         let dim = table.matrix.dimension
@@ -155,8 +158,9 @@ public enum FeatureFile {
         out.appendLE(UInt32(dim))                                   // 16
         out.appendLE(UInt32(n))                                     // 20
         out.appendLE(UInt32(chunkSize))                             // 24
-        out.append(colorSpace == .oklab ? 0 : 1)                    // 28
-        out += [0, 0, 0]                                            // 29..<32 保留
+        out.append(table.spec.colorSpace == .oklab ? 0 : 1)         // 28 颜色空间
+        out.append(table.spec.averaging == .linearLight ? 0 : 1)    // 29 平均方式
+        out += [0, 0]                                               // 30..<32 保留
         out.appendLE(UInt32(table.tombstoneCount))                  // 32
         out += [UInt8](repeating: 0, count: 56 - out.count)         // 36..<56 保留
         out.appendLE(CRC32.checksum(out))                           // 56 头部 CRC（0..<56）
@@ -183,10 +187,9 @@ public enum FeatureFile {
     }
 
     /// 原子写入：同目录临时文件 → fsync → `rename(2)` 覆盖。任何一步失败都不会留下半个目标文件。
-    public static func write(_ table: FeatureTable, to url: URL, colorSpace: FeatureColorSpace = .oklab,
-                             featureVersion: UInt32 = MosaicCoreInfo.featureVersion,
+    public static func write(_ table: FeatureTable, to url: URL,
                              chunkSize: Int = FeatureFileFormat.defaultChunkSize) throws {
-        let bytes = try encode(table, colorSpace: colorSpace, featureVersion: featureVersion, chunkSize: chunkSize)
+        let bytes = try encode(table, chunkSize: chunkSize)
         try atomicWrite(bytes, to: url)
     }
 
@@ -224,6 +227,19 @@ public enum FeatureFile {
         if dfd >= 0 { _ = fsync(dfd); close(dfd) }
     }
 
+    /// A-09：空洞率 > 20% 时压缩重写（去掉 tombstone 行，原子替换）。
+    /// - Returns: 发生压缩时返回 `oldToNew` 行号映射（供更新 `index.sqlite`）；无需压缩返回 nil。
+    /// - Throws: 读取或写入失败（严格模式读取，损坏文件应先走恢复流程）。
+    @discardableResult
+    public static func compactIfNeeded(at url: URL, expectedSpec: FeatureSpec = .current,
+                                       chunkSize: Int = FeatureFileFormat.defaultChunkSize) throws -> [Int?]? {
+        let r = try read(from: url, recovery: .discardAndRebuild, expectedSpec: expectedSpec)
+        guard r.table.needsCompaction else { return nil }
+        let (t, map) = r.table.compacted()
+        try write(t, to: url, chunkSize: chunkSize)
+        return map
+    }
+
     // MARK: 读
 
     /// 从磁盘读取（mmap：`Data(contentsOf:options: .alwaysMapped)`）。
@@ -232,9 +248,8 @@ public enum FeatureFile {
     ///     头部损坏、版本不匹配等无论哪种策略都抛错（必须重建）。
     ///   - expectedDimension / expectedColorSpace: 与当前引擎不一致时抛 `incompatibleLayout`。
     public static func read(from url: URL, recovery: FeatureFileRecovery = .keepValidPrefix,
-                            expectedFeatureVersion: UInt32 = MosaicCoreInfo.featureVersion,
-                            expectedDimension: Int = FeatureVector.dimension,
-                            expectedColorSpace: FeatureColorSpace = .oklab) throws -> FeatureFileReadResult {
+                            expectedSpec: FeatureSpec = .current,
+                            expectedDimension: Int = FeatureVector.dimension) throws -> FeatureFileReadResult {
         guard FileManager.default.fileExists(atPath: url.path) else { throw FeatureFileError.fileNotFound }
         let data: Data
         do {
@@ -243,8 +258,7 @@ public enum FeatureFile {
             throw FeatureFileError.io("\(error)")
         }
         return try data.withUnsafeBytes { raw in
-            try decode(raw, recovery: recovery, expectedFeatureVersion: expectedFeatureVersion,
-                       expectedDimension: expectedDimension, expectedColorSpace: expectedColorSpace)
+            try decode(raw, recovery: recovery, expectedSpec: expectedSpec, expectedDimension: expectedDimension)
         }
     }
 
@@ -258,18 +272,17 @@ public enum FeatureFile {
 
     /// 从内存字节解码（与 `read` 相同的校验与恢复逻辑）。
     public static func decode(_ raw: UnsafeRawBufferPointer, recovery: FeatureFileRecovery = .keepValidPrefix,
-                              expectedFeatureVersion: UInt32 = MosaicCoreInfo.featureVersion,
-                              expectedDimension: Int = FeatureVector.dimension,
-                              expectedColorSpace: FeatureColorSpace = .oklab) throws -> FeatureFileReadResult {
+                              expectedSpec: FeatureSpec = .current,
+                              expectedDimension: Int = FeatureVector.dimension) throws -> FeatureFileReadResult {
         let header = try parseHeader(raw)
-        guard header.featureVersion == expectedFeatureVersion else {
-            throw FeatureFileError.featureVersionMismatch(found: header.featureVersion, expected: expectedFeatureVersion)
+        guard header.featureVersion == expectedSpec.featureVersion else {
+            throw FeatureFileError.featureVersionMismatch(found: header.featureVersion, expected: expectedSpec.featureVersion)
         }
         guard header.dimension == expectedDimension else {
             throw FeatureFileError.incompatibleLayout("维度 \(header.dimension) ≠ 期望 \(expectedDimension)")
         }
-        guard header.colorSpace == expectedColorSpace else {
-            throw FeatureFileError.incompatibleLayout("颜色空间 \(header.colorSpace) ≠ 期望 \(expectedColorSpace)")
+        guard header.spec == expectedSpec else {
+            throw FeatureFileError.incompatibleLayout("口径 \(header.spec) ≠ 期望 \(expectedSpec)")
         }
 
         let n = header.recordCount, dim = header.dimension, cs = header.chunkSize
@@ -334,7 +347,8 @@ public enum FeatureFile {
             start += r
         }
         let matrix = try FeatureMatrix(dimension: dim, count: m, soa: soa)
-        let table = FeatureTable(uncheckedMatrix: matrix, lightnessVariance: variance, aspectRatio: aspect, flags: flags)
+        var table = FeatureTable(uncheckedMatrix: matrix, lightnessVariance: variance, aspectRatio: aspect, flags: flags)
+        table.spec = header.spec
         let status: FeatureFileReadResult.Status = failure.map { .recoveredPrefix(reason: $0, declaredRecordCount: n) } ?? .intact
         return FeatureFileReadResult(header: header, table: table, status: status)
     }
@@ -356,11 +370,13 @@ public enum FeatureFile {
         }
         let chunk = Int(u32(24))
         guard chunk > 0 else { throw FeatureFileError.incompatibleLayout("chunkSize = 0") }
-        let csByte = raw[28]
+        let csByte = raw[28], avByte = raw[29]
         guard csByte <= 1 else { throw FeatureFileError.incompatibleLayout("未知颜色空间 \(csByte)") }
-        return FeatureFileHeader(formatVersion: version, featureVersion: u32(12), dimension: Int(u32(16)),
-                                 recordCount: Int(u32(20)), chunkSize: chunk,
-                                 colorSpace: csByte == 0 ? .oklab : .cielab, tombstoneCount: Int(u32(32)))
+        guard avByte <= 1 else { throw FeatureFileError.incompatibleLayout("未知平均方式 \(avByte)") }
+        let spec = FeatureSpec(colorSpace: csByte == 0 ? .oklab : .cielab, averaging: avByte == 0 ? .linearLight : .perceptual,
+                               featureVersion: u32(12))
+        return FeatureFileHeader(formatVersion: version, dimension: Int(u32(16)), recordCount: Int(u32(20)),
+                                 chunkSize: chunk, spec: spec, tombstoneCount: Int(u32(32)))
     }
 }
 

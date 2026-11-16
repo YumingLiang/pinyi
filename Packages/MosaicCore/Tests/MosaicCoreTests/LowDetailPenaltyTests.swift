@@ -10,7 +10,8 @@ final class LowDetailPenaltyTests: XCTestCase {
         FeatureVector(uniform: SIMD3(0.5 + (d / 4).squareRoot(), 0, 0))
     }
 
-    private func assignOne(library: [FeatureVector], variance: [Float]?, config: AssignmentConfiguration = AssignmentConfiguration())
+    private func assignOne(library: [FeatureVector], variance: [Float]?,
+                           config: AssignmentConfiguration = AssignmentConfiguration().withAbsolutePenalties(usage: 0.005, lowDetail: 0.002))
         throws -> MosaicAssignment {
         let grid = try MosaicGrid(columns: 1, rows: 1)
         return try GreedyAssigner(configuration: config).assign(
@@ -23,7 +24,7 @@ final class LowDetailPenaltyTests: XCTestCase {
         let lib = [at(distance: 0.001), at(distance: 0.002)]
         XCTAssertEqual(try assignOne(library: lib, variance: nil).tiles, [0])
         XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001]).tiles, [1])
-        var off = AssignmentConfiguration(); off.lowDetailPenalty = 0
+        var off = AssignmentConfiguration().withAbsolutePenalties(usage: 0.005, lowDetail: 0)
         XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001], config: off).tiles, [0])
         // 报告的距离仍是纯颜色距离，不含惩罚。
         XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001]).distances[0], 0.002, accuracy: 1e-6)
@@ -49,7 +50,8 @@ final class LowDetailPenaltyTests: XCTestCase {
         let grid = try MosaicGrid(columns: 2, rows: 1)
         let lib = FeatureMatrix(vectors: [at(distance: 0), at(distance: 0.0005), at(distance: 0.001)])
         let cells = FeatureMatrix(vectors: [target, target])
-        let config = AssignmentConfiguration(k: 1, fallbackK: 1, cap: .limited(1), order: .rowMajor)
+        let config = AssignmentConfiguration(k: 1, fallbackK: 1, cap: .limited(1), order: .rowMajor, batchDepths: [])
+            .withAbsolutePenalties(usage: 0.005, lowDetail: 0.002)
         let without = try GreedyAssigner(configuration: config).assign(grid: grid, cellFeatures: cells, library: lib)
         XCTAssertEqual(without.tiles, [0, 1])
         let with = try GreedyAssigner(configuration: config).assign(
@@ -57,6 +59,20 @@ final class LowDetailPenaltyTests: XCTestCase {
             lightnessVariance: [0.001, 0, 0.001], cancellation: nil, progress: nil)
         XCTAssertEqual(with.tiles, [0, 2])
         XCTAssertEqual(with.levels[1], .exhaustiveSearch)
+    }
+
+    /// M3：μ 与 λ 同为相对尺度——μ_eff = β × top‑1 中位数，默认 β = 0.04。
+    func testRelativeLowDetailPenaltyScale() throws {
+        let lib = [at(distance: 0.001), at(distance: 0.002)]
+        let a = try assignOne(library: lib, variance: [0, 0.001], config: AssignmentConfiguration())
+        XCTAssertEqual(a.statistics.top1MedianDistance, 0.001, accuracy: 1e-7)
+        XCTAssertEqual(a.statistics.effectiveLowDetailPenalty, 0.04 * 0.001, accuracy: 1e-9)
+        XCTAssertEqual(a.statistics.effectiveUsagePenalty, 0.1 * 0.001, accuracy: 1e-9)
+        XCTAssertEqual(a.tiles, [0])   // μ_eff = 4e-5 ≪ 0.001 的距离差
+        var big = AssignmentConfiguration(); big.lowDetailPenaltyRelative = 2   // μ_eff = 0.002
+        XCTAssertEqual(try assignOne(library: lib, variance: [0, 0.001], config: big).tiles, [1])
+        // 无方差输入时 μ_eff 记为 0。
+        XCTAssertEqual(try assignOne(library: lib, variance: nil, config: AssignmentConfiguration()).statistics.effectiveLowDetailPenalty, 0)
     }
 
     func testFlatTilesUsedLessOnSyntheticLibrary() throws {

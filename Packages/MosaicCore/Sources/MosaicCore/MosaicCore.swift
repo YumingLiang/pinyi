@@ -7,7 +7,7 @@ public enum MosaicCoreInfo {
     public static let version = "0.1.0"
     /// 特征格式版本。特征定义（颜色空间、子块划分、平均方式）变化时递增，
     /// 用于让缓存失效（技术方案 §2.5「特征版本」）。
-    public static let featureVersion: UInt32 = 1
+    public static let featureVersion: UInt32 = 2
 }
 
 /// MosaicCore 抛出的错误。
@@ -26,4 +26,6 @@ public enum MosaicError: Error, Equatable, Sendable {
     case invalidGrid(String)
     /// 配置参数不合法。
     case invalidConfiguration(String)
+    /// 素材特征与目标格特征的口径（颜色空间 / 平均方式 / 特征版本）不一致（评审 S4）。
+    case featureSpecMismatch(library: FeatureSpec, target: FeatureSpec)
 }

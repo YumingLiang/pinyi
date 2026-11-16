@@ -24,17 +24,19 @@ public struct CIELab: Hashable, Sendable {
 
     /// 从线性 sRGB 转换：线性 sRGB → XYZ(D65) → L*a*b*。
     public init(_ rgb: LinearRGB) {
-        let x = 0.4124564 * rgb.r + 0.3575761 * rgb.g + 0.1804375 * rgb.b
-        let y = 0.2126729 * rgb.r + 0.7151522 * rgb.g + 0.0721750 * rgb.b
-        let z = 0.0193339 * rgb.r + 0.1191920 * rgb.g + 0.9503041 * rgb.b
+        // 双精度计算（L* 尺度 0…100，Float 中间量会损失约 1e-4 精度，A-03 要求 ≤ 1e-4）。
+        let r = Double(rgb.r), g = Double(rgb.g), bl = Double(rgb.b)
+        let x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * bl
+        let y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * bl
+        let z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * bl
 
-        let fx = CIELab.f(x / CIELab.whitePoint.x)
-        let fy = CIELab.f(y / CIELab.whitePoint.y)
-        let fz = CIELab.f(z / CIELab.whitePoint.z)
+        let fx = CIELab.f(x / 0.95047)
+        let fy = CIELab.f(y / 1.0)
+        let fz = CIELab.f(z / 1.08883)
 
-        L = 116 * fy - 16
-        a = 500 * (fx - fy)
-        b = 200 * (fy - fz)
+        L = Float(116 * fy - 16)
+        a = Float(500 * (fx - fy))
+        b = Float(200 * (fy - fz))
     }
 
     /// 从 sRGB 编码值（0…1）转换。
@@ -44,9 +46,9 @@ public struct CIELab: Hashable, Sendable {
 
     /// CIE 分段函数 f(t)。
     @usableFromInline
-    static func f(_ t: Float) -> Float {
-        let delta: Float = 6.0 / 29.0
-        if t > delta * delta * delta { return cbrt(t) }
+    static func f(_ t: Double) -> Double {
+        let delta = 6.0 / 29.0
+        if t > delta * delta * delta { return PortableMath.cbrt(t) }
         return t / (3 * delta * delta) + 4.0 / 29.0
     }
 
@@ -73,6 +75,15 @@ public enum FeatureColorSpace: String, Sendable, Hashable, CaseIterable {
         switch self {
         case .oklab: return OKLab(rgb).simd
         case .cielab: return CIELab(rgb).simd
+        }
+    }
+
+    /// 只算亮度分量（与 `convert(rgb).x` 相同）。
+    @inlinable
+    public func lightness(_ rgb: LinearRGB) -> Float {
+        switch self {
+        case .oklab: return OKLab.lightness(rgb)
+        case .cielab: return CIELab(rgb).L
         }
     }
 

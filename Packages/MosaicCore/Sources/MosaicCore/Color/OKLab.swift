@@ -29,13 +29,22 @@ public struct OKLab: Hashable, Sendable {
         let m = 0.2119034982 * rgb.r + 0.6806995451 * rgb.g + 0.1073969566 * rgb.b
         let s = 0.0883024619 * rgb.r + 0.2817188376 * rgb.g + 0.6299787005 * rgb.b
 
-        let l_ = cbrt(l)
-        let m_ = cbrt(m)
-        let s_ = cbrt(s)
+        let l_ = PortableMath.cbrt(l)
+        let m_ = PortableMath.cbrt(m)
+        let s_ = PortableMath.cbrt(s)
 
         L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
         a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
         b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+    }
+
+    /// 只算感知亮度 L（省掉 a/b 的矩阵运算；与 `OKLab(rgb).L` 逐位相同）。
+    @inlinable
+    public static func lightness(_ rgb: LinearRGB) -> Float {
+        let l = 0.4122214708 * rgb.r + 0.5363325363 * rgb.g + 0.0514459929 * rgb.b
+        let m = 0.2119034982 * rgb.r + 0.6806995451 * rgb.g + 0.1073969566 * rgb.b
+        let s = 0.0883024619 * rgb.r + 0.2817188376 * rgb.g + 0.6299787005 * rgb.b
+        return 0.2104542553 * PortableMath.cbrt(l) + 0.7936177850 * PortableMath.cbrt(m) - 0.0040720468 * PortableMath.cbrt(s)
     }
 
     /// 从 sRGB 编码值（0…1）转换：sRGB → 线性 → OKLab。

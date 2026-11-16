@@ -51,7 +51,7 @@ final class FeatureFileTests: XCTestCase {
 
     // MARK: 往返
 
-    func testRoundTripMultipleChunks() throws {
+    func testA08RoundTripMultipleChunks() throws {
         let t = makeTable(count: 50, deleteEvery: 9)
         let url = dir.appendingPathComponent("features.bin")
         try FeatureFile.write(t, to: url, chunkSize: 16)
@@ -81,7 +81,7 @@ final class FeatureFileTests: XCTestCase {
         }
     }
 
-    func testEncodingIsDeterministicAndLittleEndian() throws {
+    func testA08EncodingIsDeterministicAndLittleEndian() throws {
         let t = makeTable(count: 3)
         let a = try FeatureFile.encode(t), b = try FeatureFile.encode(t)
         XCTAssertEqual(a, b)
@@ -93,18 +93,68 @@ final class FeatureFileTests: XCTestCase {
         XCTAssertEqual(v, t.matrix.value(dimension: 0, index: 0))
     }
 
+    /// A-08：用手写的小端字节序列交叉验证（1 条记录，chunkSize 1）。
+    func testA08DecodesHandWrittenLittleEndianBytes() throws {
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8(v >> 24)] }
+        func le16(_ v: UInt16) -> [UInt8] { [UInt8(v & 0xFF), UInt8(v >> 8)] }
+        var h: [UInt8] = Array("PMFEAT".utf8) + [0, 0]
+        h += le16(1) + le16(64) + le32(MosaicCoreInfo.featureVersion) + le32(12) + le32(1) + le32(1)
+        h += [0, 0, 0, 0]                 // oklab, linearLight, 保留
+        h += le32(0)                      // tombstones
+        h += [UInt8](repeating: 0, count: 20)
+        h += le32(CRC32.checksum(h)) + [0, 0, 0, 0]
+        XCTAssertEqual(h.count, 64)
+        var body: [UInt8] = []
+        for d in 0..<12 { body += le32((Float(d) * 0.125 - 0.5).bitPattern) }   // 精确可表示值
+        body += le32(Float(0.25).bitPattern) + le32(Float(1.5).bitPattern) + le32(FeatureFlags.lowDetail.rawValue)
+        let bytes = h + body + le32(CRC32.checksum(body))
+        let r = try bytes.withUnsafeBytes { try FeatureFile.decode($0) }
+        XCTAssertEqual(r.status, .intact)
+        XCTAssertEqual(r.header.dimension, 12)
+        XCTAssertEqual(r.table.matrix.row(0), (0..<12).map { Float($0) * 0.125 - 0.5 })
+        XCTAssertEqual(r.table.lightnessVariance, [0.25])
+        XCTAssertEqual(r.table.aspectRatio, [1.5])
+        XCTAssertEqual(r.table.flags, [.lowDetail])
+        // 反向：编码器产出逐字节相同。
+        let t = try FeatureTable(matrix: r.table.matrix, lightnessVariance: [0.25], aspectRatio: [1.5], flags: [.lowDetail])
+        XCTAssertEqual(try FeatureFile.encode(t, chunkSize: 1), bytes)
+    }
+
+    /// A-09：写入 N 条、删除 > 20% 后触发压缩重写，再读回：tombstone 不进入匹配，有效特征不变，空洞率为 0。
+    func testA09CompactIfNeededRewritesFile() throws {
+        let url = dir.appendingPathComponent("features.bin")
+        var t = makeTable(count: 100, seed: 3)
+        for i in 0..<20 { t.markDeleted(i * 5) }          // 20% 不触发
+        try FeatureFile.write(t, to: url)
+        XCTAssertNil(try FeatureFile.compactIfNeeded(at: url))
+        t.markDeleted(1)                                   // 21% 触发
+        try FeatureFile.write(t, to: url)
+        XCTAssertEqual(try FeatureFile.readHeader(from: url).tombstoneCount, 21)
+        let map = try XCTUnwrap(try FeatureFile.compactIfNeeded(at: url))
+        let r = try FeatureFile.read(from: url, recovery: .discardAndRebuild)
+        XCTAssertEqual(r.table.count, 79)
+        XCTAssertEqual(r.table.holeRatio, 0)
+        XCTAssertEqual(r.header.tombstoneCount, 0)
+        for (old, new) in map.enumerated() {
+            if let new { XCTAssertEqual(r.table.record(new), t.record(old)) } else { XCTAssertTrue(t.flags[old].contains(.deleted)) }
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["features.bin"])
+    }
+
     // MARK: 版本与头部错误（→ 丢弃重建）
 
     func testFeatureVersionMismatch() throws {
         let url = dir.appendingPathComponent("features.bin")
-        try FeatureFile.write(makeTable(count: 5), to: url, featureVersion: 99)
+        var old = makeTable(count: 5)
+        old.spec = FeatureSpec(featureVersion: 99)
+        try FeatureFile.write(old, to: url)
         XCTAssertThrowsError(try FeatureFile.read(from: url)) { e in
             XCTAssertEqual(e as? FeatureFileError, .featureVersionMismatch(found: 99, expected: MosaicCoreInfo.featureVersion))
             XCTAssertEqual((e as? FeatureFileError)?.recommendedRecovery, .discardAndRebuild)
         }
         // 即便宽松模式也不能"保留前缀"：特征定义变了，旧值无意义。
         XCTAssertThrowsError(try FeatureFile.read(from: url, recovery: .keepValidPrefix))
-        XCTAssertNoThrow(try FeatureFile.read(from: url, expectedFeatureVersion: 99))
+        XCTAssertNoThrow(try FeatureFile.read(from: url, expectedSpec: FeatureSpec(featureVersion: 99)))
     }
 
     func testUnsupportedFormatVersion() throws {
@@ -135,12 +185,20 @@ final class FeatureFileTests: XCTestCase {
     }
 
     func testIncompatibleColorSpaceOrDimension() throws {
-        let b = try FeatureFile.encode(makeTable(count: 4), colorSpace: .cielab)
+        var t = makeTable(count: 4)
+        t.spec = FeatureSpec(colorSpace: .cielab)
+        let b = try FeatureFile.encode(t)
         XCTAssertThrowsError(try b.withUnsafeBytes { try FeatureFile.decode($0) }) { e in
             guard case .incompatibleLayout = e as? FeatureFileError else { return XCTFail("\(e)") }
         }
-        XCTAssertNoThrow(try b.withUnsafeBytes { try FeatureFile.decode($0, expectedColorSpace: .cielab) })
-        XCTAssertThrowsError(try b.withUnsafeBytes { try FeatureFile.decode($0, expectedDimension: 9, expectedColorSpace: .cielab) })
+        XCTAssertEqual(try b.withUnsafeBytes { try FeatureFile.decode($0, expectedSpec: t.spec) }.table, t)
+        XCTAssertThrowsError(try b.withUnsafeBytes { try FeatureFile.decode($0, expectedSpec: t.spec, expectedDimension: 9) })
+        // 平均方式不同也拒绝（评审 S4：口径写进头部）。
+        var p = makeTable(count: 4)
+        p.spec = FeatureSpec(averaging: .perceptual)
+        let pb = try FeatureFile.encode(p)
+        XCTAssertEqual(pb[29], 1)
+        XCTAssertThrowsError(try pb.withUnsafeBytes { try FeatureFile.decode($0) })
     }
 
     // MARK: 截断 / 校验失败（→ 保留可用前缀）
@@ -245,7 +303,7 @@ final class FeatureFileTests: XCTestCase {
 
     // MARK: tombstone / 压缩
 
-    func testTombstoneAndCompaction() throws {
+    func testA09TombstoneAndCompaction() throws {
         var t = makeTable(count: 20)
         XCTAssertFalse(t.needsCompaction)
         for i in [0, 3, 4, 10, 19] { t.markDeleted(i) }
@@ -266,7 +324,7 @@ final class FeatureFileTests: XCTestCase {
         XCTAssertFalse(u.needsCompaction)
     }
 
-    func testAssignerSkipsTombstones() throws {
+    func testA09AssignerSkipsTombstones() throws {
         var t = makeTable(count: 300, seed: 9)
         for i in stride(from: 0, to: 300, by: 2) { t.markDeleted(i) }
         let grid = try MosaicGrid(columns: 10, rows: 8)
