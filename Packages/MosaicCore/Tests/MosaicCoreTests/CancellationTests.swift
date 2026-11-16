@@ -146,6 +146,40 @@ final class CancellationTests: XCTestCase {
         XCTAssertLessThan(latencyMs, 250)
     }
 
+    /// 取消检查粒度（PR #1 CI：模拟器 Debug 取消延迟 805 ms 的根因）：距离内核在**每个候选块**之前检查，
+    /// 而不只是每组查询之前。不依赖墙钟：第 3 次检查时要求停止，必须恰好只扫了 2 个候选块就返回。
+    func testKernelChecksCancellationBetweenCandidateTiles() {
+        let dims = 12, m = 16, n = 5000, k = 4, tile = 1024
+        var rng = SplitMix64(seed: 9)
+        let q = (0..<(dims * m)).map { _ in rng.nextUnitFloat() }
+        let c = (0..<(dims * n)).map { _ in rng.nextUnitFloat() }
+        var oi = [UInt32](repeating: 0, count: m * k)
+        var od = [Float](repeating: 0, count: m * k)
+        var checks = 0
+        let finished = q.withUnsafeBufferPointer { qp in
+            c.withUnsafeBufferPointer { cp in
+                ScalarSIMDKernel.processBlock(qStart: 0, qEnd: m, m: m, q: qp.baseAddress!, n: n, c: cp.baseAddress!,
+                                              dims: dims, k: k, tile: tile, maskWords: nil,
+                                              outIndices: &oi, outDistances: &od,
+                                              shouldStop: { checks += 1; return checks >= 3 })
+            }
+        }
+        XCTAssertFalse(finished)
+        XCTAssertEqual(checks, 3, "每个候选块前检查一次")
+        // 不取消时：检查次数 = 候选块数 ⌈5000/1024⌉ = 5
+        checks = 0
+        let done = q.withUnsafeBufferPointer { qp in
+            c.withUnsafeBufferPointer { cp in
+                ScalarSIMDKernel.processBlock(qStart: 0, qEnd: m, m: m, q: qp.baseAddress!, n: n, c: cp.baseAddress!,
+                                              dims: dims, k: k, tile: tile, maskWords: nil,
+                                              outIndices: &oi, outDistances: &od,
+                                              shouldStop: { checks += 1; return false })
+            }
+        }
+        XCTAssertTrue(done)
+        XCTAssertEqual(checks, 5)
+    }
+
     func testSwiftTaskCancellationAsyncAPI() async throws {
         let img = try gradientImage(width: 320, height: 240)
         let records = syntheticVectors(count: 20_000, seed: 5).map { FeatureRecord(vector: $0, lightnessVariance: 0.001) }

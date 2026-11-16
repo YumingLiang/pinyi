@@ -93,12 +93,19 @@ public struct ScalarSIMDKernel: DistanceKernel {
                     }
                     let qStart = block * qb
                     let qEnd = min(m, qStart + qb)
-                    ScalarSIMDKernel.processBlock(
+                    // 每个候选块（tile）之间也检查一次：一组查询要扫完全部候选，只在组间检查时
+                    // 取消延迟 = 一整组的耗时（Debug / 模拟器 2 万候选约 0.5–0.8 s，PR #1 CI 805 ms）。
+                    let finished = ScalarSIMDKernel.processBlock(
                         qStart: qStart, qEnd: qEnd, m: m, q: ptrs.q,
                         n: n, c: ptrs.c, dims: dims, k: kEff, tile: tile,
-                        maskWords: maskWords, outIndices: ptrs.outIndices, outDistances: ptrs.outDistances
+                        maskWords: maskWords, outIndices: ptrs.outIndices, outDistances: ptrs.outDistances,
+                        shouldStop: {
+                            if stop.isCancelled { return true }
+                            if cancellation?.isCancelled ?? false { stop.cancel(); return true }
+                            return false
+                        }
                     )
-                    counter.increment()
+                    if finished { counter.increment() }
                 }
                 if parallel && blockCount > 1 {
                     DispatchQueue.concurrentPerform(iterations: blockCount, execute: work)
@@ -116,12 +123,16 @@ public struct ScalarSIMDKernel: DistanceKernel {
 
     // MARK: - 内部实现
 
-    private static func processBlock(
+    /// 处理一组查询。每个候选块开始前调用 `shouldStop`；返回 `false` 表示中途停止（输出未写，调用方须丢弃整体结果）。
+    /// internal 供测试直接验证检查粒度。
+    @discardableResult
+    static func processBlock(
         qStart: Int, qEnd: Int, m: Int, q: UnsafePointer<Float>,
         n: Int, c: UnsafePointer<Float>, dims: Int, k: Int, tile: Int,
         maskWords: [UInt64]?,
-        outIndices: UnsafeMutablePointer<UInt32>, outDistances: UnsafeMutablePointer<Float>
-    ) {
+        outIndices: UnsafeMutablePointer<UInt32>, outDistances: UnsafeMutablePointer<Float>,
+        shouldStop: () -> Bool = { false }
+    ) -> Bool {
         let qCount = qEnd - qStart
         // 每个查询一个大小为 k 的最大堆（根 = 当前最差候选）。
         let heapD = UnsafeMutablePointer<Float>.allocate(capacity: qCount * k)
@@ -138,6 +149,7 @@ public struct ScalarSIMDKernel: DistanceKernel {
 
         var t0 = 0
         while t0 < n {
+            if shouldStop() { return false }
             let t1 = min(n, t0 + tile)
             let len = t1 - t0
             for qi in 0..<qCount {
@@ -192,6 +204,7 @@ public struct ScalarSIMDKernel: DistanceKernel {
                 outIndices[base + j] = pairs[j].1
             }
         }
+        return true
     }
 
     /// (d1, i1) 是否比 (d2, i2) 更差（距离更大，或距离相等但下标更大）。
