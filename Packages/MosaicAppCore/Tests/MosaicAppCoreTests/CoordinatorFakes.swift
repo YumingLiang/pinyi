@@ -155,7 +155,7 @@ final class FakeExporter: MosaicExporting, Sendable {
         }
         try Task.checkCancellation()
         if let e = state.get().error { throw e }
-        let url = dir.appendingPathComponent("mosaic-\(request.longEdge)-\(UUID().uuidString).jpg")
+        let url = dir.appendingPathComponent("mosaic-\(request.tier.rawValue)-\(UUID().uuidString).jpg")
         try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: url)
         progress(1)
         return url
@@ -184,7 +184,8 @@ struct CoordinatorHarness {
     init(assets: Int, thumbnails: GatedThumbnails = GatedThumbnails(), generator: GatedGenerator = GatedGenerator(),
          exporter: FakeExporter = FakeExporter(), config: PhotoIndex.Configuration = smallConfig(batch: 100, concurrency: 4),
          preferences: FakePreferences = FakePreferences(), auth: PhotoAuthorization = .authorized,
-         realExporter: (any MosaicExporting)? = nil) {
+         realExporter: (any MosaicExporting)? = nil,
+         onExportSucceeded: @escaping @Sendable (MosaicLayout, URL) async -> Void = { _, _ in }) {
         library = FakePhotoLibrary(assetCount: assets)
         library.setAuth(auth)
         self.thumbnails = thumbnails
@@ -194,7 +195,8 @@ struct CoordinatorHarness {
         self.exporter = exporter
         let deps = AppDependencies(library: library, thumbnails: thumbnails, indexStore: store, clock: clock,
                                    lifecycle: lifecycle, preferences: preferences, generator: generator, exporter: realExporter ?? exporter,
-                                   memory: memory, perf: PerfRecorder(), indexConfiguration: config, initialSeed: 42)
+                                   memory: memory, perf: PerfRecorder(), indexConfiguration: config, initialSeed: 42,
+                                   onExportSucceeded: onExportSucceeded)
         coordinator = AppCoordinator(dependencies: deps)
     }
 

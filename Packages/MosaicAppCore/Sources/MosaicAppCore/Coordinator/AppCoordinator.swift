@@ -31,6 +31,7 @@ public final class AppCoordinator {
     private var generationTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
     private var lastExportPurpose: ExportPurpose = .save
+    private var exportSource: ExportSource?
     private var lifecycleTask: Task<Void, Never>?
     private var memorySamplingTask: Task<Void, Never>?
     /// 被取消、尚未结束的任务（`settle()` 等它们收尾）。
@@ -293,7 +294,10 @@ public final class AppCoordinator {
     public func setOverlayAlpha(_ a: Double) { state.flow.settings.overlayAlpha = OverlayBlendLimits.clamp(a) }
     public func setShowScanSheet(_ on: Bool) { state.showScanSheet = on }
     public func setPresentedEmptyState(_ e: LibraryEmptyState?) { state.presentedEmptyState = e }
-    public func setExportSize(_ s: ExportSize) { state.exportSize = s }
+    public func setExportTier(_ t: ExportTier) {
+        guard !state.export.isBusy else { return }
+        state.exportTier = t
+    }
 
     // MARK: - 生成
 
@@ -407,24 +411,56 @@ public final class AppCoordinator {
         return false
     }
 
-    /// 「保存到相册」。判断顺序：权限 > 空间 > 其他（文案 §5.3）。
+    /// 当前结果固化成的布局（导出、「存到我的作品」都用它）。
+    public func currentLayout() -> MosaicLayout? {
+        product.map { MosaicLayout(product: $0, overlayAlpha: state.flow.settings.overlayAlpha) }
+    }
+
+    /// 「保存到相册」（结果页）。判断顺序：权限 > 空间 > 其他（文案 §5.3）。
     public func saveTapped() async {
-        guard canExport else { return }
+        guard canExport, let layout = currentLayout() else { return }
+        exportSource = ExportSource(layout: layout, target: target)
+        await startSave()
+    }
+
+    /// 「分享」（结果页）：导出到临时文件后交给系统分享面板（不需要相册权限）。
+    public func shareTapped() {
+        guard canExport, let layout = currentLayout() else { return }
+        exportSource = ExportSource(layout: layout, target: target)
+        startShare()
+    }
+
+    /// 从任意布局导出（「我的作品」查看页用：给保存的布局 + 目标图副本）。档位用 `state.exportTier`。
+    public func export(layout: MosaicLayout, target: PixelBuffer?, purpose: ExportPurpose) async {
+        guard !state.export.isBusy, !state.isGenerating, layout.isValid else { return }
+        exportSource = ExportSource(layout: layout, target: target)
+        switch purpose {
+        case .save: await startSave()
+        case .share: startShare()
+        }
+    }
+
+    private func startSave() async {
+        guard !state.export.isBusy, exportSource != nil else { return }
         state.export = .exporting(.save, fraction: 0)
         var add = dependencies.library.addOnlyAuthorizationStatus()
         if add == .notDetermined { add = await dependencies.library.requestAddOnlyAuthorization() }
         guard add == .authorized || add == .limited else {
+            lastExportPurpose = .save
             state.export = .failed(.addDenied)
             return
         }
         beginExport(.save)
     }
 
-    /// 「分享」：导出到临时文件后交给系统分享面板（不需要相册权限）。
-    public func shareTapped() {
-        guard canExport else { return }
+    private func startShare() {
+        guard !state.export.isBusy, exportSource != nil else { return }
         state.export = .exporting(.share, fraction: 0)
         beginExport(.share)
+    }
+
+    private func restart(_ purpose: ExportPurpose) async {
+        if purpose == .share { startShare() } else { await startSave() }
     }
 
     /// 分享面板关闭：删临时文件。
@@ -447,8 +483,7 @@ public final class AppCoordinator {
         switch f {
         case .addDenied: systemActionHandler?(.openSettings)
         case .diskFull: break
-        case .other:
-            if lastExportPurpose == .share { shareTapped() } else { await saveTapped() }
+        case .other: await restart(lastExportPurpose)
         }
     }
 
@@ -456,21 +491,21 @@ public final class AppCoordinator {
     public func exportFailureSecondaryTapped() {
         guard case .failed(let f) = state.export, f.secondaryKey != nil else { return }
         state.export = .idle
-        shareTapped()
+        startShare()
     }
 
     /// 导出被后台宽限打断后的「重新导出」（`export.retry`）：按被打断时的用途重来。
     public func exportRetryTapped() async {
         guard case .interrupted = state.export else { return }
         state.export = .idle
-        if lastExportPurpose == .share { shareTapped() } else { await saveTapped() }
+        await restart(lastExportPurpose)
     }
 
     /// 保存成功页的「分享」（`save.success.share`）。
     public func saveSuccessShareTapped() {
         guard case .saved = state.export else { return }
         state.export = .idle
-        shareTapped()
+        startShare()
     }
 
     /// 用户在导出中取消（若平台层提供入口）。
@@ -481,11 +516,13 @@ public final class AppCoordinator {
 
     private func beginExport(_ purpose: ExportPurpose) {
         lastExportPurpose = purpose
-        guard let product, let target else { state.export = .failed(.other); return }
+        guard let source = exportSource else { state.export = .failed(.other); return }
         let exporter = dependencies.exporter
         let library = dependencies.library
-        let request = ExportRequest(product: product, target: target, overlayAlpha: state.flow.settings.overlayAlpha,
-                                    size: state.exportSize)
+        let onSucceeded = dependencies.onExportSucceeded
+        let request = ExportRequest(layout: source.layout, target: source.target,
+                                    overlayAlpha: source.target == nil ? 0 : source.layout.params.overlayAlpha,
+                                    tier: state.exportTier)
         if let free = exporter.availableBytes(), free < exporter.estimatedBytes(for: request) {
             state.export = .failed(.diskFull)
             return
@@ -502,6 +539,7 @@ public final class AppCoordinator {
             let outcome: ExportPhase
             do {
                 let url = try await exporter.export(request, progress: progress)
+                await onSucceeded(source.layout, url)
                 switch purpose {
                 case .share:
                     outcome = .sharing(url)
@@ -608,6 +646,12 @@ public final class AppCoordinator {
         generationTask?.cancel()
         exportTask?.cancel()
     }
+}
+
+/// 一次导出的输入（布局 + 叠加用目标图）。
+struct ExportSource: Sendable {
+    var layout: MosaicLayout
+    var target: PixelBuffer?
 }
 
 extension GenerationMachine.Phase {

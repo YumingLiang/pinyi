@@ -198,6 +198,7 @@ struct GenerationProgressView: View {
 
 struct ResultView: View {
     @EnvironmentObject var model: AppModel
+    @State private var showTiers = false
 
     var body: some View {
         // 不包 ScrollView：缩放容器的拖动手势会和滚动抢手势；容器占满剩余空间。
@@ -229,12 +230,102 @@ struct ResultView: View {
                     Button { model.send(.reshuffleTapped) } label: { Text(L10nKey.previewReshuffle) }.buttonStyle(.bordered)
                 }
                 .disabled(model.exportPhase.isBusy)
-                // T8：保存 / 分享（导出尺寸选择暂停，待「高清导出」定案）
-                ExportControls()
+                // 导出：三档选择 → 保存到相册（app-layer 紧急版 UI）
+                Button { showTiers = true } label: { Text(L10nKey.previewExport).frame(maxWidth: .infinity) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(!model.canExport)
                 SaveToWorksButton()   // 需求 B2：次按钮「存到我的作品」（导出成功也会自动存一份）
             }
         .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))
-        .modifier(ExportResultModifier())
+        .sheet(isPresented: $showTiers) {
+            ExportTierSheet { showTiers = false; model.saveTapped() }
+                .environmentObject(model)
+                .presentationDetents([.medium])
+        }
+        .overlay {
+            if model.exportPhase.isBusy { ExportBusyOverlay() }
+        }
+        .modifier(ExportResultAlerts())
+    }
+}
+
+/// 导出档位选择（不显示像素数）+ 固定提示「文件较大，导出需要一会儿」。
+struct ExportTierSheet: View {
+    @EnvironmentObject var model: AppModel
+    let onExport: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(L10nKey.exportSizeSection).font(.headline)
+            ForEach(ExportTier.allCases, id: \.self) { tier in
+                Button { model.exportTier = tier } label: {
+                    HStack(alignment: .top) {
+                        Image(systemName: model.exportTier == tier ? "largecircle.fill.circle" : "circle")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(tier.titleKey).font(.body.bold())
+                            Text(tier.descriptionKey).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Text(L10nKey.exportSizeLargeHint).font(.footnote).foregroundStyle(.secondary)
+            Button(action: onExport) { Text(L10nKey.previewSave).frame(maxWidth: .infinity) }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+        }
+        .padding()
+    }
+}
+
+/// 导出中：转圈 +「正在导出」「导出时请停留在这个页面。」（不可取消，紧急版）。
+struct ExportBusyOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView().controlSize(.large)
+                Text(L10nKey.exportProgressTitle).font(.headline)
+                Text(L10nKey.exportProgressHint).font(.footnote).foregroundStyle(.secondary)
+            }
+            .padding(24)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+}
+
+/// 保存成功 / 失败 / 被打断的提示。按钮自己调协调器；alert 的 isPresented 只读（避免关闭时先把状态清掉）。
+struct ExportResultAlerts: ViewModifier {
+    @EnvironmentObject var model: AppModel
+
+    private var failure: SaveFailure? {
+        if case .failed(let f) = model.exportPhase { return f }
+        return nil
+    }
+    private var saved: Bool { model.exportPhase == .saved }
+    private var interrupted: Bool { model.exportPhase == .interrupted }
+
+    func body(content: Content) -> some View {
+        content
+            .alert(Text(L10nKey.saveSuccessTitle), isPresented: .constant(saved)) {
+                Button { model.dismissExportResult() } label: { Text(L10nKey.saveSuccessDone) }
+            } message: { Text(L10nKey.saveSuccessBody) }
+            .alert(Text(failure?.titleKey ?? .saveFailed), isPresented: .constant(failure != nil)) {
+                if let f = failure {
+                    Button { model.exportFailurePrimaryTapped() } label: { Text(f.primaryKey) }
+                    if f != .diskFull {
+                        Button(role: .cancel) { model.dismissExportResult() } label: { Text(L10nKey.commonClose) }
+                    }
+                }
+            } message: {
+                if let b = failure?.bodyKey { Text(b) }
+            }
+            .alert(Text(L10nKey.exportInterrupted), isPresented: .constant(interrupted)) {
+                Button { model.dismissExportResult() } label: { Text(L10nKey.commonOK) }
+            }
     }
 }

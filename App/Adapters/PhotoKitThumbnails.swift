@@ -49,7 +49,11 @@ actor PhotoKitThumbnails: ThumbnailProviding {
                 let degraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
                 if let image, let cg = image.cgImage {
                     if degraded && !fast { return }   // 等最终图
-                    once.resume(ImagePixels.opaqueSRGB(cg, maxEdge: request.targetPixelSize).map { .image($0) } ?? .failed)
+                    // 预览 / 导出绘制才居中裁方；扫描建索引保持 14ac550 的按长边缩小（特征不变）。
+                    let pixels = request.centerCropToSquare
+                        ? ImagePixels.opaqueSRGBCenteredSquare(cg, maxEdge: request.targetPixelSize)
+                        : ImagePixels.opaqueSRGB(cg, maxEdge: request.targetPixelSize)
+                    once.resume(pixels.map { .image($0) } ?? .failed)
                 } else if inCloud {
                     once.resume(.unavailableLocal)
                 } else if info?[PHImageErrorKey] != nil || info?[PHImageCancelledKey] != nil {

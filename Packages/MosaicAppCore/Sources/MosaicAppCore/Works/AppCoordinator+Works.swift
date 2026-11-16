@@ -9,6 +9,6 @@ extension AppCoordinator {
             layout = MosaicLayout(product: product, overlayAlpha: state.flow.settings.overlayAlpha)
         }
         return WorkResultContext(layout: layout, target: target, overlayAlpha: state.flow.settings.overlayAlpha,
-                                 tier: nil, resultRevision: state.resultRevision)
+                                 tier: state.exportTier.rawValue, resultRevision: state.resultRevision)
     }
 }

@@ -15,6 +15,15 @@ final class WorksCoordinatorIntegrationTests: XCTestCase {
         guard case .result = h.coordinator.state.flow.generation.phase else { return XCTFail("没有结果") }
     }
 
+    func testResultContextTierFollowsExportTier() async throws {
+        let h = CoordinatorHarness(assets: 300)
+        try await generated(h)
+        XCTAssertEqual(h.coordinator.workResultContext.tier, ExportTier.uhd.rawValue, "默认超清")
+        h.coordinator.setExportTier(.hd)
+        XCTAssertEqual(h.coordinator.workResultContext.tier, "hd")
+        h.coordinator.stop()
+    }
+
     func testResultContextAndReshuffleDoesNotSave() async throws {
         let h = CoordinatorHarness(assets: 300)
         let c = h.coordinator

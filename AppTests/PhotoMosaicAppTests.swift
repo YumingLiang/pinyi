@@ -77,23 +77,8 @@ final class PhotoMosaicAppTests: XCTestCase {
         let dir = LiveMosaicExporter.exportDirectory
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: dir.appendingPathComponent("old.jpg").path, contents: Data([1]))
-        LiveMosaicExporter.make(thumbnails: PhotoKitThumbnails()).removeStaleExports()
+        LiveMosaicExporter(thumbnails: PhotoKitThumbnails()).removeStaleExports()
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
     }
 
-    /// T8：真实 CG 条带渲染 + ImageIO 编码能产出 JPEG（模拟器上跑；逻辑分支由 MosaicAppCoreTests.StripExporterTests 覆盖）。
-    func testImageIOEncoderWritesJPEGFromRawStripFile() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("enc-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let w = 64, h = 40
-        let raw = dir.appendingPathComponent("a.rgba")
-        try Data((0..<(w * h)).flatMap { i -> [UInt8] in [UInt8(i % 256), 128, 64, 255] }).write(to: raw)
-        let out = dir.appendingPathComponent("a.jpg")
-        try ImageIOJPEGEncoder().encode(rawFile: raw, width: w, height: h, to: out)
-        let src = try XCTUnwrap(CGImageSourceCreateWithURL(out as CFURL, nil))
-        let img = try XCTUnwrap(CGImageSourceCreateImageAtIndex(src, 0, nil))
-        XCTAssertEqual(img.width, w)
-        XCTAssertEqual(img.height, h)
-    }
 }

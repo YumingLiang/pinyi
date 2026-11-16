@@ -135,10 +135,13 @@ final class AppModel: ObservableObject {
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
-    func send(_ e: GenerationMachine.Event) { coordinator.send(e) }
 
-    // MARK: 导出 / 保存 / 分享（T8，逻辑在 AppCoordinator）
+    // MARK: 导出（紧急版三档 + 作品页再导出；失败/重试走协调器，保留 exportSource）
 
+    var exportTier: ExportTier {
+        get { state.exportTier }
+        set { coordinator.setExportTier(newValue) }
+    }
     func saveTapped() { Task { await coordinator.saveTapped() } }
     func shareTapped() { coordinator.shareTapped() }
     func shareFinished() { coordinator.shareFinished() }
@@ -148,6 +151,7 @@ final class AppModel: ObservableObject {
     func exportFailureSecondaryTapped() { coordinator.exportFailureSecondaryTapped() }
     func exportRetryTapped() { Task { await coordinator.exportRetryTapped() } }
     func saveSuccessShareTapped() { coordinator.saveSuccessShareTapped() }
+    func send(_ e: GenerationMachine.Event) { coordinator.send(e) }
 
     // MARK: 平台专属：目标图 / 预览
 

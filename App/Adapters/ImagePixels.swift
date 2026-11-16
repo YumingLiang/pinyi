@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import MosaicCore
+import MosaicAppCore
 
 /// CGImage / 图像数据 → `MosaicCore.PixelBuffer`（RGBA8、sRGB、不透明白底）。
 enum ImagePixels {
@@ -26,6 +27,16 @@ enum ImagePixels {
         }
         guard ok else { return nil }
         return try? PixelBuffer(width: w, height: h, bytes: bytes)
+    }
+
+    /// 按短边居中裁成正方形，再画到不透明白底 sRGB。
+    /// 边长大于 `maxEdge` 时缩小到 `maxEdge×maxEdge`；短边不足时保持原生正方形（由绘制端等比放大），绝不非等比拉伸。
+    static func opaqueSRGBCenteredSquare(_ image: CGImage, maxEdge: Int) -> PixelBuffer? {
+        let crop = CenterSquareCrop.rect(width: image.width, height: image.height)
+        guard crop.size > 0,
+              let square = image.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.size, height: crop.size))
+        else { return nil }
+        return opaqueSRGB(square, maxEdge: maxEdge)
     }
 
     /// 目标图：ImageIO 降采样（长边 ≤ 2048，应用 EXIF 方向），不把整张原图解码进内存。

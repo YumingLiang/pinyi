@@ -1,5 +1,12 @@
 # CHANGES
 
+## feat/works：接到 feat/app-layer 紧急版整张导出（不含流式条带）
+
+- 在 origin/feat/works（55c361d）上合并 feat/app-layer（含格子居中裁方与扫描特征快照）。结果页用紧急版三档导出按钮，并保留「保存到我的作品」。
+- 导出接口（签名与后续流式导出线一致，实现走紧急版整张位图导出）：`AppDependencies.onExportSucceeded`（`.live(..., onExportSucceeded:)` 默认空实现，导出成功、保存/分享之前调用）；`AppCoordinator.export(layout:target:purpose:)` 按保存的布局再导出。
+- `workResultContext.tier` 跟随 `state.exportTier`（默认超清）；`testResultContextTierFollowsExportTier` 覆盖。
+- 去掉本分支从旧 render-export 带来的 `StripExporter` / 条带测试，不把流式导出带进这一版。等 ImageIO 内存测试后再合流行线。
+
 ## feat/works：「我的作品」最小版（11-17 交付范围，基于 feat/render-export）
 
 依据：design/works-storage-v0.1.md（架构师，权威）、product/hd-export-req-v0.2.md B 节 + F 节（F1-3 / F2 / F5）。
@@ -92,6 +99,16 @@ AppTests（模拟器）：`testImageIOEncoderWritesJPEGFromRawStripFile`、`test
 - R24：叠加用的目标图是 2048 长边的降采样图，大长边导出时被放大；α ≤ 0.3，影响有限。
 - R25：`completionWithItemsHandler` 与 `sheet(onDismiss:)` 都会调 `shareFinished()`，第二次是空操作。
 - R26：`export.degraded` 提示（部分原图未下载、导出时降级）**未接**，需要渲染器回报降级格数，留到后续。
+
+## feat/app-layer：导出 / 预览格子被非等比拉伸；导出记录糊格子与白格子数量
+
+- **根因**：PhotoKit `.aspectFill` + `targetSize = N×N` 可能返回非正方形（例如 256×341）。共享取图路径 `ImagePixels.opaqueSRGB(cg, maxEdge: N)` 按长边缩到 N，变成 192×256，再画进 N×N 格子——横向拉伸，有效清晰度只有短边，人脸会变形。
+- **修法**：
+  - 纯函数 `CenterSquareCrop`（MosaicAppCore，Linux 单测）：按短边居中裁方（奇数余量起点向下取整）；输出边长 = min(短边, 目标)，短边不足时保持原生正方形，由绘制端等比放大，绝不非等比缩放。
+  - `ImagePixels.opaqueSRGBCenteredSquare` 按该矩形 `CGImage.cropping` 后再走原有白底 sRGB 路径。`PhotoKitThumbnails` 在 `aspectFill` 时走这条路径（预览、导出、扫描取图共用）。目标图降采样仍用原来的 `opaqueSRGB`（不裁方）。
+  - 紧急版导出统计两类格子：高清取不到而退回 128px `.scan` 缩略图的「糊格子」，以及完全没有图的「白格子」（无资产、取图失败、位图转换失败）。数量写入 `os_log`（category "export"，不含资产标识）和内测性能页「最近一次导出」；「复制为文本」一并带上。
+  - 扫描建索引仍走 14ac550 的按长边缩小（`ThumbnailRequest.scan.centerCropToSquare = false`），避免已建索引特征失效。预览 / 导出绘制用 `scanDisplay` / 导出请求打开裁方。
+- **测试**：`CenterSquareCropTests`（横/竖/正方形、奇数边、短边 < N 不放大、大于 N 缩小、非法输入）；`ExportFillStatsTests`（分类与累加）；`PerfTests.testLatestExportNote`；`ScanFeatureSnapshotTests`（256×341 合成图按长边缩到 96×128 后特征与 14ac550 快照逐 bit 相同，`featureVersion` 仍为 2；先裁方再缩小则不匹配）。
 
 
 ## feat/app-layer：P0 预览「第二次放大失效」（真机 32ec2b5 Internal）

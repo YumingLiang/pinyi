@@ -96,8 +96,7 @@ extension GenerationRunner: MosaicGenerating {}
 
 // MARK: - 导出
 
-/// 导出档位（⚠️ 待定：AndyL 提「高清导出」，档位 / 上限待架构师和产品定案，T10/T11 暂停。
-/// 目前只作为协调器的默认长边来源；导出器本身只看 `ExportRequest.longEdge`，不依赖这些值）。
+/// ⚠️ 已作废（由 `ExportTier` 取代），保留类型只为兼容旧引用。
 public enum ExportSize: Int, Sendable, Hashable, CaseIterable, Codable {
     case standard = 4000
     case large = 6000
@@ -108,30 +107,36 @@ public enum ExportSize: Int, Sendable, Hashable, CaseIterable, Codable {
 
     public var titleKey: L10nKey? {
         switch self {
-        case .standard: return .exportSize4000
-        case .large: return .exportSize6000
+        case .standard: return .exportSizeShare
+        case .large: return .exportSizeHD
         case .internal8000: return nil
         }
     }
 }
 
 public struct ExportRequest: Sendable {
-    public var product: GenerationProduct
-    public var target: PixelBuffer
+    /// 显式布局（结果页由 `MosaicLayout(product:)` 固化，作品页直接给保存的布局）。
+    public var layout: MosaicLayout
+    /// 叠加层用的目标图；nil 时不叠加。
+    public var target: PixelBuffer?
     public var overlayAlpha: Double
-    /// 导出长边像素。导出器不假设上限（「高清导出」可能到 2–3 万像素，档位待架构师 / 产品定案，T10/T11 暂停）。
-    public var longEdge: Int
+    public var tier: ExportTier
 
-    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, longEdge: Int) {
-        self.product = product
+    public init(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double? = nil, tier: ExportTier) {
+        self.layout = layout
         self.target = target
-        self.overlayAlpha = overlayAlpha
-        self.longEdge = longEdge
+        self.overlayAlpha = target == nil ? 0 : (overlayAlpha ?? layout.params.overlayAlpha)
+        self.tier = tier
     }
 
-    /// 兼容：由（待定的）档位给出长边。
-    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, size: ExportSize) {
-        self.init(product: product, target: target, overlayAlpha: overlayAlpha, longEdge: size.longEdge)
+    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, tier: ExportTier) {
+        self.init(layout: MosaicLayout(product: product, overlayAlpha: overlayAlpha),
+                  target: target, overlayAlpha: overlayAlpha, tier: tier)
+    }
+
+    /// 尺寸方案；平台层分配位图前传入 `os_proc_available_memory()`，上限随可用内存变化。
+    public func plan(availableMemoryBytes: Int64?) -> ExportPlan {
+        ExportPlan(tier: tier, columns: layout.cols, rows: layout.rows, availableMemoryBytes: availableMemoryBytes)
     }
 }
 
@@ -142,7 +147,7 @@ public enum ExportError: Error, Sendable, Equatable {
     case encodingFailed
 }
 
-/// 导出器：把结果按条带渲染成文件（`tmp/export/` 下），返回文件 URL。实现须在条带边界检查取消（B-34）。
+/// 导出器：把结果渲染成文件（`tmp/export/` 下），返回文件 URL。
 public protocol MosaicExporting: Sendable {
     /// 本次导出预计需要的磁盘字节数（预检用）。
     func estimatedBytes(for request: ExportRequest) -> Int64
@@ -172,11 +177,14 @@ public struct AppDependencies: Sendable {
     public var perf: PerfRecorder
     public var indexConfiguration: PhotoIndex.Configuration
     public var initialSeed: UInt64
+    /// 导出成功（文件已在 tmp/export，保存 / 分享之前）时通知：「我的作品」由这里接入自动保存。默认空实现。
+    public var onExportSucceeded: @Sendable (MosaicLayout, URL) async -> Void
 
     public init(library: any PhotoLibraryClient, thumbnails: any ThumbnailProviding, indexStore: any IndexStore,
                 clock: any AppClock, lifecycle: any LifecycleEvents, preferences: any PreferenceStore,
                 generator: any MosaicGenerating, exporter: any MosaicExporting, memory: any MemoryFootprintReading,
-                perf: PerfRecorder, indexConfiguration: PhotoIndex.Configuration = .init(), initialSeed: UInt64) {
+                perf: PerfRecorder, indexConfiguration: PhotoIndex.Configuration = .init(), initialSeed: UInt64,
+                onExportSucceeded: @escaping @Sendable (MosaicLayout, URL) async -> Void = { _, _ in }) {
         self.library = library
         self.thumbnails = thumbnails
         self.indexStore = indexStore
@@ -189,5 +197,6 @@ public struct AppDependencies: Sendable {
         self.perf = perf
         self.indexConfiguration = indexConfiguration
         self.initialSeed = initialSeed
+        self.onExportSucceeded = onExportSucceeded
     }
 }
