@@ -446,6 +446,36 @@ App/
 测试：box 上 Swift 6.3.3 `swift test` **149 个测试，0 失败**（ca6a4ca 为 138 个，新增 11 个：`ArchitectRecheckTests`），源码和测试都没有 warning；6.2.4 也复跑 149/0（日志 `reports/swift-test-55123ea-swift624.txt`：55123ea、Swift 6.2.4、`--no-parallel`、Executed 149 tests, 0 failures）。actionlint 1.7.12 和 1.7.7 都通过。
 
 
+### 14. PR #1 iOS CI 取消延迟 805 ms：根因与修复
+
+**结论：检查粒度不够，不是单纯 runner 抖动。**
+- 证据：
+  - 距离内核（`ScalarSIMDKernel`）原来只在**每组查询之前**检查取消。一组 = 16 个查询 × 全部候选（2 万）× 12 维；取消后，各线程手上正在算的那一组要跑完才停。
+  - 同一份 CI 日志（run 43934322051，模拟器 Debug）里，「40x30 × 5000 候选」中途取消是 112 ms。每组工作量与候选数成正比，2 万候选应约为 4 倍 ≈ 450 ms；再加上 3 核 runner 被 8 个工作线程争用，实测 805 ms 与此吻合。
+  - box（8 核，SwiftPM Debug，Swift 6.3.3）各跑 3 次，同一测试：旧代码（3f96b30）17.5 / 17.9 / 18.9 ms，新代码 1.33 / 1.29 / 1.12 ms，约 14 倍。`Task.cancel` 路径：旧 15.2 / 16.4 / 16.9 ms，新 1.78 / 1.30 / 1.51 ms。
+- 修复：
+  - 内核在**每个候选块（1024 个候选）之前**也检查一次，粒度细约 20 倍。中途停下的组不计进度、不写输出，整体抛 `CancellationError`。
+  - 逐格扩展（`fallbackK`）原来调的是不带令牌的 `topK`，扫全库期间无法取消；现在也传令牌。
+- 测试定稿：CI 硬判逻辑，墙钟只记录。
+  - `testKernelChecksCancellationBetweenCandidateTiles`：第 3 次检查时要求停止，必须恰好检查 3 次、未完成；不取消时检查次数 = ⌈5000/1024⌉ = 5。
+  - `testSerialKernelStopsAtNextCheckpointAfterCancel`：串行内核在第 3 批的进度回调里同步取消，之后不得再有任何进度事件，抛 `CancellationError`，无结果。
+  - `testCancellationLatencyFromAnotherThread`：硬判 `CancellationError`、无结果、取消后进度事件 ≤ 线程数。墙钟只打印，≥ 250 ms 时输出 `::warning::`，不失败。`testSwiftTaskCancellationAsyncAPI` 同样处理。
+
+**长循环取消检查点清单（MosaicCore）**
+
+| 循环 | 检查点 | 最坏间隔（10 万素材） |
+|---|---|---|
+| top-k 匹配（`ScalarSIMDKernel`，并行） | 每组查询之前 + 每个候选块（1024）之前 | 16 查询 × 1024 候选 |
+| 第 1 轮贪心分配 | 每 `cancellationCheckInterval`（64）格 | 64 格（每格只查自己的 top-k 列表） |
+| 逐格扩展到 `fallbackK` | 扩展前检查 + 内核内每个候选块 | 1 查询 × 1024 候选 |
+| 分批加深（batch 512 / 2048 回退） | 每组之前；内核内每个候选块；组内每 64 格 | 512 查询 × 1024 候选 |
+| 全库逐格搜索（exhaustive，≤ `exhaustiveCellLimit` 格） | 每格之前 | 1 格 × 全库（10 万 × 12 维 ≈ 1.2 M 次乘加，Release 约 1 ms） |
+| 目标图取样（`TargetSampler`） | 取样前后 | 一次取样（≤ 120×90 格，毫秒级） |
+| 生成管线（`MosaicPipeline`） | 入口、取样后、分配内各点 | 同上 |
+| features.bin 读写 | 不可取消（单次 mmap / 原子写，5 万条约 0.2 s） | — |
+
+App 层（扫描时提特征、索引提交、导出条带）的检查点见 feat/app-layer / feat/render-export 的 CHANGES。
+
 ## 上一分支：feat/mosaic-core（a0102be）
 
 日期：2026-11-16（PT）　作者：全栈开发　依据：技术方案 **v0.2**（取代 v0.1）、产品决定 v0.3、文案 v1.1、QA `qa/examples`
