@@ -1,5 +1,138 @@
 # CHANGES
 
+## feat/app-layer（基于 55123ea）
+
+日期：2026-11-16（PT）。依据：技术方案 v0.2、产品决定 v0.3（含 00:58、01:10、01:12 补充）、copy_v1.1（只用稳定 key）、QA 用例 B 层。
+范围：T3 权限与首启引导、T4 素材来源、T5 PhotoKit 缩略图与增量更新、T9 主流程 UI，以及内部性能计时页。
+**原则**：Apple 框架层尽量薄。状态机、ViewModel 逻辑、增量 diff、权限映射、计时统计都放进纯 Swift 包 `Packages/MosaicAppCore`，在 Linux 上用 fake 相册驱动 `swift test`；App target 只放 PhotoKit / UIKit 适配器和 SwiftUI 视图。
+
+### A1. MosaicAppCore（Linux 可测，零依赖，只依赖本地 MosaicCore）
+
+| 模块 | 文件 | 内容 |
+|---|---|---|
+| 文案 key | `Localization/L10nKey.swift` | 逻辑层只产出 key 或 `LocalizedLine(key, 参数)`，不产出中文。`CountFormat.grouped` 做千分位。`L10nKey` 刻意不支持字符串字面量，避免 SwiftUI `Text("…")` 产生重载歧义。测试会读取仓库里的 `Localizable.strings`，断言 key 全部存在、带格式的 key 都有 `%n$@` 占位符。 |
+| 权限 / 首启 (T3) | `Permission/PhotoAuthorization.swift` | `PhotoAuthorization`（与 `PHAuthorizationStatus` 一一对应）→ `PermissionPrompt`（undetermined / limited / denied；restricted 归入 denied，见决定 7）→ `PermissionLogic.effect`（受限页：主按钮调系统选择器，次按钮「用已选的照片继续」，链接跳设置，见决定 1）。`OnboardingFlow` 共 3 屏，最后一屏按钮按授权状态显示「允许访问照片」或「开始使用」。`AppRoute.resolve` 决定启动和回前台时显示哪一页。 |
+| 来源抽象 | `Library/PhotoLibraryProviding.swift` | `PhotoLibraryProviding`（授权、资产总数、按区间分批取元数据、相簿、相簿成员）、`ThumbnailProviding`、`ThumbnailRequest`（128 / aspectFill / fastFormat / fast；`isNetworkAccessAllowed` 和 `allowsCachingHighQualityImages` 是 `let false`，不能被改）。 |
+| 增量索引 (T5) | `Index/PhotoIndex.swift`、`IndexManifest.swift`、`BoundedConcurrency.swift`、`ChangeDebouncer.swift`、`FeatureTable+Append.swift` | 见 A2 |
+| 来源页 (T4) | `Source/SourceList.swift`、`EmptyState.swift` | 首项标题：完全访问显示「全部照片」，受限显示「已允许访问的照片」（决定 8）。扫描完成前显示「约 N 张」（资产总数，不随扫描跳动），完成后显示可用张数「N 张」（补充 Q2），相簿行规则相同。隐藏空相簿；扫描完成后也隐藏可用为 0 的相簿。受限模式下常驻「增加可用照片」。UI 只能单选，引擎保留并集能力。相簿消失时回退到全部照片，并提示 `source.album.unreadable`。空状态（决定 16）：资产为 0 → `empty.no_photos`；扫描完成但可用为 0 且有未下载 → `empty.not_downloaded`；部分未下载 → 扫描完成时提示 `scan.skipped_undownloaded`。 |
+| 扫描页 | `Flow/ScanFlow.swift` | 扫描页状态：scanning / confirmingCancel / stopped / pausedInBackground / completed / failed。被杀后续扫时显示 `scan.resume`；进后台宽限到期就暂停，回前台自动继续、不提示（决定 5）。渐进可用：可用 ≥ 2,000 张时显示 `scan.progressive.*`。用户主动停止后不会自动继续。 |
+| 主流程 (T9) | `Flow/MainFlow.swift`、`GenerationMachine.swift`、`GenerationRunner.swift`、`HiddenEntry.swift` | 见 A3 |
+| 计时 | `Perf/PerfRecorder.swift`、`PerfReport.swift` | 见 A4 |
+| 色块预览 | `Preview/PreviewRenderer.swift` | 用素材特征的 2×2 子块颜色画出每格（OKLab 或 CIELAB → sRGB），在缩略图取回前先显示。测试验证每格颜色与素材原色误差 ≤ 1/255。 |
+
+### A2. 增量索引 `PhotoIndex`（actor）
+
+- **全量元数据 diff**（决定 11）：分批 `assetMetadata(in:)`，每批 2,000 条，不把全部 PHAsset 转成数组。按 id 比较 `modificationDate`：
+  - 新增 → pending；
+  - 修改 → 旧行 tombstone + pending；
+  - 删除 → tombstone + 删条目；
+  - `unavailableLocal` / `failed` 每次全量 diff 都重试（对应「重新检查」）。
+- **扫描**：
+  - 每批 300 张（夹到 1–500），缩略图并发 24（夹到 ≤ 32）；生成期间降到 4，切换在下一批生效（方案 §5）。
+  - 下一批会先 `startCaching`，本批处理完 `stopCaching`。
+  - 宽高比用 PHAsset 像素尺寸覆盖（评审 O3）。
+- **落盘**：先写 `features.bin`（MosaicCore 原子写），再写 `index.json`（`.atomic`）。整表重写是 O(n)，所以累计新行 ≥ max(1000, 10% 表长) 或距上次落盘 ≥ 8 s 才落盘一次；扫描结束、取消、出错时都会落盘。
+- **崩溃一致性**（加载时修复）：
+  - 清单引用不到的行 → tombstone（孤儿行：features 已写、清单未写）；
+  - 清单引用了超出文件长度或已 tombstone 的行 → 条目回到 pending。
+- **损坏恢复**：
+  - `features.bin` 截断或块校验失败 → 保留有效前缀，丢失行对应的资产重扫；
+  - 头部损坏、特征版本变化、`index.json` 损坏或版本不符 → 删除两个文件，全量重建（决定 (5)：重建流程放在 App 层）。
+- **压缩**：扫描结束时，若空洞率 > 20% 就压缩，并按 `oldToNew` 重映射清单行号。测试会逐行校验特征颜色与资产对应。
+- **取消**（Task.cancel / 用户停止 / 后台到期）：已完成的批次会落盘，`scanInProgress` 保持 true，下次显示 `scan.resume`，只扫剩余部分。
+- **快照**：`snapshot(for: .allPhotos | .album(id))` → `LibrarySnapshot`（来源 ∧ 已扫描 ∧ 未删除）+ 行号到 localIdentifier 的映射（渲染取图用）。相簿打不开时抛 `PhotoIndexError.albumUnreadable`。
+
+### A3. 生成流程 `GenerationMachine`（纯 reducer，平台层执行 Effect）
+
+- 「开始拼图」：
+  - 可用 < 200 → 先显示 `shortage.pregenerate`，可继续或返回，不阻止生成（决定 2）；
+  - 0 张 → 进入 noMaterial（正常情况下已被 `GenerateGate` 的空状态拦住）。
+- 每次运行有递增的 runID，**过期运行的结果和错误一律忽略**（例如取消后才到的回报）。
+- 生成中点「取消」→ 弹确认，生成在后台继续 → 确认后取消。由「换一种拼法」触发的运行被取消时，回到上一结果。
+- **CancellationError 不算失败**（决定 (2)）：`GenerationFailure.classify` 返回 nil，不进失败页、不记诊断错误。系统取消按挂起处理。
+- 后台：进后台（宽限到期）→ 取消并挂起 → 回前台用**同一种子**自动重跑。自动重跑也失败时，回到设置页并提示 `generate.auto_retry_failed`（决定 5）。普通失败 → `generate.failed.*`。
+- 「换一种拼法」：种子取 `MosaicSeed.next(after:)`，复用同一快照，参数不变（决定 4）。结果页 `shortage.result` 直接取 `MosaicGeneration.shouldShowShortageNotice`（可用 < 200 且实际放宽了约束）。
+- `GenerateGate`：
+  - 有空状态 → 显示空状态；
+  - 扫描完成，或当前来源可用 ≥ 2,000 → 开始；
+  - 否则跳扫描页等待。
+- `GenerationRunner`：调 `MosaicPipeline.generate(snapshot:seed:progress:) async`，进度用 `overallFraction`，阶段计时写入 `PerfRecorder`。
+
+### A4. 内部性能页
+
+- `PerfRecorder` 线程安全，容量有界，时钟可注入。
+- 阶段：相册 diff、取缩略图、特征提取（累计 CPU）、索引提交、压缩、索引加载、目标图解码、生成（取样 / 匹配 / 分配 / 总计，由 `GenerationPhaseTimer` 从内核进度回调切分）、预览绘制。
+- `PerfReport` 给出每个阶段的次数、总计、中位数、p90、最大值和吞吐，可导出纯文本（「复制为文本」只写剪贴板，零网络）。
+- 扫描吞吐的分子**包含 iCloud 跳过的张数**（性能口径：跳过的也计入）。
+- 入口（决定 18）：
+  - 编译条件 `PERF_PAGE`（目前只在 Debug 打开）时，设置页显示「性能测试」；
+  - 「关于」页 1 秒内连点版本号 5 次也能进入（`HiddenEntryTapCounter`）。
+
+### A5. App target（适配器 + 视图，⚠️ 全部是盲写，Linux 上只做过 `swiftc -parse` 语法检查）
+
+```
+App/
+├─ PhotoMosaicApp.swift            # @main + KernelProvider + PERF_PAGE 开关
+├─ Adapters/
+│  ├─ PhotoKitLibrary.swift        # PhotoLibraryProviding：PHAsset / PHAssetCollection
+│  ├─ PhotoKitThumbnails.swift     # ThumbnailProviding：PHCachingImageManager（128 / aspectFill / fastFormat / fast / 不联网）
+│  ├─ ImagePixels.swift            # CGImage → 白底 sRGB RGBA8 PixelBuffer；ImageIO 目标图降采样（≤ 2048，带 EXIF 方向）
+│  ├─ SystemActions.swift          # 打开设置 / presentLimitedLibraryPicker / beginBackgroundTask 包装
+│  └─ LibraryChangeObserver.swift  # PHPhotoLibraryChangeObserver → 2 s 去抖 → 全量 diff
+├─ Models/AppModel.swift           # @MainActor ObservableObject：只转发到 MosaicAppCore 并执行副作用
+├─ Rendering/MosaicPreviewRenderer.swift  # 结果页预览：先显示色块，再用缩略图逐格绘制 + 原图叠加 α
+└─ Views/                          # RootView / Onboarding / Permission / MainFlow（目标图 → 来源 → 设置 → 进度 → 结果）/ Scan / Empty / Settings / About / Perf
+```
+
+- `project.yml` 的改动：
+  - 新增本地包 `MosaicAppCore`，App 和 AppTests 都依赖它；
+  - scheme 的 test 加上 `MosaicAppCore/MosaicAppCoreTests`；
+  - PhotoMosaic 的 Debug 配置加 `SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG PERF_PAGE`。
+- `linux-core.yml`：新增 step「Test MosaicAppCore」（`swift test --parallel`），用同一个 `swift:6.3.3-noble` 容器。
+- AppTests 新增：授权映射、透明像素合成到白底、bundle 里所有 key 都能查到、`LocalizedLine` 格式化。
+
+### A6. 与技术方案的偏离 / 未做
+
+1. **`index.sqlite` → `index.json`**：为了零依赖并能在 Linux 上测试，用原子写入的 JSON 清单。Linux 上 10k 条时每次提交约 34 ms（JSON 编码占主要部分）。若真机 10 万张提交过慢，再换 SQLite，只需改 `PhotoIndex.commit/load`。
+2. **64px 图集没做**：方案 §2.5 写「特征可由 64px 图集重算，不必访问 PhotoKit」。目前丢弃重建时直接重新请求 PhotoKit 缩略图（逻辑正确，重建较慢）。
+3. **token 增量**（`fetchPersistentChanges`）没做：决定 11 允许 TF1 只做全量 diff。
+4. **预览没用 CATiledLayer**：MVP 用一张整图（长边 ≤ 约 2400 px）加缩放手势。保存 / 分享 / 4000 / 6000 导出属于 T10/T11，不在本卡范围。
+5. 性能页没有导出基准（8000 摸底，决定 12），等导出卡完成后再加。
+6. `Application Support/Index` 没有设置 `isExcludedFromBackup`（索引可重建，应排除出 iCloud 备份），待补。
+
+### A7. 盲写风险清单（macOS CI 首次跑通后逐条核对）
+
+| # | 位置 | 不确定点 |
+|---|---|---|
+| R1 | `PhotoKitLibrary` | `PHFetchOptions` 谓词 `mediaType == %d` 与 `includeHiddenAssets`；同一个 `PHFetchResult` 跨多次分批调用是否稳定（目前每轮 diff 在 `assetCount()` 时刷新）；智能相簿子类型选了 favorites / selfPortraits / depthEffect；相簿多时逐个 fetch 计数的耗时 |
+| R2 | `PhotoKitThumbnails.requestImage` | `.fastFormat` 是否只回调一次（已用 ResumeOnce 防二次 resume）；`PHImageResultIsInCloudKey` 与 image == nil 的组合判断；aspectFill + `.fast` 返回的尺寸可能不是 128 正方形（特征提取默认取中心正方形，影响小）；回调线程 |
+| R3 | `ImagePixels.opaqueSRGB` | premultipliedLast 上下文先铺白再 draw，结果当作非预乘 RGBA 使用（全不透明时两者等价）；P3 → sRGB 依赖 CG 的颜色匹配 |
+| R4 | Swift 6 严格并发 | PhotoKit 非 Sendable 类型（`PHImageRequestOptions`、`PHAsset`）被闭包捕获；几处 `@unchecked Sendable`；`beginBackgroundTask` 到期回调与 `Timer` 回调里用了 `MainActor.assumeIsolated`（这两个都应在主线程回调） |
+| R5 | `LibraryChangeObserver` | 在 init 里 register、deinit 里 unregister；受限选择器改动后能否收到回调 |
+| R6 | `SystemActions.presentLimitedLibraryPicker` | 通过 connectedScenes / keyWindow 找最上层 VC；用的是无回调版本（结果靠变化回调） |
+| R7 | `PhotosPicker` + `loadTransferable(type: Data.self)` | HEIC / ProRAW / 大图的数据与内存；ImageIO `kCGImageSourceThumbnailMaxPixelSize` 2048 + `WithTransform` 方向处理 |
+| R8 | SwiftUI 呈现 | 进度全屏、确认框、alert 用 `.constant(…)` 绑定，由状态机驱动（系统的"点外面关闭"会被忽略）；扫描 sheet、空状态 sheet、全屏进度三者可能同时呈现冲突 |
+| R9 | 废弃 API | `onChange(of:) { new in }`、`.navigationBarLeading` 在 iOS 17 SDK 下有废弃警告（开了 warnings-as-errors 就会挂） |
+| R10 | 本地化 | `Text(_: L10nKey)` 重载；`String(format:arguments:)` 用 NSString 参数配 `%1$@` |
+| R11 | XcodeGen | scheme 里 `package: MosaicAppCore/MosaicAppCoreTests` 语法；`configs: Debug:` 覆盖 `SWIFT_ACTIVE_COMPILATION_CONDITIONS` 时 `$(inherited) DEBUG` 是否重复或丢失 |
+| R12 | 构建配置 | `PERF_PAGE` 只在 Debug 打开；TestFlight 内部包若走 Release，需要新增 Internal 配置（决定 18 要求内部 TF 默认显示） |
+| R13 | 模拟器上跑包测试 | `L10nKeyTests` 用 `#filePath` 读仓库里的 `.strings`，模拟器进程应能读宿主路径，需核对；读不到时改为跳过 |
+| R14 | 后台 | 扫描在 `beginBackgroundTask` 宽限期内继续请求 PhotoKit 是否被允许或节流；到期取消后落盘是否能在宽限期内完成 |
+| R15 | 内存 / 主线程 | 细档 + 预览 cellPixels ≤ 32（长边 ≤ 约 2400 px，约 17 MB）；`refreshAlbums` 在 MainActor 上逐相簿取成员（相簿多时卡顿，应移到后台） |
+| R16 | `AppModel` | `Task.detached` 里捕获 `[weak self]` 再 `MainActor.run`；`GenerationProduct` 跨 actor 传递（已声明 Sendable） |
+
+### A8. 测试
+
+- `Packages/MosaicAppCore`：**56 个测试（55 个通过，1 个基准默认跳过），0 失败**。Swift 6.3.3（CI 同版本）、6.2.4、6.4.2 三个工具链都通过；`--parallel` 也通过。覆盖：
+  - 权限映射与首启；
+  - diff（新增 / 修改 / 删除 / 重试 / 重复 id）；
+  - 索引：首扫计数与跳过、增量 tombstone、压缩重映射（逐行校验特征）、中途取消后新实例续扫且只扫剩余、特征版本变化重建、清单损坏重建、孤儿行、截断前缀恢复、并发上限与生成期间降并发、相簿快照与打不开、全部未下载的空状态及重新检查、空相册、计时；
+  - 来源页与闸门、扫描状态机、主流程导航、生成状态机（过期 runID、后台同种子重跑、自动重跑失败提示、CancellationError 静默、换一种拼法取消回结果）；
+  - 端到端生成（同种子可复现、cellAssetIDs、素材不足提示、Task 取消抛 CancellationError）、色块预览、计时与报告、有界并发。
+- `Packages/MosaicCore`：149 个测试，0 失败（6.3.3，未改动）。
+- `MOSAIC_BENCH=1 swift test -c release --filter IndexBenchTests`（fake 缩略图，只看簿记开销）：10k 张总耗时约 410 ms，其中提交 379 ms（11 次）、特征提取 48 ms。**Linux 数字不能作为 iPhone 11 首扫 ≤ 90 秒的证据**，真机瓶颈在 PhotoKit 取图。
+- `check-no-network.sh` OK；`gen-localizable.py --check` OK；actionlint 1.7.12 两个 workflow 都 rc 0；App / AppTests 全部 `swiftc -parse` 通过（Linux 上无法类型检查 SwiftUI / Photos）。
+
 ## feat/mosaic-core-io-cancel（基于 a0102be）
 
 日期：2026-11-16（PT）　依据：技术方案 v0.2、产品决定 v0.3（含 01:10 / 01:12 补充）、架构师评审 `reviews/mosaic-core-a0102be.md`、QA `qa/a-layer-coverage.md`、文案 copy_v1.1（已再次同步）。

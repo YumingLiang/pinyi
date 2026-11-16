@@ -8,8 +8,9 @@ iOS 16+，Swift 6 + SwiftUI，零网络。架构以 `tech-design-v0.2.md` 为准
 photomosaic/
 ├─ Packages/
 │  ├─ MosaicCore/          # 纯 Swift：颜色空间、特征、features.bin、top-k、约束贪心、网格/条带/叠加。Linux 可 build + test
+│  ├─ MosaicAppCore/       # 纯 Swift：App 层状态机 / 增量索引（PhotoIndex）/ 权限映射 / 计时统计；协议抽象相册，fake 驱动测试。Linux 可 test
 │  └─ MosaicAccelerate/    # Apple 专属 DistanceKernel 扩展点（#if canImport(Accelerate)），Linux 上为空模块
-├─ App/                    # SwiftUI 外壳（T1 骨架占位）+ PrivacyInfo.xcprivacy
+├─ App/                    # SwiftUI 视图（Views/）+ PhotoKit/UIKit 适配器（Adapters/）+ AppModel；逻辑全在 MosaicAppCore
 │  └─ Resources/           # copy_v1.1.md（文案源，带 key）+ zh-Hans.lproj/{Localizable,InfoPlist}.strings（生成）
 ├─ AppTests/               # iOS 模拟器单元测试
 ├─ project.yml             # XcodeGen（.xcodeproj 不入库）
@@ -66,6 +67,8 @@ cd Packages/MosaicCore
 swift build
 swift test                                   # 全部单元测试
 MOSAIC_BENCH=1 swift test -c release --filter PerformanceTests   # A-21 全规模基准（CI 单独 job，只记录不阻断；加 MOSAIC_BENCH_ASSERT=1 才断言软阈值）
+cd ../MosaicAppCore && swift test            # App 层逻辑（fake 相册 / 缩略图）
+MOSAIC_BENCH=1 swift test -c release --filter IndexBenchTests  # 索引簿记开销（只打印；不是真机证据）
 cd ../MosaicAccelerate && swift build        # Linux 上为空模块，只验证可编译
 cd ../.. && ./scripts/check-no-network.sh    # 零网络守护
 python3 scripts/gen-localizable.py --check   # .strings 与文案表一致

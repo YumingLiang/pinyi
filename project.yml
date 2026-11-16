@@ -28,6 +28,9 @@ packages:
     path: Packages/MosaicCore
   MosaicAccelerate:
     path: Packages/MosaicAccelerate
+  # App 层纯逻辑（状态机 / 增量索引 / 权限映射 / 计时统计），Linux 上 `swift test` 覆盖。
+  MosaicAppCore:
+    path: Packages/MosaicAppCore
 
 targets:
   PhotoMosaic:
@@ -47,6 +50,7 @@ targets:
     dependencies:
       - package: MosaicCore
       - package: MosaicAccelerate
+      - package: MosaicAppCore
     info:
       path: App/Info.plist                   # 由 XcodeGen 生成（已 .gitignore）
       properties:
@@ -75,6 +79,11 @@ targets:
         PRODUCT_NAME: PhotoMosaic
         # App 图标：资产目录尚未加入（占位图标见 /workspace/pinyi/icons），加入后设 ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
+      configs:
+        # 决定 18：内部构建在设置页显示「性能测试」入口（编译条件 PERF_PAGE）。
+        # 目前只有 Debug 打开；TestFlight 内部包若走 Release，需要新增一个 Internal 配置再打开（见 CHANGES 风险 R12）。
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG PERF_PAGE
 
   PhotoMosaicTests:
     type: bundle.unit-test
@@ -85,6 +94,7 @@ targets:
     dependencies:
       - target: PhotoMosaic
       - package: MosaicCore
+      - package: MosaicAppCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.placeholder.photomosaic.tests
@@ -104,6 +114,7 @@ schemes:
         - name: PhotoMosaicTests
         # MosaicCore 自身的 XCTest 也在 iOS 模拟器上跑一遍（XcodeGen 本地包测试目标语法，未经 macOS 验证）
         - package: MosaicCore/MosaicCoreTests
+        - package: MosaicAppCore/MosaicAppCoreTests
     run:
       config: Debug
     archive:
