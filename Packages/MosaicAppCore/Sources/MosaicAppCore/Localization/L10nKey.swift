@@ -56,6 +56,8 @@ public extension L10nKey {
     static let sourceAlbumUnreadable = L10nKey(rawValue: "source.album.unreadable")
     static let sourceAddPhotos = L10nKey(rawValue: "source.add_photos")
     static let sourceNext = L10nKey(rawValue: "source.next")
+    /// 「有 N 张照片手机上的版本不够清楚，没有用上」（hd-export-req-v0.2 F5）。
+    static let sourceExcludedLowRes = L10nKey(rawValue: "source.excluded_low_res")
     // 密度 / 叠加 / 生成前
     static let densitySection = L10nKey(rawValue: "density.section")
     static let densityCoarse = L10nKey(rawValue: "density.coarse")
@@ -92,6 +94,8 @@ public extension L10nKey {
     static let generateProgressTitle = L10nKey(rawValue: "generate.progress.title")
     static let generateProgressBody = L10nKey(rawValue: "generate.progress.body")
     static let generateProgressCancel = L10nKey(rawValue: "generate.progress.cancel")
+    /// 探测清晰度期间的进度页正文。
+    static let generateProgressChecking = L10nKey(rawValue: "generate.progress.checking")
     static let generateCancelConfirmTitle = L10nKey(rawValue: "generate.cancel_confirm.title")
     static let generateCancelConfirmConfirm = L10nKey(rawValue: "generate.cancel_confirm.confirm")
     static let generateCancelConfirmContinue = L10nKey(rawValue: "generate.cancel_confirm.continue")
@@ -166,14 +170,14 @@ public extension L10nKey {
         targetNavTitle, targetPrompt, targetChoose, targetReplace, targetNext, targetUnreadable,
         sourceNavTitle, sourceListAll, sourceListAllowed, sourceListCount, sourceListCountPending, sourceListTitleFormat,
         sourceAlbumOption, sourceAlbumOptionDesc, sourceAlbumListTitle, sourceAlbumItemCount, sourceAlbumUnreadable,
-        sourceAddPhotos, sourceNext,
+        sourceAddPhotos, sourceNext, sourceExcludedLowRes,
         densitySection, densityCoarse, densityCoarseDesc, densityMedium, densityMediumDesc, densityFine, densityFineDesc,
         overlaySection, overlayLeft, overlayRight, overlayHint,
         generateCTA, generatePrivacyHint, shortagePregenerate, shortagePregenerateContinue, shortagePregenerateBack,
         scanTitle, scanResume, scanProgress, scanFirstTimeHint, scanProgressiveReady, scanProgressiveHint, scanProgressiveCTA,
         scanCancel, scanCancelConfirmTitle, scanCancelConfirmBody, scanCancelConfirmStop, scanCancelConfirmContinue,
         scanSkippedUndownloaded, miscScanStopped,
-        generateProgressTitle, generateProgressBody, generateProgressCancel, generateCancelConfirmTitle,
+        generateProgressTitle, generateProgressBody, generateProgressCancel, generateProgressChecking, generateCancelConfirmTitle,
         generateCancelConfirmConfirm, generateCancelConfirmContinue, generateAutoRetryFailed, generateAutoRetryFailedRetry,
         generateFailedTitle, generateFailedBody, generateFailedRetry, generateFailedBack,
         previewNavTitle, previewHint, previewSave, previewShare, previewAdjust, previewReshuffle, shortageResult,

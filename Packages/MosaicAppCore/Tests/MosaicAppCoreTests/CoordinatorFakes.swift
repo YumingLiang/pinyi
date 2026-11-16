@@ -103,10 +103,24 @@ final class FakePreferences: PreferenceStore, Sendable {
 
 /// 包一层真实 `GenerationRunner`：计数、可在开跑前停住。
 final class GatedGenerator: MosaicGenerating, Sendable {
-    let runner = GenerationRunner()
+    let runner: GenerationRunner
     let calls = Locked(0)
     let gate: Locked<GatePoint?>
-    init(gate: GatePoint? = nil) { self.gate = Locked(gate) }
+    init(gate: GatePoint? = nil, runner: GenerationRunner = GenerationRunner()) {
+        self.gate = Locked(gate)
+        self.runner = runner
+    }
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        await pass()
+        return try await runner.run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress, stage: stage)
+    }
+    func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
+                   progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        await pass()
+        return try await runner.reshuffle(previous, target: target, settings: settings, seed: seed, progress: progress, stage: stage)
+    }
+    func invalidateLocalResolution() { runner.invalidateLocalResolution() }
 
     private func pass() async {
         calls.update { $0 += 1 }

@@ -96,6 +96,7 @@ struct SourceStepView: View {
                 Section { Button { SystemActions.presentLimitedLibraryPicker() } label: { Text(L10nKey.sourceAddPhotos) } }
             }
             if let n = model.flow.source.notice { Section { Text(n).foregroundStyle(.red) } }
+            if let line = model.sourceLowResLine { Section { Text(line).font(.footnote).foregroundStyle(.secondary) } }
             if let n = model.transientNotice { Section { Text(n).font(.footnote).foregroundStyle(.secondary) } }
             if let e = model.emptyState {
                 Section { VStack(alignment: .leading) { Text(e.titleKey).bold(); Text(e.bodyKey).font(.footnote) } }
@@ -180,7 +181,7 @@ struct GenerationProgressView: View {
         VStack(spacing: 20) {
             Text(L10nKey.generateProgressTitle).font(.title2.bold())
             ProgressView(value: model.flow.generation.fraction).padding(.horizontal, 40)
-            Text(L10nKey.generateProgressBody).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text(model.generationProgressBodyKey).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Button(role: .cancel) { model.send(.cancelTapped) } label: { Text(L10nKey.generateProgressCancel) }
         }
         .padding(32)

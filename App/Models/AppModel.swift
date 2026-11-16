@@ -77,6 +77,8 @@ final class AppModel: ObservableObject {
     var access: SourceAccess { state.access }
     var allPhotosRow: SourceRow { state.allPhotosRow }
     var authorization: PhotoAuthorization { state.authorization }
+    var sourceLowResLine: LocalizedLine? { state.sourceLowResLine }
+    var generationProgressBodyKey: L10nKey { state.generationProgressBodyKey }
 
     var showScanSheet: Bool {
         get { state.showScanSheet }

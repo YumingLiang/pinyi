@@ -31,6 +31,7 @@ public enum GenerationFailure: Sendable, Hashable {
         if error is CancellationError { return nil }
         if let e = error as? PhotoIndexError, e == .albumUnreadable { return .albumUnreadable }
         if let e = error as? MosaicError, case .noCandidates = e { return .noMaterial }
+        if error is NoSharpPhotosError { return .noMaterial }
         return .other
     }
 }

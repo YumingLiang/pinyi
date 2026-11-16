@@ -59,29 +59,73 @@ public enum TargetImagePolicy {
 /// 一次生成的产物：结果 + 快照（「换一种拼法」复用同一快照，参数不变，决定 4）。
 public struct GenerationProduct: Sendable {
     public var generation: MosaicGeneration
+    /// 生成所用快照。启用清晰度探测时，这是**剔除了不够清楚的照片之后**的快照，「换一种拼法」沿用它。
     public var snapshot: IndexSnapshot
+    /// 不够清楚而没用上的照片统计（来源页 `source.excluded_low_res` + 性能页）。
+    public var lowRes: LowResReport = .disabled
     public var outcome: GenerationOutcome { GenerationOutcome(generation) }
 
+    public init(generation: MosaicGeneration, snapshot: IndexSnapshot, lowRes: LowResReport = .disabled) {
+        self.generation = generation
+        self.snapshot = snapshot
+        self.lowRes = lowRes
+    }
+
     /// 每个格子对应的 localIdentifier（行优先）；渲染时据此取缩略图 / 原图。
-    public var cellAssetIDs: [String?] {
-        generation.assignment.tiles.map { row in row >= 0 && row < snapshot.assetIDsByRow.count ? snapshot.assetIDsByRow[row] : nil }
+    public var cellAssetIDs: [String?] { Self.cellAssetIDs(generation, snapshot) }
+
+    static func cellAssetIDs(_ g: MosaicGeneration, _ snapshot: IndexSnapshot) -> [String?] {
+        g.assignment.tiles.map { row in row >= 0 && row < snapshot.assetIDsByRow.count ? snapshot.assetIDsByRow[row] : nil }
     }
 }
 
-/// 执行生成（不含 UI）：计时 + 进度映射 + Task 取消。平台层在后台 Task 里调用。
+/// 执行生成（不含 UI）：计时 + 进度映射 + Task 取消 + （可选）清晰度探测与重配。平台层在后台 Task 里调用。
 public struct GenerationRunner: Sendable {
     public var pipeline: MosaicPipeline
     public var perf: PerfRecorder?
+    /// 「不能略糊」：注入后，匹配完只探测分到格子上的照片，不合格的剔除后重配（最多 `maxRematchRounds` 轮）。
+    public var sharpness: LocalResolutionChecker?
 
-    public init(pipeline: MosaicPipeline = MosaicPipeline(), perf: PerfRecorder? = nil) {
+    public init(pipeline: MosaicPipeline = MosaicPipeline(), perf: PerfRecorder? = nil, sharpness: LocalResolutionChecker? = nil) {
         self.pipeline = pipeline
         self.perf = perf
+        self.sharpness = sharpness
     }
 
     /// - Parameter progress: 整体完成比例 0…1（取样 5% / 匹配 60% / 分配 35%）。
     /// - Throws: `CancellationError`（Task 取消，正常路径）或引擎错误。
     public func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
                     progress: (@Sendable (Double) -> Void)? = nil) async throws -> GenerationProduct {
+        try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress, stage: nil)
+    }
+
+    /// 同上，另报告阶段（匹配 / 检查清晰度），进度页据此换文案。
+    /// - Throws: 另外在剔除后一张可用的都不剩时抛 `NoSharpPhotosError`（→ `GenerationFailure.noMaterial`）。
+    public func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+                    progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, carriedExcluded: [],
+                      progress: progress, stage: stage)
+    }
+
+    /// 「换一种拼法」：同一快照、同一参数，只换种子。
+    public func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
+                          progress: (@Sendable (Double) -> Void)? = nil) async throws -> GenerationProduct {
+        try await reshuffle(previous, target: target, settings: settings, seed: seed, progress: progress, stage: nil)
+    }
+
+    public func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
+                          progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await run(target: target, snapshot: previous.snapshot, settings: settings, seed: seed,
+                      carriedExcluded: previous.lowRes.excludedAssetIDs, progress: progress, stage: stage)
+    }
+
+    /// 相册变化：清掉「不合格」的缓存（照片可能刚下载回本机）。
+    public func invalidateLocalResolution() { sharpness?.cache.removeUnusable() }
+
+    // MARK: - 内部
+
+    private func generateOnce(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+                              noteSuffix: String, progress: (@Sendable (Double) -> Void)?) async throws -> MosaicGeneration {
         let timer = perf.map { GenerationPhaseTimer(clock: $0.clock) }
         let g = try await pipeline.generate(target: target, density: settings.density.density, snapshot: snapshot.library,
                                             seed: seed) { p in
@@ -89,15 +133,78 @@ public struct GenerationRunner: Sendable {
             progress?(p.overallFraction)
         }
         if let timer, let perf {
-            let note = "\(settings.density.rawValue) \(g.layout.columns)×\(g.layout.rows) 素材 \(snapshot.availableCount)"
+            let note = "\(settings.density.rawValue) \(g.layout.columns)×\(g.layout.rows) 素材 \(snapshot.availableCount)\(noteSuffix)"
             for s in timer.finish(cells: g.layout.cellCount, note: note) { perf.record(s) }
         }
-        return GenerationProduct(generation: g, snapshot: snapshot)
+        return g
     }
 
-    /// 「换一种拼法」：同一快照、同一参数，只换种子。
-    public func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
-                          progress: (@Sendable (Double) -> Void)? = nil) async throws -> GenerationProduct {
-        try await run(target: target, snapshot: previous.snapshot, settings: settings, seed: seed, progress: progress)
+    private func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+                     carriedExcluded: Set<String>, progress: (@Sendable (Double) -> Void)?,
+                     stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        stage?(.matching)
+        guard let checker = sharpness else {
+            let g = try await generateOnce(target: target, snapshot: snapshot, settings: settings, seed: seed,
+                                           noteSuffix: "", progress: progress)
+            return GenerationProduct(generation: g, snapshot: snapshot)
+        }
+        // 进度分段：首轮生成 0–0.8、首轮探测 0.8–0.9，之后每轮重配（生成 + 探测）平分 0.9–1.0。
+        let rounds = max(1, checker.maxRematchRounds)
+        func segment(_ round: Int, probing: Bool) -> (Double, Double) {
+            if round == 0 { return probing ? (0.8, 0.9) : (0, 0.8) }
+            let w = 0.1 / Double(rounds)
+            let lo = 0.9 + w * Double(min(round, rounds) - 1)
+            return probing ? (lo + w / 2, lo + w) : (lo, lo + w / 2)
+        }
+        func scaled(_ seg: (Double, Double)) -> (@Sendable (Double) -> Void)? {
+            guard let progress else { return nil }
+            return { f in progress(seg.0 + (seg.1 - seg.0) * min(max(f, 0), 1)) }
+        }
+
+        let clock = perf?.clock ?? .system
+        var excluded = carriedExcluded
+        // 先剔掉缓存里已知不合格的（本会话之前探测过），减少重配轮数。
+        let (initial, pre) = try snapshot.excluding(assetIDs: checker.cache.knownUnusable())
+        var snap = initial
+        excluded.formUnion(pre)
+        var report = LowResReport(enabled: true)
+        var round = 0
+        while true {
+            stage?(.matching)
+            if snap.availableCount == 0, !excluded.isEmpty { throw NoSharpPhotosError(excludedCount: excluded.count) }
+            let g: MosaicGeneration
+            do {
+                g = try await generateOnce(target: target, snapshot: snap, settings: settings, seed: seed,
+                                           noteSuffix: round == 0 ? "" : " 重配第 \(round) 轮",
+                                           progress: scaled(segment(round, probing: false)))
+            } catch let e as MosaicError {
+                if case .noCandidates = e, !excluded.isEmpty { throw NoSharpPhotosError(excludedCount: excluded.count) }
+                throw e
+            }
+            let cellIDs = GenerationProduct.cellAssetIDs(g, snap)
+            stage?(.checkingSharpness)
+            let probeSeg = scaled(segment(round, probing: true))
+            let t0 = clock.now()
+            let pass = try await checker.check(cellIDs.compactMap { $0 }) { done, total in
+                probeSeg?(Double(done) / Double(max(total, 1)))
+            }
+            report.probeSeconds += clock.now() - t0
+            report.probedCount += pass.probed
+            report.cacheHits += pass.cacheHits
+            let bad = pass.unusable
+            if bad.isEmpty || round >= checker.maxRematchRounds {
+                report.unresolvedCellCount = bad.isEmpty ? 0 : cellIDs.reduce(0) { $0 + (($1.map { bad.contains($0) } ?? false) ? 1 : 0) }
+                // 未解决的（到达最多轮数仍不合格）也算「没用好」，但它们确实还在图上：不计入排除数，只进日志。
+                report.excludedAssetIDs = excluded
+                report.rematchRounds = round
+                perf?.record(.sharpnessProbe, seconds: report.probeSeconds, items: report.probedCount, note: report.perfNote)
+                progress?(1)
+                return GenerationProduct(generation: g, snapshot: snap, lowRes: report)
+            }
+            let (next, removed) = try snap.excluding(assetIDs: bad)
+            excluded.formUnion(removed)
+            snap = next
+            round += 1
+        }
     }
 }

@@ -10,6 +10,8 @@ struct PerfView: View {
     @State private var report = PerfReport(samples: [])
     @State private var peaks: [MemoryPhase: PeakMemorySample] = [:]
     @State private var triggers: [SQLiteTriggerCheck] = []
+    /// 最近一次清晰度探测的附注（去重探测张数 / 缓存命中 / 排除 / 重配轮数 / 未解决格数）。
+    @State private var lastProbeNote: String?
 
     var body: some View {
         List {
@@ -25,6 +27,10 @@ struct PerfView: View {
                     LabeledContent("p90", value: String(format: "%.1f ms", r.p90Seconds * 1000))
                     LabeledContent("最大", value: String(format: "%.1f ms", r.maxSeconds * 1000))
                     if let ips = r.itemsPerSecond { LabeledContent("吞吐", value: String(format: "%.1f /s", ips)) }
+                    if r.phase == .sharpnessProbe {
+                        LabeledContent("累计探测张数", value: "\(r.totalItems)")
+                        if let n = lastProbeNote { Text(verbatim: "最近一次：\(n)").font(.footnote) }
+                    }
                 }
             }
             // MF-7：各阶段峰值内存（phys_footprint，0.5 s 采样）
@@ -58,6 +64,7 @@ struct PerfView: View {
 
     private func refresh() {
         report = model.perf.report()
+        lastProbeNote = model.perf.allSamples().last { $0.phase == .sharpnessProbe }?.note
         peaks = model.coordinator.memory.peakByPhase()
         triggers = SQLiteTriggerCheck.evaluate(samples: model.perf.allSamples(), memory: model.coordinator.memory.samples())
     }

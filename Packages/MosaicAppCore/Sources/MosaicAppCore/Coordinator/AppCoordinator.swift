@@ -254,6 +254,7 @@ public final class AppCoordinator {
     /// 相册变化（`PHPhotoLibraryChangeObserver`，任意线程 → 平台层转到主线程调用）：2 s 去抖、最长 10 s，
     /// 到点做一次全量 diff + 扫描（决定 11）。时间走注入的时钟。
     public func libraryDidChange() {
+        dependencies.generator.invalidateLocalResolution()   // 不合格的照片可能刚下载回本机
         changeDebouncer.noteChange(at: dependencies.clock.now())
         scheduleDebounce()
     }
@@ -366,27 +367,47 @@ public final class AppCoordinator {
         let consumer = Task { @MainActor [weak self] in
             for await f in fractions { self?.send(.progressed(runID: id, fraction: f)) }
         }
+        state.generationStage = .matching
+        let (stages, stageContinuation) = AsyncStream<GenerationStage>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let stage: @Sendable (GenerationStage) -> Void = { stageContinuation.yield($0) }
+        let stageConsumer = Task { @MainActor [weak self] in
+            for await s in stages {
+                guard let self, self.state.flow.generation.currentRunID == id else { continue }
+                if self.state.generationStage != s { self.state.generationStage = s }
+            }
+        }
         generationTask = Task { [weak self] in
-            defer { continuation.finish() }
+            defer { continuation.finish(); stageContinuation.finish() }
             do {
                 let p: GenerationProduct
                 if let previous {
-                    p = try await generator.reshuffle(previous, target: target, settings: settings, seed: seed, progress: progress)
+                    p = try await generator.reshuffle(previous, target: target, settings: settings, seed: seed,
+                                                      progress: progress, stage: stage)
                 } else {
                     let snap = try await index.snapshot(for: selection)
-                    p = try await generator.run(target: target, snapshot: snap, settings: settings, seed: seed, progress: progress)
+                    p = try await generator.run(target: target, snapshot: snap, settings: settings, seed: seed,
+                                                progress: progress, stage: stage)
                 }
                 continuation.finish()
+                stageContinuation.finish()
                 await consumer.value
+                await stageConsumer.value
                 guard let self else { return }
                 if self.state.flow.generation.currentRunID == id {
                     self.product = p
                     self.state.resultRevision += 1
+                    if p.lowRes.enabled {
+                        self.state.lowResExclusion = LowResExclusion(selection: selection, count: p.lowRes.excludedCount)
+                    }
                 }
                 self.send(.succeeded(runID: id, p.outcome))
             } catch {
                 continuation.finish()
+                stageContinuation.finish()
                 guard let self else { return }
+                if let e = error as? NoSharpPhotosError, self.state.flow.generation.currentRunID == id {
+                    self.state.lowResExclusion = LowResExclusion(selection: selection, count: e.excludedCount)
+                }
                 let failure = GenerationFailure.classify(error)
                 if failure == .albumUnreadable, self.state.flow.generation.currentRunID == id {
                     self.state.flow.source.albumBecameUnreadable()

@@ -90,6 +90,25 @@ public protocol MosaicGenerating: Sendable {
              progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct
     func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
                    progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct
+    func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
+                   progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct
+    func invalidateLocalResolution()
+}
+
+/// 带阶段回报的版本 + 相册变化通知（默认实现转发到旧接口 / 什么都不做，旧的测试替身不用改）。
+public extension MosaicGenerating {
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress)
+    }
+    func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
+                   progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await reshuffle(previous, target: target, settings: settings, seed: seed, progress: progress)
+    }
+    /// 相册变化（清晰度探测缓存失效）。
+    func invalidateLocalResolution() {}
 }
 
 extension GenerationRunner: MosaicGenerating {}

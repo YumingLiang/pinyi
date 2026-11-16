@@ -1,5 +1,19 @@
 # CHANGES
 
+## feat/sharp-filter：「不能略糊」——生成时只用本机有 ≥ 256 px 版本的照片（hd-export-req-v0.2 F5 / hd-default-and-sharpness-v0.1 方案 1）
+
+- **做法（不重扫全库）**：照常匹配 → 只探测**实际分到格子上**的照片（去重）→ 不合格的从候选掩码里剔掉 → 用原有匹配器（含放宽链）整图重配 → 再探测新出现的照片，最多重配 3 轮。生成前先把本会话缓存里已知不合格的剔掉，第二次生成通常 0 轮重配、0 次探测。
+  - 重配是**整图**重跑（同种子、新掩码），不是只改受影响的格子：这样单张上限 / 邻域约束全局一致，「换一种拼法」也能复现。代价是每轮多一次生成耗时（见风险）。
+  - 剔除后的快照存进 `GenerationProduct.snapshot`，「换一种拼法」沿用，被剔的不会换回来；新出现的照片照样探测。
+- **探测**：`LocalResolutionProbing` 协议（MosaicAppCore），App 里是 `PhotoKitResolutionProbe`：`requestImage` 256×256、`.aspectFill`、`.highQualityFormat`、`.fast`、`isNetworkAccessAllowed = false`、异步；有错 / `PHImageResultIsInCloudKey` / 无图 / `PHImageResultIsDegradedKey` / 短边 < 256 一律不合格（判定在 `LocalResolutionPolicy.classify`，Linux 单测）。`.fast` 是有意的：`.exact` 会把本机小图缩放到 256，掩盖「本机只有小图」。
+  - `LocalResolutionChecker`：最多 8 个请求同时在飞；Task 取消时 `cancelImageRequest` 并抛 `CancellationError`，取消后到达的结果不入缓存。
+  - `LocalResolutionCache`：本会话按 localIdentifier 缓存；相册变化（`libraryDidChange`）时只清不合格条目（照片可能刚下载回本机），合格的保留。**未**持久化到索引（见风险）。
+- **界面**：来源页显示 `source.excluded_low_res`「有 N 张照片手机上的版本不够清楚，没有用上」（N = 当前来源里被剔除的不同照片数，换来源后不显示）；探测期间进度页正文换成 `generate.progress.checking`「正在挑出手机上够清楚的照片，请稍等。」。
+- **边界**：剔除后一张都不剩 → `NoSharpPhotosError` → `GenerationFailure.noMaterial`（现有「没有可用照片」路径），来源页仍显示 N；剩下 < 200 张时供给判断按剔除后的张数（结果页 `shortage.result` 规则不变：< 200 且放宽了约束）。重配 3 轮后仍有格子分到不合格照片时照常出图，`unresolvedCellCount` 进性能页附注。
+- **性能页**：新阶段 `sharpnessProbe`「清晰度探测」——各轮探测累计耗时、items = 实际探测张数；附注 `去重探测 / 缓存命中 / 排除 / 重配轮数 / 未解决格数`，性能页显示最近一次附注。重配轮的生成计时附注带「重配第 n 轮」。
+- **测试**（`SharpnessFilterTests`，12 个）：最终结果里没有被剔除的照片且每格都有图；N 去重、每张一次生成只探测一次；缓存避免重探（再生成 0 次探测、换拼法不重复、相册变化只清不合格）；探测中取消抛 `CancellationError`、无结果、不入缓存；并发 ≤ 8；全部不合格走 `noMaterial`；只剩 10 张时供给按剔除后判断；到达最多轮数报告未解决格数；未注入探测器时行为不变；快照剔除只动掩码；协调器来源页文案只对当前来源显示。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`App/Adapters/PhotoKitResolutionProbe.swift`、`LiveDependencies`（注入探测器）、来源页 / 进度页 / 性能页三处视图。需真机核对：`.highQualityFormat` + 无网络时 iCloud 照片的回调形态（nil + InCloud，还是降质图）；`.fast` 返回的像素尺寸。
+
 ## feat/app-layer：P0 预览「第二次放大失效」（真机 32ec2b5 Internal）
 
 - **根因**：`ResultView` 用 `MagnificationGesture().onChanged { scale = max(1, min(8, $0)) }`。手势值是**相对本次手势开始**的倍数（每次从 1 起），旧代码直接把它当绝对倍数、也没有 `onEnded` 累乘进基准——第二次捏合一开始 scale 就被设回 ≈1，图弹回原大小；上限 8 也太小，细网格放到顶也看不清单格。

@@ -22,7 +22,9 @@ extension AppDependencies {
             clock: SystemClock(),
             lifecycle: lifecycle,
             preferences: UserDefaultsPreferences(),
-            generator: GenerationRunner(pipeline: MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())), perf: perf),
+            // 「不能略糊」：匹配后只探测分到格子上的照片，本机版本 < 256 px 的剔除重配（零网络）。
+            generator: GenerationRunner(pipeline: MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())), perf: perf,
+                                        sharpness: LocalResolutionChecker(probe: PhotoKitResolutionProbe())),
             exporter: LiveMosaicExporter(thumbnails: thumbnails),
             memory: PhysFootprintReader(),
             perf: perf,
