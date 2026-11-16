@@ -247,6 +247,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `preview.hint` | 提示 | 双指放大，看看每一块都是哪张照片。 |
 | `preview.save` | 按钮 | 保存到相册 |
 | `preview.share` | 按钮 | 分享 |
+| `preview.export` | 结果页导出按钮（hd-export-req v0.2 §B2，key 待产品确认） | 导出 |
 | `preview.adjust` | 按钮 | 再调一调 |
 | `preview.reshuffle` | 按钮 | 换一种拼法 |
 | `shortage.result` | 结果页短提示（仅当可用照片 < 200 张且匹配器实际放宽了约束时显示） | 有些照片重复用了几次 |
@@ -258,10 +259,13 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | key | 用途 | 文案 |
 |---|---|---|
 | `export.size.section` | 区域标题 | 导出尺寸 |
-| `export.size.4000` | 默认档名称 | 标准 |
-| `export.size.4000.desc` | 说明 | 长边约 4000 像素，文件更小，适合保存和分享。（默认） |
-| `export.size.6000` | 较大档名称 | 更细 |
-| `export.size.6000.desc` | 说明 | 长边约 6000 像素，放大更清楚，文件会大一些。 |
+| `export.size.share` | 分享档名称（hd-export-req v0.2 §A3；原 4000 / 6000 作废） | 分享 |
+| `export.size.share.desc` | 说明 | 长边约 4000 像素，适合发微信。 |
+| `export.size.hd` | 高清档名称 | 高清 |
+| `export.size.hd.desc` | 说明（v0.2 原文带「（默认）」，§F 默认改为超清，已移到超清，待产品确认） | 放大能看清每张小照片。 |
+| `export.size.uhd` | 超清档名称（默认） | 超清 |
+| `export.size.uhd.desc` | 说明 | 放大看得更清楚，文件很大，导出要久一些。（默认） |
+| `export.size.large_hint` | 档位下方固定提示（v0.2 §F1-2 只给文字，key 待产品确认） | 文件较大，导出需要一会儿 |
 | `export.degraded` | 部分原图未在本地、导出时块被降级 | 有些照片还没下载到这台手机，导出后这些小块会稍模糊 |
 | `export.progress.title` | 导出中标题 | 正在导出 |
 | `export.progress.hint` | 导出中提示 | 导出时请停留在这个页面。 |
