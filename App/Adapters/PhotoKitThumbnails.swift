@@ -49,7 +49,11 @@ actor PhotoKitThumbnails: ThumbnailProviding {
                 let degraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
                 if let image, let cg = image.cgImage {
                     if degraded && !fast { return }   // 等最终图
-                    once.resume(ImagePixels.opaqueSRGB(cg, maxEdge: request.targetPixelSize).map { .image($0) } ?? .failed)
+                    // aspectFill 结果可能不是正方形：按短边居中裁方，避免画进格子时被拉伸。
+                    let pixels = request.aspectFill
+                        ? ImagePixels.opaqueSRGBCenteredSquare(cg, maxEdge: request.targetPixelSize)
+                        : ImagePixels.opaqueSRGB(cg, maxEdge: request.targetPixelSize)
+                    once.resume(pixels.map { .image($0) } ?? .failed)
                 } else if inCloud {
                     once.resume(.unavailableLocal)
                 } else if info?[PHImageErrorKey] != nil || info?[PHImageCancelledKey] != nil {

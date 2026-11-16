@@ -64,4 +64,14 @@ final class PerfTests: XCTestCase {
         XCTAssertEqual(v, 7)
         XCTAssertEqual(perf.report().row(.targetDecode)?.totalSeconds ?? 0, 0.25, accuracy: 1e-9)
     }
+
+    func testLatestExportNote() {
+        let perf = PerfRecorder(capacity: 10)
+        XCTAssertNil(perf.latestNote(of: .exportTotal))
+        perf.record(.exportTotal, seconds: 1, items: 1200, note: "uhd 40×30 每格 256px 糊格子 3 白格子 1 文件 12MB")
+        perf.record(.previewRender, seconds: 0.2, items: 1200, note: "ignored")
+        perf.record(.exportTotal, seconds: 2, items: 4800, note: "uhd 80×60 每格 250px 糊格子 0 白格子 0 文件 40MB")
+        XCTAssertEqual(perf.latestNote(of: .exportTotal), "uhd 80×60 每格 250px 糊格子 0 白格子 0 文件 40MB")
+        XCTAssertEqual(perf.latestSample(of: .exportTotal)?.items, 4800)
+    }
 }
