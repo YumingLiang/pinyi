@@ -2,10 +2,12 @@ import Foundation
 import Photos
 import MosaicAppCore
 
-/// `PhotoLibraryProviding` 的 PhotoKit 实现（薄适配层；逻辑在 MosaicAppCore）。
+/// `PhotoLibraryClient` 的 PhotoKit 实现（薄适配层；逻辑在 MosaicAppCore）。
 ///
+/// G-1：做成 actor——缓存的 `PHFetchResult`（非 Sendable）是 actor 状态，不再需要 `NSLock` + `@unchecked Sendable`。
+/// 同步的授权查询是 `nonisolated`（不碰缓存）。
 /// ⚠️ 盲写（Linux 上无法编译验证），见 CHANGES「App 层盲写风险」。
-final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
+actor PhotoKitLibrary: PhotoLibraryClient {
     /// 只取图像；按创建时间升序，顺序稳定（diff 与断点续扫依赖它）。
     private func fetchAllImages() -> PHFetchResult<PHAsset> {
         let opts = PHFetchOptions()
@@ -15,24 +17,40 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
         return PHAsset.fetchAssets(with: opts)
     }
 
-    /// 缓存同一个 fetch result，分批取元数据时不重复 fetch；`invalidate()` 在相册变化后调用。
-    private let lock = NSLock()
+    /// 缓存同一个 fetch result，分批取元数据时不重复 fetch；每轮 diff 开始（`assetCount()`）时重新 fetch。
     private var cached: PHFetchResult<PHAsset>?
 
-    func invalidate() {
-        lock.lock(); cached = nil; lock.unlock()
-    }
+    func invalidate() { cached = nil }
 
     private func current() -> PHFetchResult<PHAsset> {
-        lock.lock(); defer { lock.unlock() }
         if let c = cached { return c }
         let r = fetchAllImages()
         cached = r
         return r
     }
 
-    func authorizationStatus() -> PhotoAuthorization {
+    nonisolated func authorizationStatus() -> PhotoAuthorization {
         Self.map(PHPhotoLibrary.authorizationStatus(for: .readWrite))
+    }
+
+    // MARK: 仅添加（导出保存，T8）
+
+    nonisolated func addOnlyAuthorizationStatus() -> PhotoAuthorization {
+        Self.map(PHPhotoLibrary.authorizationStatus(for: .addOnly))
+    }
+
+    func requestAddOnlyAuthorization() async -> PhotoAuthorization {
+        Self.map(await PHPhotoLibrary.requestAuthorization(for: .addOnly))
+    }
+
+    /// 写入系统相册（add-only 权限即可）。
+    func saveImageToLibrary(fileURL: URL) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            let req = PHAssetCreationRequest.forAsset()
+            let opts = PHAssetResourceCreationOptions()
+            opts.shouldMoveFile = false
+            req.addResource(with: .photo, fileURL: fileURL, options: opts)
+        }
     }
 
     func requestAuthorization() async -> PhotoAuthorization {
@@ -41,7 +59,7 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
         return Self.map(s)
     }
 
-    static func map(_ s: PHAuthorizationStatus) -> PhotoAuthorization {
+    nonisolated static func map(_ s: PHAuthorizationStatus) -> PhotoAuthorization {
         switch s {
         case .notDetermined: return .notDetermined
         case .restricted: return .restricted

@@ -1,6 +1,8 @@
 import Photos
 import PhotosUI
+import SwiftUI
 import UIKit
+import MosaicAppCore
 
 /// 系统动作（权限页 / 来源页的副作用）。⚠️ 盲写。
 @MainActor
@@ -26,24 +28,42 @@ enum SystemActions {
     }
 }
 
-/// `beginBackgroundTask` 包装（决定 5：扫描 / 生成进后台申请宽限时间，到期回调里取消）。
+/// 生命周期事件源 + 后台宽限（G-3 `LifecycleEvents` 的 Apple 实现）。
+/// scenePhase 由 `RootView` 转进来；`beginBackgroundTask` 到期回调里送 `.backgroundTimeExpired` 并立即结束该任务。
 @MainActor
-final class BackgroundTaskGuard {
-    private var id: UIBackgroundTaskIdentifier = .invalid
+final class AppLifecycle: LifecycleEvents {
+    nonisolated let stream: AsyncStream<LifecycleEvent>
+    nonisolated let continuation: AsyncStream<LifecycleEvent>.Continuation
+    private var tasks: [BackgroundWork: UIBackgroundTaskIdentifier] = [:]
 
-    func begin(name: String, onExpire: @escaping @MainActor @Sendable () -> Void) {
-        end()
-        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+    init() {
+        (stream, continuation) = AsyncStream<LifecycleEvent>.makeStream()
+    }
+
+    nonisolated func events() -> AsyncStream<LifecycleEvent> { stream }
+
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        switch phase {
+        case .background: continuation.yield(.enteredBackground)
+        case .active: continuation.yield(.becameActive)
+        default: break
+        }
+    }
+
+    func beginBackgroundWork(_ work: BackgroundWork) {
+        guard tasks[work] == nil else { return }
+        let continuation = self.continuation
+        tasks[work] = UIApplication.shared.beginBackgroundTask(withName: work.rawValue) { [weak self] in
+            // 到期回调在主线程；必须在回调返回前 endBackgroundTask，所以这里同步处理（R4：assumeIsolated 有运行时检查）。
             MainActor.assumeIsolated {
-                onExpire()
-                self?.end()
+                continuation.yield(.backgroundTimeExpired(work))
+                self?.endBackgroundWork(work)
             }
         }
     }
 
-    func end() {
-        guard id != .invalid else { return }
+    func endBackgroundWork(_ work: BackgroundWork) {
+        guard let id = tasks.removeValue(forKey: work), id != .invalid else { return }
         UIApplication.shared.endBackgroundTask(id)
-        id = .invalid
     }
 }

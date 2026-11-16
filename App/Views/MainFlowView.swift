@@ -19,7 +19,7 @@ struct MainFlowView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     if model.flow.step != .target && model.flow.step != .result {
-                        Button { model.flow.send(.back) } label: { Text(L10nKey.commonBack) }
+                        Button { model.flowSend(.back) } label: { Text(L10nKey.commonBack) }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -54,7 +54,7 @@ struct TargetStepView: View {
                 Text(model.flow.targetButtonKey)
             }
             .buttonStyle(.bordered)
-            Button { model.flow.send(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
+            Button { model.flowSend(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(!model.flow.canGoNextFromTarget)
         }
@@ -100,7 +100,7 @@ struct SourceStepView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            Button { model.flow.send(.next) } label: { Text(L10nKey.sourceNext).frame(maxWidth: .infinity) }
+            Button { model.flowSend(.next) } label: { Text(L10nKey.sourceNext).frame(maxWidth: .infinity) }
                 .buttonStyle(.borderedProminent).controlSize(.large).padding()
         }
         .navigationTitle(Text(L10nKey.sourceNavTitle))
@@ -108,7 +108,7 @@ struct SourceStepView: View {
     }
 
     @ViewBuilder func sourceRow(_ row: SourceRow) -> some View {
-        Button { model.flow.source.select(row.selection) } label: {
+        Button { model.selectSource(row.selection) } label: {
             HStack {
                 VStack(alignment: .leading) {
                     if let k = row.titleKey { Text(k) } else { Text(verbatim: row.albumTitle ?? "") }
@@ -132,7 +132,7 @@ struct SettingsStepView: View {
             }
             Section(header: Text(L10nKey.densitySection)) {
                 ForEach(DensityChoice.allCases, id: \.self) { d in
-                    Button { model.flow.settings.density = d } label: {
+                    Button { model.setDensity(d) } label: {
                         HStack {
                             VStack(alignment: .leading) {
                                 Text(d.titleKey)
@@ -146,7 +146,7 @@ struct SettingsStepView: View {
                 }
             }
             Section(header: Text(L10nKey.overlaySection), footer: Text(L10nKey.overlayHint)) {
-                Slider(value: $model.flow.settings.overlayAlpha, in: 0...OverlayBlendLimits.maxAlpha) {
+                Slider(value: $model.overlayAlpha, in: 0...OverlayBlendLimits.maxAlpha) {
                     Text(L10nKey.overlaySection)
                 } minimumValueLabel: { Text(L10nKey.overlayLeft).font(.caption2) } maximumValueLabel: { Text(L10nKey.overlayRight).font(.caption2) }
             }

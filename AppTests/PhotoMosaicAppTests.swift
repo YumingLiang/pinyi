@@ -60,4 +60,23 @@ final class PhotoMosaicAppTests: XCTestCase {
         XCTAssertTrue(line.localized.contains("1,234"))
         XCTAssertTrue(line.localized.contains("10,000"))
     }
+
+    /// MF-2 / QA B-12：索引目录真的被标记为不进 iCloud/iTunes 备份（读回 resourceValues，而不是只看调用记录）。
+    func testIndexDirectoryExcludedFromBackup() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("idx-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = JSONIndexStore(directory: dir, backupExclusion: FileBackupExclusion())
+        try store.prepare()
+        let values = try dir.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+    }
+
+    /// B-27：启动时清空 tmp/export。
+    func testStaleExportsRemoved() throws {
+        let dir = LiveMosaicExporter.exportDirectory
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("old.jpg").path, contents: Data([1]))
+        LiveMosaicExporter(thumbnails: PhotoKitThumbnails()).removeStaleExports()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+    }
 }

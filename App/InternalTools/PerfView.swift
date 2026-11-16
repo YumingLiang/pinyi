@@ -8,6 +8,8 @@ import MosaicAppCore
 struct PerfView: View {
     @EnvironmentObject var model: AppModel
     @State private var report = PerfReport(samples: [])
+    @State private var peaks: [MemoryPhase: PeakMemorySample] = [:]
+    @State private var triggers: [SQLiteTriggerCheck] = []
 
     var body: some View {
         List {
@@ -25,14 +27,46 @@ struct PerfView: View {
                     if let ips = r.itemsPerSecond { LabeledContent("吞吐", value: String(format: "%.1f /s", ips)) }
                 }
             }
+            // MF-7：各阶段峰值内存（phys_footprint，0.5 s 采样）
+            Section(header: Text(verbatim: "峰值内存（phys_footprint）")) {
+                ForEach(MemoryPhase.allCases, id: \.self) { p in
+                    if let s = peaks[p] {
+                        LabeledContent(p.label, value: String(format: "峰值 %.0f MB（+%.0f MB）",
+                                                              Double(s.peakBytes) / 1_048_576, Double(s.deltaBytes) / 1_048_576))
+                    }
+                }
+            }
+            // 评审 d6fa750 §3：换 SQLite 的触发条件（10 万条；不足 10 万线性外推，仅参考）
+            Section(header: Text(verbatim: "SQLite 触发条件")) {
+                ForEach(triggers) { c in
+                    LabeledContent(c.label, value: c.verdict.rawValue)
+                }
+            }
             Section {
-                Button("复制为文本") { UIPasteboard.general.string = report.plainText(deviceNote: deviceNote) }
-                Button("清空", role: .destructive) { model.perf.reset(); report = model.perf.report() }
+                Button("复制为文本") { UIPasteboard.general.string = fullText }
+                Button("清空", role: .destructive) {
+                    model.perf.reset()
+                    model.coordinator.memory.reset()
+                    refresh()
+                }
             }
         }
         .navigationTitle(Text(L10nKey.settingsPerformance))
-        .onAppear { report = model.perf.report() }
-        .refreshable { report = model.perf.report() }
+        .onAppear { refresh() }
+        .refreshable { refresh() }
+    }
+
+    private func refresh() {
+        report = model.perf.report()
+        peaks = model.coordinator.memory.peakByPhase()
+        triggers = SQLiteTriggerCheck.evaluate(samples: model.perf.allSamples(), memory: model.coordinator.memory.samples())
+    }
+
+    private var fullText: String {
+        let mem = MemoryPhase.allCases.compactMap { p in
+            peaks[p].map { "memory\t\(p.rawValue)\tpeak_bytes=\($0.peakBytes)\tdelta_bytes=\($0.deltaBytes)" }
+        }
+        return ([report.plainText(deviceNote: deviceNote)] + mem + [SQLiteTriggerCheck.plainText(triggers)]).joined(separator: "\n")
     }
 
     private var deviceNote: String {

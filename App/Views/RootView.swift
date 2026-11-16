@@ -23,7 +23,7 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            TabView(selection: Binding(get: { model.onboarding.page }, set: { model.onboarding.swipe(to: $0) })) {
+            TabView(selection: Binding(get: { model.onboarding.page }, set: { model.onboardingSwiped(to: $0) })) {
                 ForEach(0..<OnboardingFlow.pageCount, id: \.self) { i in
                     let page = OnboardingFlow(page: i)
                     VStack(spacing: 16) {
@@ -36,7 +36,7 @@ struct OnboardingView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             Button { model.onboardingButtonTapped() } label: {
-                Text(model.onboarding.buttonKey(authorization: model.library.authorizationStatus())).frame(maxWidth: .infinity)
+                Text(model.onboarding.buttonKey(authorization: model.authorization)).frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
