@@ -1,5 +1,45 @@
 # CHANGES
 
+## feat/works：「我的作品」最小版（11-17 交付范围，基于 feat/render-export）
+
+依据：design/works-storage-v0.1.md（架构师，权威）、product/hd-export-req-v0.2.md B 节 + F 节（F1-3 / F2 / F5）。
+
+### 改动
+- **存储层 `MosaicAppCore/Works/`**：`WorksStore` 协议 + `FileWorksStore`（actor）。`Application Support/Works/<uuid>/` 一个作品一个目录：
+  `meta.json`（formatVersion、id、createdAt、列 / 行、档位、照片数、缺失数、叠加强度、seed（只追溯）、布局指纹、来源、预览 / 目标图文件名与尺寸）、
+  `layout.json`（`MosaicLayout` 原样 JSON：**每格 localIdentifier + 裁剪显式存下，不靠种子重算**）、`preview.jpg`（长边 2732）、`target.jpg`（长边 ≤ 4096）。
+  - 原子写：先写 `.tmp-<uuid>/`（meta.json 最后写）再一次 rename；删除先 rename 成 `.trash-*` 再删；启动 `removeIncomplete()` 清残留，列表不认半截目录。
+  - 查重：按布局 JSON 的 FNV-1a 64 指纹，同一张只存一份（含并发保存：actor 重入时后来者等同一个写任务）。
+  - 升级兼容：后加字段一律 `decodeIfPresent`；formatVersion 更高（新版写的）列表跳过、不删除。
+  - **参与 iCloud 备份**：不设 `isExcludedFromBackup`（与索引目录相反）。
+  - layout.json 不压缩：Linux Foundation 无 `compressed(using:)`、不允许手写 deflate；细档约 1 万格 ≈ 1–2 MB。压缩留作 formatVersion 2。
+  - 图片经注入的 `WorkImageEncoding` 写（App：CG 绘制 + ImageIO JPEG；测试：假实现）。
+- **编排 `WorksController`（@MainActor）**：导出成功自动存（`AppDependencies.onExportSucceeded` → `ExportSuccessRelay` → 控制器）；结果页「存到我的作品」（重复点只存一份）；「换一种拼法」不存（只把按钮复位）；列表、打开、删除二次确认、从作品再导出（`WorkExportHandling`，由 `AppCoordinator.export(layout:target:purpose:)` 实现）。
+  - 缺失原照片：打开 / 导出前批量查一次（`PhotoExistenceChecking`），只计数 + 提示 `works.missing`，并写回 meta。
+    **不**用预览图放大补格子（F 节作废）；本机相近照片重新匹配（4b）只预留协议 `MissingCellRematching`，11-18 实现。
+- **App（盲写）**：首页右上角「我的作品」（带数量）、两列列表（倒序、日期、空状态 `works.empty`、底部常驻 `works.keep_hint`）、查看页复用 `ZoomableContainer`（看 2732 预览图）、「导出」「删除」（confirmationDialog 二次确认）；结果页次按钮「存到我的作品」。
+  适配器：`PhotoKitExistenceChecker`（`PHAsset.fetchAssets(withLocalIdentifiers:)` 每批 500）、`ImageIOWorkImages`。
+- **文案**：copy_v1.1 新增 §5.5（works.* 14 个 key，取自需求 v0.2 B 节，⚠️ 待文案确认），重新生成 Localizable.strings。
+- 没做（按 11-17 范围）：列表长按删除、文件大小 / 占用空间显示、换机后 PHCloudIdentifier 找回、缺图重新匹配、100 个作品性能指标。
+
+### 测试（Linux，MosaicAppCore）
+- `WorksStoreTests`（9）：存 / 列（倒序）/ 读 / 删、同一布局只存一份（含 JSON 往返后指纹不变）、并发同存只一份、写到一半失败不留残留（预览 / 目标图两步）、
+  被杀残留（.tmp / .trash / 无 meta 目录）列表不认且启动清理、旧版 meta / 新版 formatVersion 兼容（预览图逐字节一致）、缺失数持久化、works.* key 都在 strings 里。
+- `WorksControllerTests`（9）：手动存幂等 + 换结果复位、导出成功自动存（经中继）且不重复、换拼法不存但导出新结果会存、保存失败不留文件、打开 / 导出前缺失计数（去重）、作品页再导出不重复且用保存的布局 + 目标图副本、删除二次确认、重启后重开、打不开的提示。
+- `WorksCoordinatorIntegrationTests`：真实 `AppCoordinator` 生成结果 → 手动存的是逐格一致的显式布局 → 换一种拼法不存。
+
+### 盲写风险
+- W1 预览图在保存时按布局重画（128 px 缩略图，细档约 1 万次取图），自动保存在后台进行，耗时需真机看；取不到的格子留白。
+- W2 从结果页进入作品查看页再导出时，导出弹窗由结果页的 `ExportResultModifier` 呈现（本页只盖进度），避免重复弹窗；需真机确认弹窗能从被覆盖的结果页正常弹出。
+- W3 目标图副本来自生成时的降采样目标图（长边 ≤ 2048），不足 4096；要 4096 需在选图时另存一份。
+- W4 缺失原照片的格子在导出里画不出原照片（11-18 用相近照片替换）。
+
+### 对导出线的依赖（⚠️ 合入前必须先有）
+- App target 用到导出线尚未推送的两处接口：`AppDependencies(onExportSucceeded:)`（`.live(…, onExportSucceeded:)` 透传）和
+  `AppCoordinator.export(layout:target:purpose:)`（`CoordinatorWorkExporter` 调用）。在 feat/render-export 推上这两处之前，本分支 Xcode 编译不过；
+  MosaicAppCore（Linux）不依赖它们，测试全绿。导出线推送后本分支 merge 一次，并把 `workResultContext.tier` 接到 `state.exportTier`。
+- 没有新增 `@unchecked Sendable` / `nonisolated(unsafe)`。
+
 ## feat/render-export：T7 叠加滑杆 + 普通缩放预览、T8 与分辨率无关的导出部分（基于 feat/app-layer）
 
 > **范围调整（2026-11-16）**：AndyL 新提「高清导出」，导出尺寸 / 档位（原 4000 / 6000）待架构师和产品定案，可能到长边 2–3 万像素。本分支 **不硬编码档位、不做导出卡 UI**（T10/T11 暂停）：`ExportRequest` 只带一个 `longEdge: Int`，条带渲染与存储预检不假设尺寸上限，按字节预算逐条流式写盘。协调器暂沿用 `ExportSize` 默认值作为长边来源，定案后只需换掉这一处。

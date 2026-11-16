@@ -59,7 +59,7 @@ final class AppModel: ObservableObject {
             }
             return c.workResultContext
         }, relay: relay)
-        worksController.exportHandler = coordinator
+        worksController.exportHandler = CoordinatorWorkExporter(coordinator: coordinator)
         self.works = WorksModel(controller: worksController)
         self.state = coordinator.state
         coordinator.systemActionHandler = { action in

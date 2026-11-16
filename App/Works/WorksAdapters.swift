@@ -129,3 +129,15 @@ struct ImageIOWorkImages: WorkImageEncoding {
         return CGImageSourceCreateThumbnailAtIndex(src, 0, opts)
     }
 }
+
+/// 从作品再导出 → 导出线 `AppCoordinator.export(layout:target:purpose:)`（按保存的显式布局，档位用当前 `exportTier`）。
+/// 弱引用协调器（`WorksController` 强持有本桥）。
+@MainActor
+final class CoordinatorWorkExporter: WorkExportHandling {
+    weak var coordinator: AppCoordinator?
+    init(coordinator: AppCoordinator) { self.coordinator = coordinator }
+
+    func exportWork(layout: MosaicLayout, target: PixelBuffer?, purpose: ExportPurpose) async {
+        await coordinator?.export(layout: layout, target: target, purpose: purpose)
+    }
+}

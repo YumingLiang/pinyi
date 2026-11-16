@@ -101,7 +101,8 @@ public final class WorksController {
     public let store: any WorksStore
     public let existence: any PhotoExistenceChecking
     public let images: any WorkImageEncoding
-    public weak var exportHandler: (any WorkExportHandling)?
+    /// 从作品再导出的执行方（App 里是包着 AppCoordinator 的桥，桥内弱引用协调器，这里强持有不成环）。
+    public var exportHandler: (any WorkExportHandling)?
 
     public private(set) var state = WorksState() {
         didSet { if state != oldValue { notify() } }
