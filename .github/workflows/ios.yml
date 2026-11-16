@@ -22,13 +22,11 @@ on:
       - ".github/workflows/ios.yml"
       # 纯 MosaicCore 变化只跑 linux-core（技术方案 §11.3）。
   workflow_dispatch:
-  # 没开 PR 的 feat/** 分支推送时只跑 Xcode 27.2 不签名编译（ios-xcode27-build），给并行分支一个快速编译反馈。
-  # 已开 PR 的分支已经由 pull_request 触发，这里排除，避免重复跑；以后新开 PR 的分支请在这里加一行排除。
+  # feat/** 分支推送时只跑 Xcode 27.2 不签名编译（ios-xcode27-build），给还没开 PR 的并行分支一个快速编译反馈。
+  # 已开 PR 的分支由 pull_request 触发；push-gate 在 Linux 上查一下有没有打开的 PR，有就跳过，避免重复占 macOS 机器。
   push:
     branches:
       - "feat/**"
-      - "!feat/app-layer"
-      - "!feat/mosaic-core-io-cancel"
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -186,8 +184,28 @@ jobs:
   # Xcode 27 只在 GitHub 的预览镜像 `xcode-27`（macOS 27，arm64）上有；2026-11-16 按 runner-images
   # images/macos/xcode-27-arm64-Readme.md（Image 20261104.0337.1）核实：Xcode 27.2（27B52）在 /Applications/Xcode_27.2.app，默认是 27.1。
   # 预览镜像可能排队较久或变动；镜像移除 27.2 时这里会明确失败，再按 Readme 更新。公开仓库标准 runner 不收费。
+  push-gate:
+    name: push 去重（分支已有 PR 时跳过）
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      has_pr: ${{ steps.check.outputs.has_pr }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" --state open --json number --jq length)
+          echo "open PRs for $GITHUB_REF_NAME: $n"
+          echo "has_pr=$([ "$n" -gt 0 ] && echo 1 || echo 0)" >> "$GITHUB_OUTPUT"
+
   ios-xcode27-build:
     name: iOS ${{ matrix.configuration }} build (Xcode 27.2, unsigned)
+    needs: push-gate
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.push-gate.outputs.has_pr == '0') }}
     runs-on: xcode-27
     timeout-minutes: 30
     env:
