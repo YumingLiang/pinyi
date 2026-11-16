@@ -14,7 +14,7 @@
 | MF-6 预览串行 + 缓存 | `ThumbnailPreviewPlan`：按素材去重、8–16 并发窗口取图、画完即丢，不留缓存 | `PreviewPlanAndMemoryTests` |
 | MF-7 峰值内存 | `PeakMemoryTracker`（0.5 s 采样 `phys_footprint`，只在扫描/生成/预览/导出期间开）+ `SQLiteTriggerCheck`（评审 §3 五项触发条件，外推到 10 万）；性能页显示并可复制 | `PreviewPlanAndMemoryTests`、`testMemorySamplingDuringScanUsesInjectedClock_MF7` |
 | G-1 严格并发 | 三个包 Swift 6 语言模式 + `-warnings-as-errors`；project.yml `SWIFT_TREAT_WARNINGS_AS_ERRORS`；`LockedState` 取代各处 NSLock + `@unchecked`；App 适配器改 actor / 编译器检查的 `Sendable` | 剩余清单见下；TSan 日志 `reports/tsan-linux-swift633.txt` |
-| G-1 TSan CI | linux-core.yml 新 job `tsan`：每个 PR、阻断（需在分支保护设为 required）、跳过 `PerformanceTests` / `IndexBenchTests`。**没有**加 macOS TSan workflow | `.github/workflows/linux-core.yml` |
+| G-1 TSan CI | linux-core.yml 新 job `tsan`：每个 PR、阻断（GitHub runner 首次跑绿：run 43942739430；仍需在分支保护设为 required）；宿主先 `sysctl vm.mmap_rnd_bits=28` 再 `docker run` 钉 digest 的镜像（容器内改不了 ASLR 熵）、跳过 `PerformanceTests` / `IndexBenchTests`。**没有**加 macOS TSan workflow | `.github/workflows/linux-core.yml` |
 | G-3 AppCoordinator | MosaicAppCore `@MainActor AppCoordinator` + `AppDependencies`（`PhotoLibraryClient`、`ThumbnailProviding`、`IndexStore`、`AppClock`、`LifecycleEvents`、`PreferenceStore`、`MosaicGenerating`、`MosaicExporting`、`MemoryFootprintReading`）；`.live` 在 App target（`App/Adapters/LiveDependencies.swift`），fake 在测试；无 `#if TESTING`、无单例；状态可观察（`observe(_:)` / `states()`），假时钟，测试里没有 sleep | `AppCoordinatorTests`（14 个），映射见下 |
 | QA：容器钉 digest | `swift:6.3.3-noble@sha256:1ba0416b…24aa`（三个 job）；2026-11-16 用 registry API `HEAD /v2/library/swift/manifests/6.3.3-noble` 读 `Docker-Content-Digest` 复核，与 QA 所见一致 | linux-core.yml |
 | QA：6.2.4 声明 | `reports/swift-test-55123ea-swift624.txt` 存在且内容为 149/0，已在下方 §13 引用；本分支另附 `reports/swift-test-app-layer-swift624.txt` | — |
@@ -57,6 +57,17 @@
 - 视图不再直接改 `model.flow`，全部经 coordinator。
 - 盲写风险新增 R21：actor 化的 PhotoKit 适配器在 Darwin 上的 Sendable 推断（`PHFetchResult` / `PHImageRequestOptions` 只在 actor 内或 nonisolated 局部使用）；R22：`beginBackgroundTask` 回调在 iOS 26 SDK 上若已标 `@MainActor`，`assumeIsolated` 冗余但无害。
 
+### 长循环取消检查点（App 层，MosaicCore 部分见下方 feat/mosaic-core-io-cancel §14）
+
+| 循环 | 检查点 | 说明 |
+|---|---|---|
+| 扫描提特征（`PhotoIndex.synchronize`） | 每批（`batchSize`）之前 `Task.checkCancellation()`；批内 `BoundedConcurrency` 每个元素之前检查并 `cancelAll` | 取消后已完成的部分照常提交（B-33 保留进度） |
+| 索引提交（`JSONIndexStore.commit`） | 不可取消 | 原子写；10 万条约 0.5 s |
+| 全量元数据 diff（`applyFullDiff`） | 不可取消 | 必须整体应用；10 万条目标 ≤ 2 s（SQLite 触发条件之一） |
+| 缩略图预览（`ThumbnailPreviewPlan.run`） | 每个取图窗口之前 + `BoundedConcurrency` | 新结果到达时取消旧预览 |
+| 峰值内存采样 | `while !Task.isCancelled` + 注入时钟 | — |
+| 导出条带循环 | 见 feat/render-export（B-34） | — |
+
 ### Internal 配置复核
 
 `project.yml` Internal = release + `SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) INTERNAL_TOOLS`，显示名「拼忆内测」；`InternalToolsMarker` 在 `#if INTERNAL_TOOLS` 内；`InfoPlist.strings` 只有两个权限说明，没有 `CFBundleDisplayName`；ios.yml 矩阵对 Release / Internal 分别断言标记有 / 无；fastlane `beta_internal` 检查显示名与标记。
@@ -65,7 +76,7 @@
 
 - Swift 6.3.3：MosaicCore 149/0，MosaicAppCore 94（1 个基准默认跳过）/0，MosaicAccelerate 构建通过 —— `reports/swift-test-app-layer-swift633.txt`
 - Swift 6.2.4：同上 —— `reports/swift-test-app-layer-swift624.txt`
-- TSan（6.3.3，`--sanitize=thread`，跳过基准）：MosaicCore 143/0、MosaicAppCore 93/0，**0 条 ThreadSanitizer 报告** —— `reports/tsan-linux-swift633.txt`
+- TSan（6.3.3，`--sanitize=thread`，跳过基准）：MosaicCore 145/0（合入 bb64fbb 后）、MosaicAppCore 93/0，**0 条 ThreadSanitizer 报告** —— `reports/tsan-linux-swift633.txt`
 - actionlint 1.7.7 通过；App / AppTests 全部文件 `swiftc -parse` 通过；`scripts/check-no-network.sh` 通过。
 
 

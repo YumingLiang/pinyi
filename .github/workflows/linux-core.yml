@@ -62,7 +62,9 @@ jobs:
   tsan:
     name: ThreadSanitizer (swift test --sanitize=thread, Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    # 阻断：2026-11-16 在 GitHub runner 上首次完整跑绿（run 43942739430，32ec2b5），因此不设 continue-on-error。
+    # 还需仓库管理员在分支保护里把本 job 设为 required check（架构师 G-1：每个 PR、阻断）。
     env:
       SWIFT_IMAGE: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
     steps:
