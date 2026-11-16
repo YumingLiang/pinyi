@@ -1,5 +1,12 @@
 # CHANGES
 
+## feat/works：去掉旧 render-export 带进来的非作品改动
+
+- 结果页与 feat/app-layer 对齐：保留 ZoomableContainer 和紧急版三档导出按钮，只多一个「保存到我的作品」。去掉 T7 叠加滑杆、实时叠加层（`MosaicWithOverlay` / `overlayImage`）。
+- 去掉 T8 分享面板 UI：`ExportViews.swift`（`ExportControls`、`ExportResultModifier`、分享 sheet、`ActivityView`）。作品查看页的导出提示改用 app-layer 的 `ExportResultAlerts` / `ExportBusyOverlay`。
+- 协调器仍保留 `onExportSucceeded` 和 `export(layout:target:purpose:)`（作品自动存 / 再导出）；结果页失败重试走协调器，以便作品页再导出保留 `exportSource`。不再向 App 层暴露分享面板按钮（`saveSuccessShareTapped` / `exportFailureSecondaryTapped` / `exportRetryTapped`）。
+
+
 ## feat/works：接到 feat/app-layer 紧急版整张导出（不含流式条带）
 
 - 在 origin/feat/works（55c361d）上合并 feat/app-layer（含格子居中裁方与扫描特征快照）。结果页用紧急版三档导出按钮，并保留「保存到我的作品」。

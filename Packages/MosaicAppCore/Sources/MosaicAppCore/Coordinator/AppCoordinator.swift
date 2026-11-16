@@ -487,27 +487,6 @@ public final class AppCoordinator {
         }
     }
 
-    /// 失败提示的次按钮：只有权限被拒时有「分享」（不需要相册权限）。
-    public func exportFailureSecondaryTapped() {
-        guard case .failed(let f) = state.export, f.secondaryKey != nil else { return }
-        state.export = .idle
-        startShare()
-    }
-
-    /// 导出被后台宽限打断后的「重新导出」（`export.retry`）：按被打断时的用途重来。
-    public func exportRetryTapped() async {
-        guard case .interrupted = state.export else { return }
-        state.export = .idle
-        await restart(lastExportPurpose)
-    }
-
-    /// 保存成功页的「分享」（`save.success.share`）。
-    public func saveSuccessShareTapped() {
-        guard case .saved = state.export else { return }
-        state.export = .idle
-        startShare()
-    }
-
     /// 用户在导出中取消（若平台层提供入口）。
     public func cancelExport() {
         exportInterruptedByBackground = false

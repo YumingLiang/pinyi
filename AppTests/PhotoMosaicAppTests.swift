@@ -1,5 +1,4 @@
 import CoreGraphics
-import ImageIO
 import Photos
 import XCTest
 import MosaicCore
@@ -80,5 +79,4 @@ final class PhotoMosaicAppTests: XCTestCase {
         LiveMosaicExporter(thumbnails: PhotoKitThumbnails()).removeStaleExports()
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
     }
-
 }

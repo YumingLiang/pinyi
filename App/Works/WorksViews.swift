@@ -157,8 +157,7 @@ struct WorkDetailView: View {
         .onChange(of: works.state.summaries.map(\.id)) { ids in
             if works.state.isLoaded, !ids.contains(id), works.state.pendingDelete == nil, works.state.notice == nil { dismiss() }
         }
-        // 导出状态（进度 / 保存成功 / 失败 / 分享面板）：结果页不在导航栈里时由本页呈现；
-        // 在栈里时（从结果页点进来）结果页的 ExportResultModifier 已经在呈现，本页只盖进度，避免重复弹窗。
+        // 导出进度 / 保存结果：结果页不在导航栈里时由本页呈现提示；在栈里时结果页已有 ExportResultAlerts，本页只盖进度。
         .modifier(WorkExportPresentation(presentsAlerts: model.flow.step != .result))
     }
 }
@@ -168,12 +167,13 @@ struct WorkExportPresentation: ViewModifier {
     let presentsAlerts: Bool
 
     func body(content: Content) -> some View {
+        let busy = content.overlay {
+            if model.exportPhase.isBusy { ExportBusyOverlay() }
+        }
         if presentsAlerts {
-            content.modifier(ExportResultModifier())
+            busy.modifier(ExportResultAlerts())
         } else {
-            content.overlay {
-                if case .exporting(_, let f) = model.exportPhase { ExportProgressOverlay(fraction: f) }
-            }
+            busy
         }
     }
 }

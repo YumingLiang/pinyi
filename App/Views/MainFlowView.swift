@@ -201,42 +201,30 @@ struct ResultView: View {
     @State private var showTiers = false
 
     var body: some View {
-        // 不包 ScrollView：缩放容器的拖动手势会和滚动抢手势；容器占满剩余空间。
         VStack(spacing: 12) {
-                if case .result(let o) = model.flow.generation.phase, o.shouldShowShortageNotice {
-                    Text(L10nKey.shortageResult).font(.footnote).foregroundStyle(.secondary)
-                }
-                if let img = model.resultImage {
-                    // T7：普通缩放预览，不用 CATiledLayer；缩放规则见 ZoomState（捏合累乘、单格铺满屏幕上限、
-                    // 双击逐级放大 / 到顶复位），组件 ZoomableContainer 与「作品查看」共用。叠加层随滑杆实时变化。
-                    let grid = model.previewGrid
-                    ZoomableContainer(aspectRatio: Double(img.width) / Double(max(1, img.height)),
-                                      columns: grid.columns, rows: grid.rows, zoom: $model.resultZoom) {
-                        MosaicWithOverlay(image: img, overlay: model.overlayImage, overlayAlpha: model.overlayAlpha)
-                    }
-                    .frame(maxHeight: .infinity)
-                }
-                Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
-                // T7：结果页的叠加滑杆（0–0.3）
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(L10nKey.overlaySection).font(.subheadline.bold())
-                    Slider(value: $model.overlayAlpha, in: 0...OverlayBlendLimits.maxAlpha) {
-                        Text(L10nKey.overlaySection)
-                    } minimumValueLabel: { Text(L10nKey.overlayLeft).font(.caption2) } maximumValueLabel: { Text(L10nKey.overlayRight).font(.caption2) }
-                    Text(L10nKey.overlayHint).font(.caption).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button { model.send(.backToSettings) } label: { Text(L10nKey.previewAdjust) }.buttonStyle(.bordered)
-                    Button { model.send(.reshuffleTapped) } label: { Text(L10nKey.previewReshuffle) }.buttonStyle(.bordered)
-                }
-                .disabled(model.exportPhase.isBusy)
-                // 导出：三档选择 → 保存到相册（app-layer 紧急版 UI）
-                Button { showTiers = true } label: { Text(L10nKey.previewExport).frame(maxWidth: .infinity) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!model.canExport)
-                SaveToWorksButton()   // 需求 B2：次按钮「存到我的作品」（导出成功也会自动存一份）
+            if case .result(let o) = model.flow.generation.phase, o.shouldShowShortageNotice {
+                Text(L10nKey.shortageResult).font(.footnote).foregroundStyle(.secondary)
             }
+            if let img = model.resultImage {
+                // 缩放规则见 ZoomState（捏合累乘、单格铺满屏幕上限、双击逐级放大 / 到顶复位）。
+                let grid = model.previewGrid
+                ZoomableContainer(aspectRatio: Double(img.width) / Double(max(1, img.height)),
+                                  columns: grid.columns, rows: grid.rows, zoom: $model.resultZoom) {
+                    Image(decorative: img, scale: 1).resizable().interpolation(.none).scaledToFit()
+                }
+            }
+            Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
+            HStack {
+                Button { model.send(.backToSettings) } label: { Text(L10nKey.previewAdjust) }.buttonStyle(.bordered)
+                Button { model.send(.reshuffleTapped) } label: { Text(L10nKey.previewReshuffle) }.buttonStyle(.borderedProminent)
+            }
+            // 导出（紧急版）：三档选择 → 保存到相册
+            Button { showTiers = true } label: { Text(L10nKey.previewExport).frame(maxWidth: .infinity) }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!model.canExport)
+            SaveToWorksButton()   // 需求 B2：次按钮「存到我的作品」（导出成功也会自动存一份）
+        }
         .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))
         .sheet(isPresented: $showTiers) {

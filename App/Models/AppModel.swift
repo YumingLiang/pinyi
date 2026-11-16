@@ -19,9 +19,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var state: AppState
     @Published private(set) var targetPreview: CGImage?
     @Published private(set) var resultImage: CGImage?
-    /// T7：叠加用的目标图（已裁到网格区域）。预览里由 SwiftUI 以 `opacity(overlayAlpha)` 叠在马赛克上，
-    /// 拖滑杆实时生效、不重画马赛克（导出时在条带里按同一 α 混合）。
-    @Published private(set) var overlayImage: CGImage?
 
     /// 结果页缩放状态：放在模型里，视图重建 / 旋转 / 切后台都不丢；换新作品时复位。
     @Published var resultZoom = ZoomState()
@@ -111,8 +108,6 @@ final class AppModel: ObservableObject {
         get { state.flow.settings.overlayAlpha }
         set { coordinator.setOverlayAlpha(newValue) }
     }
-    var exportPhase: ExportPhase { state.export }
-    var canExport: Bool { coordinator.canExport }
 
     // MARK: 动作（转发）
 
@@ -136,21 +131,17 @@ final class AppModel: ObservableObject {
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
 
-    // MARK: 导出（紧急版三档 + 作品页再导出；失败/重试走协调器，保留 exportSource）
+    // MARK: 导出（紧急版：只保存到相册；失败/重试走协调器，作品页再导出才能保留 exportSource）
 
+    var exportPhase: ExportPhase { state.export }
     var exportTier: ExportTier {
         get { state.exportTier }
         set { coordinator.setExportTier(newValue) }
     }
+    var canExport: Bool { coordinator.canExport }
     func saveTapped() { Task { await coordinator.saveTapped() } }
-    func shareTapped() { coordinator.shareTapped() }
-    func shareFinished() { coordinator.shareFinished() }
-    func dismissExportResult() { coordinator.dismissExportResult() }
-    func cancelExport() { coordinator.cancelExport() }
     func exportFailurePrimaryTapped() { Task { await coordinator.exportFailurePrimaryTapped() } }
-    func exportFailureSecondaryTapped() { coordinator.exportFailureSecondaryTapped() }
-    func exportRetryTapped() { Task { await coordinator.exportRetryTapped() } }
-    func saveSuccessShareTapped() { coordinator.saveSuccessShareTapped() }
+    func dismissExportResult() { coordinator.dismissExportResult() }
     func send(_ e: GenerationMachine.Event) { coordinator.send(e) }
 
     // MARK: 平台专属：目标图 / 预览
@@ -170,13 +161,13 @@ final class AppModel: ObservableObject {
         guard let product = coordinator.product, let target = coordinator.target else { return }
         resultZoom.reset()
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
-        overlayImage = MosaicPreviewRenderer.overlay(product, target: target)
+        let alpha = state.flow.settings.overlayAlpha
         let thumbs = thumbnails
         let perf = self.perf
         previewTask?.cancel()
         previewTask = Task { [weak self] in
             let t0 = perf.clock.now()
-            let img = await MosaicPreviewRenderer.thumbnails(product, target: target, overlayAlpha: 0, thumbnails: thumbs)
+            let img = await MosaicPreviewRenderer.thumbnails(product, target: target, overlayAlpha: alpha, thumbnails: thumbs)
             perf.record(.previewRender, seconds: perf.clock.now() - t0, items: product.generation.layout.cellCount)
             if let img { self?.resultImage = img }
         }
