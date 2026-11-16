@@ -119,7 +119,16 @@ final class AppModel: ObservableObject {
     }
     var canExport: Bool { coordinator.canExport }
     func saveTapped() { Task { await coordinator.saveTapped() } }
-    func exportFailurePrimaryTapped() { Task { await coordinator.exportFailurePrimaryTapped() } }
+    /// 失败提示主按钮：权限被拒 →「去设置」；空间不足 →「我知道了」；其他 →「再试一次」。
+    func exportFailurePrimaryTapped() {
+        guard case .failed(let f) = state.export else { return }
+        coordinator.dismissExportResult()
+        switch f {
+        case .addDenied: SystemActions.openSettings()
+        case .diskFull: break
+        case .other: saveTapped()
+        }
+    }
     func dismissExportResult() { coordinator.dismissExportResult() }
     func send(_ e: GenerationMachine.Event) { coordinator.send(e) }
 
