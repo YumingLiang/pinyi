@@ -11,7 +11,7 @@ guard args.count == 4, let w = Int(args[1]), let h = Int(args[2]) else {
 }
 let out = URL(fileURLWithPath: args[3])
 let bpr = w * 4
-final class State { var offset = 0; let total: Int; let bpr: Int; let w: Int
+final class State { var offset = 0; var totalFed = 0; var rewinds = 0; let total: Int; let bpr: Int; let w: Int
     init(total: Int, bpr: Int, w: Int) { self.total = total; self.bpr = bpr; self.w = w } }
 let state = State(total: bpr * h, bpr: bpr, w: w)
 var callbacks = CGDataProviderSequentialCallbacks(
@@ -27,14 +27,14 @@ var callbacks = CGDataProviderSequentialCallbacks(
             // 粗糙的伪图案，避免 JPEG 把纯色压得过小
             p[i] = ch == 3 ? 255 : UInt8(truncatingIfNeeded: (row &* 7) ^ (col &* 13) &+ ch &* 85)
         }
-        s.offset += n
+        s.offset += n; s.totalFed += n
         return n
     },
     skipForward: { info, count in
         let s = Unmanaged<State>.fromOpaque(info!).takeUnretainedValue()
         let n = min(Int(count), s.total - s.offset); s.offset += n; return off_t(n)
     },
-    rewind: { info in Unmanaged<State>.fromOpaque(info!).takeUnretainedValue().offset = 0 },
+    rewind: { info in let s = Unmanaged<State>.fromOpaque(info!).takeUnretainedValue(); s.offset = 0; s.rewinds += 1 },
     releaseInfo: nil)
 let provider = CGDataProvider(sequentialInfo: Unmanaged.passUnretained(state).toOpaque(), callbacks: &callbacks)!
 let image = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bpr,
@@ -46,5 +46,5 @@ let dest = CGImageDestinationCreateWithURL(out as CFURL, UTType.jpeg.identifier 
 CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
 let ok = CGImageDestinationFinalize(dest)
 let size = (try? FileManager.default.attributesOfItem(atPath: out.path)[.size] as? Int) ?? -1
-print("RESULT w=\(w) h=\(h) mp=\(String(format: "%.1f", Double(w*h)/1e6)) ok=\(ok) secs=\(String(format: "%.1f", Date().timeIntervalSince(t0))) bytes=\(size) fed=\(state.offset)")
+print("RESULT w=\(w) h=\(h) mp=\(String(format: "%.1f", Double(w*h)/1e6)) ok=\(ok) secs=\(String(format: "%.1f", Date().timeIntervalSince(t0))) bytes=\(size) fed=\(state.totalFed) expected=\(state.total) rewinds=\(state.rewinds)")
 exit(ok ? 0 : 1)
