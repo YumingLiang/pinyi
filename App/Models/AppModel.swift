@@ -70,7 +70,8 @@ final class AppModel: ObservableObject {
     var onboarding: OnboardingFlow { state.onboarding }
     var indexStatus: IndexStatus { state.indexStatus }
     var scan: ScanFlow { state.scan }
-    var albumRows: [SourceRow] { state.albumRows }
+    var albumRows: [SourceRow] { state.displayedAlbumRows }   // 可用张数已减去清晰度筛选排除的
+    var postFilterShortageNotice: Bool { state.postFilterShortageNotice }
     var flow: MainFlow { state.flow }
     var emptyState: LibraryEmptyState? { state.emptyState }
     var transientNotice: L10nKey? { state.transientNotice }

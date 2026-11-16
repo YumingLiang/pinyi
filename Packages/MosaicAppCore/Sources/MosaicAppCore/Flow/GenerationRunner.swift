@@ -63,7 +63,11 @@ public struct GenerationProduct: Sendable {
     public var snapshot: IndexSnapshot
     /// 不够清楚而没用上的照片统计（来源页 `source.excluded_low_res` + 性能页）。
     public var lowRes: LowResReport = .disabled
-    public var outcome: GenerationOutcome { GenerationOutcome(generation) }
+    public var outcome: GenerationOutcome {
+        var o = GenerationOutcome(generation)
+        if lowRes.enabled { o.availableAfterFilter = snapshot.availableCount }
+        return o
+    }
 
     public init(generation: MosaicGeneration, snapshot: IndexSnapshot, lowRes: LowResReport = .disabled) {
         self.generation = generation

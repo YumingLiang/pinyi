@@ -149,7 +149,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.album.unreadable` | 无法读取 | 打不开这个相簿，请换一个，或改用全部照片。 |
 | `source.add_photos` | 受限状态下常驻入口（同样调用系统选择器） | 增加可用照片 |
 | `source.next` | 下一步 | 下一步 |
-| `source.excluded_low_res` | 生成后剔除了手机上版本不够清楚的照片时显示（hd-export-req-v0.2 F5，11-16 新增） | 有 {count} 张照片手机上的版本不够清楚，没有用上 |
+| `source.excluded_low_res` | 来源页 / 生成后提示：生成时剔除了手机上版本不够清楚的照片（copy v1.2 补充，hd-export-req-v0.2 F5） | 有 {count} 张照片手机上的版本不够清楚，没有用上 |
 
 「全部照片 / 已允许访问的照片」选项下，可用张数用 `source.list.count` 显示，例如「全部照片  1,234 张」「已允许访问的照片  180 张」。  
 `source.list.all` 的说明不必再写「已下载到这台手机」：未下载的照片按第 5 节处理，不在标题里暗示。
@@ -224,7 +224,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `generate.progress.title` | 标题 | 正在拼图 |
 | `generate.progress.body` | 正文 | 请稍等，马上就好。手机可能会有些发热，这是正常的。 |
 | `generate.progress.cancel` | 按钮 | 取消 |
-| `generate.progress.checking` | 检查照片清晰度期间的正文（hd-export-req-v0.2 F5，11-16 新增） | 正在挑出手机上够清楚的照片，请稍等。 |
+| `generate.progress.checking` | 生成进度：检查照片清晰度期间的正文（copy v1.2 补充） | 正在挑选清楚的照片… |
 | `generate.cancel_confirm.title` | 取消确认标题 | 要取消这次拼图吗？ |
 | `generate.cancel_confirm.confirm` | 确认 | 取消拼图 |
 | `generate.cancel_confirm.continue` | 返回 | 继续等待 |
@@ -266,7 +266,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `export.size.hd` | 高清档名称 | 高清 |
 | `export.size.hd.desc` | 说明（v0.2 原文带「（默认）」，§F 默认改为超清，已移到超清，待产品确认） | 放大能看清每张小照片。 |
 | `export.size.uhd` | 超清档名称（默认） | 超清 |
-| `export.size.uhd.desc` | 说明 | 放大看得更清楚，文件很大，导出要久一些。（默认） |
+| `export.size.uhd.desc` | 说明（copy v1.2 补充） | 放大看得最清楚。（默认） |
 | `export.size.large_hint` | 档位下方固定提示（v0.2 §F1-2 只给文字，key 待产品确认） | 文件较大，导出需要一会儿 |
 | `export.degraded` | 部分原图未在本地、导出时块被降级 | 有些照片还没下载到这台手机，导出后这些小块会稍模糊 |
 | `export.progress.title` | 导出中标题 | 正在导出 |

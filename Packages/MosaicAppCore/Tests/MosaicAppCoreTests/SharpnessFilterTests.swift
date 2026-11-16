@@ -368,4 +368,87 @@ final class SharpnessFilterTests: XCTestCase {
         c.libraryDidChange()
         c.stop()
     }
+
+    // MARK: 「可用照片」= 筛选后（产品 PR #5 跟进）
+
+    func testSourceRowCountExcludesLowRes() {
+        let complete = IndexStatus(assetTotal: 300, available: 300, pending: 0, unavailableLocal: 0, failed: 0,
+                                   isScanning: false, wasInterrupted: false, hasCompletedInitialScan: true)
+        let row = SourceListLogic.allPhotosRow(access: .full, status: complete)
+        let r = SourceListLogic.excludingLowRes(row, count: 120, scanComplete: true)
+        XCTAssertEqual(r.count, 180)
+        XCTAssertEqual(r.countLine, LocalizedLine(.sourceListCount, ["180"]))
+        XCTAssertEqual(SourceListLogic.excludingLowRes(row, count: 120, scanComplete: false), row, "扫描未完成显示「约 N 张」总数，不减")
+        XCTAssertEqual(SourceListLogic.excludingLowRes(row, count: 0, scanComplete: true), row)
+        XCTAssertEqual(SourceListLogic.excludingLowRes(row, count: 999, scanComplete: true).count, 0)
+    }
+
+    func testOutcomeAndShortageUsePostFilterCount() async throws {
+        let snap = try await snapshot(assets: 300)
+        let bad = Set((10..<300).map { "a\($0)" })
+        // 轮数内解决 与 走最后兜底 两条路径都按筛选后的张数判断
+        for rounds in [3, 0] {
+            let probe = FakeResolutionProbe(unusable: bad)
+            let p = try await runner(probe, rounds: rounds)
+                .run(target: try target(), snapshot: snap, settings: GenerationSettings(density: .coarse), seed: 1)
+            let after = 300 - p.lowRes.excludedCount
+            XCTAssertEqual(p.snapshot.availableCount, after)
+            XCTAssertEqual(p.outcome.availableAfterFilter, after)
+            XCTAssertEqual(p.generation.assignment.statistics.availableCandidates, after, "rounds=\(rounds)：结果页「重复用了几次」按筛选后张数")
+            XCTAssertEqual(p.generation.supply, MaterialSupply.evaluate(availableCount: after))
+            XCTAssertEqual(p.outcome.isBelowThresholdAfterFilter, MaterialSupply.evaluate(availableCount: after).needsWarning)
+        }
+        let plain = try await GenerationRunner().run(target: try target(), snapshot: snap, settings: GenerationSettings(density: .coarse), seed: 1)
+        XCTAssertNil(plain.outcome.availableAfterFilter, "未启用筛选")
+    }
+
+    @MainActor
+    func testPostFilterShortageSurfacesOnResultThenGatesNextRun() async throws {
+        // 210 张：生成前 ≥ 200 不提示；只有 a0…a9 清楚 → 筛选后不足 200 → 结果页补「照片比较少」
+        let bad = Set((10..<210).map { "a\($0)" })
+        let probe = FakeResolutionProbe(unusable: bad)
+        let gen = GatedGenerator(runner: GenerationRunner(sharpness: LocalResolutionChecker(probe: probe)))
+        let h = CoordinatorHarness(assets: 210, generator: gen)
+        let c = h.coordinator
+        c.setTarget(try CoordinatorHarness.target())
+        c.start()
+        await c.settle()
+        XCTAssertEqual(c.state.allPhotosRow.count, 210)
+        await c.generateTapped()
+        XCTAssertFalse(c.state.flow.generation.shortagePrompt, "生成前按已知数 210，不提示")
+        await c.settle()
+        guard case .result(let o) = c.state.flow.generation.phase else { return XCTFail("\(c.state.flow.generation.phase)") }
+        let n = c.product!.lowRes.excludedCount
+        XCTAssertGreaterThan(n, 10)
+        XCTAssertEqual(o.availableAfterFilter, 210 - n)
+        XCTAssertTrue(c.state.postFilterShortageNotice, "筛选后才不足 200：结果页补提示")
+        XCTAssertEqual(c.state.allPhotosRow.count, 210 - n, "来源页「可用照片」= 筛选后")
+        XCTAssertEqual(c.state.allPhotosRow.countLine, LocalizedLine(.sourceListCount, [CountFormat.grouped(210 - n)]))
+
+        // 下一次：生成前就按筛选后的已知数判断 → 生成前提示，结果页不再重复
+        c.send(.backToSettings)
+        await c.generateTapped()
+        XCTAssertTrue(c.state.flow.generation.shortagePrompt, "已知筛选后不足 200：生成前提示")
+        c.send(.shortageContinue)
+        await c.settle()
+        guard case .result = c.state.flow.generation.phase else { return XCTFail("\(c.state.flow.generation.phase)") }
+        XCTAssertFalse(c.state.postFilterShortageNotice, "生成前已提示过，结果页不重复")
+        c.stop()
+    }
+
+    @MainActor
+    func testNoPostFilterShortageWhenEnoughSharpPhotos() async throws {
+        let probe = FakeResolutionProbe(unusable: Set(["a1", "a2", "a3"]))
+        let gen = GatedGenerator(runner: GenerationRunner(sharpness: LocalResolutionChecker(probe: probe)))
+        let h = CoordinatorHarness(assets: 300, generator: gen)
+        let c = h.coordinator
+        c.setTarget(try CoordinatorHarness.target())
+        c.start()
+        await c.settle()
+        await c.generateTapped()
+        await c.settle()
+        guard case .result = c.state.flow.generation.phase else { return XCTFail() }
+        XCTAssertFalse(c.state.postFilterShortageNotice)
+        c.stop()
+    }
 }

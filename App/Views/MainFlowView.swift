@@ -200,6 +200,9 @@ struct ResultView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            if model.postFilterShortageNotice {
+                Text(L10nKey.shortagePregenerate).font(.footnote).foregroundStyle(.secondary)
+            }
             if case .result(let o) = model.flow.generation.phase, o.shouldShowShortageNotice {
                 Text(L10nKey.shortageResult).font(.footnote).foregroundStyle(.secondary)
             }

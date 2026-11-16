@@ -64,9 +64,11 @@ extension MosaicPipeline {
         stats.distinctTilesUsed = uses.count
         stats.maxUses = uses.values.max() ?? 0
         stats.totalDistance = distances.reduce(0) { $0 + Double($1) }
+        // 供给 / 「照片少」判断按传入快照（调用方已剔除不能用的素材）的可用张数。
+        stats.availableCandidates = snapshot.availableCount
         let assignment = MosaicAssignment(grid: a.grid, tiles: tiles, distances: distances, levels: levels,
                                           statistics: stats, seed: a.seed)
-        return MosaicGeneration(layout: generation.layout, assignment: assignment, supply: generation.supply,
+        return MosaicGeneration(layout: generation.layout, assignment: assignment, supply: snapshot.supply,
                                 density: generation.density)
     }
 

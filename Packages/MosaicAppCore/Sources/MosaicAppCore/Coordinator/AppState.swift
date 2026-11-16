@@ -96,6 +96,9 @@ public struct AppState: Sendable, Hashable {
     public var generationStage: GenerationStage = .matching
     /// 最近一次生成（含「换一种拼法」）在哪个来源里排除了多少张不够清楚的照片。
     public var lowResExclusion: LowResExclusion?
+    /// 结果页提示「照片比较少…」（`shortage.pregenerate`）：生成前按已知数没到 200 的门槛、筛选后才不足 200 时，
+    /// 生成前没机会提示，在结果页补一次。
+    public var postFilterShortageNotice = false
 
     public init(initialSeed: UInt64) { flow = MainFlow(initialSeed: initialSeed) }
 
@@ -104,7 +107,21 @@ public struct AppState: Sendable, Hashable {
         return .full
     }
 
-    public var allPhotosRow: SourceRow { SourceListLogic.allPhotosRow(access: access, status: indexStatus) }
+    /// 来源页首项（可用张数已减去清晰度筛选排除的张数）。
+    public var allPhotosRow: SourceRow { lowResAdjusted(SourceListLogic.allPhotosRow(access: access, status: indexStatus)) }
+    /// 来源页相簿行（同上）。
+    public var displayedAlbumRows: [SourceRow] { albumRows.map(lowResAdjusted) }
+
+    /// 某来源已知不够清楚的张数（最近一次在该来源生成时得到；没生成过为 0）。
+    public func knownLowResCount(for selection: SourceSelection) -> Int {
+        guard let e = lowResExclusion, e.selection == selection else { return 0 }
+        return e.count
+    }
+
+    private func lowResAdjusted(_ row: SourceRow) -> SourceRow {
+        SourceListLogic.excludingLowRes(row, count: knownLowResCount(for: row.selection),
+                                        scanComplete: SourceListLogic.isScanComplete(indexStatus))
+    }
 
     /// 来源页提示「有 N 张照片手机上的版本不够清楚，没有用上」：只对当前所选来源、N > 0 时显示。
     public var sourceLowResLine: LocalizedLine? {

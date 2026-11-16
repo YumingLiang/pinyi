@@ -29,6 +29,8 @@ public final class AppCoordinator {
     private var loadTask: Task<Void, Never>?
     private var scanTask: Task<Void, Never>?
     private var generationTask: Task<Void, Never>?
+    /// 最近一次「开始拼图」时用于 200 张门槛判断的张数（筛选后的已知数）。
+    private var gateAvailable: Int?
     private var exportTask: Task<Void, Never>?
     private var lifecycleTask: Task<Void, Never>?
     private var memorySamplingTask: Task<Void, Never>?
@@ -314,7 +316,10 @@ public final class AppCoordinator {
             state.showScanSheet = true
             startScan()
         case .proceed(let n):
-            send(.startTapped(available: n))
+            // 「可用照片」按清晰度筛选后的数：减去该来源已知不够清楚的张数，200 张门槛据此判断。
+            let after = max(0, n - state.knownLowResCount(for: state.flow.source.selection))
+            gateAvailable = after
+            send(.startTapped(available: after))
         }
     }
 
@@ -402,6 +407,9 @@ public final class AppCoordinator {
                     if p.lowRes.enabled {
                         self.state.lowResExclusion = LowResExclusion(selection: selection, count: p.lowRes.excludedCount)
                     }
+                    // 生成前按已知数没提示过「照片比较少」、筛选后才不足 200 张 → 结果页补提示。
+                    let promptedBefore = self.gateAvailable.map { MaterialSupply.evaluate(availableCount: $0).needsWarning } ?? false
+                    self.state.postFilterShortageNotice = p.outcome.isBelowThresholdAfterFilter && !promptedBefore
                 }
                 self.send(.succeeded(runID: id, p.outcome))
             } catch {

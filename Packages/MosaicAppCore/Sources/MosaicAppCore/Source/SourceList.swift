@@ -35,6 +35,16 @@ public enum SourceListLogic {
         }
     }
 
+    /// 「可用照片」= 清晰度筛选后剩下的（产品 PR #5 跟进）：扫描完成后从可用张数里减去该来源已知不够清楚的张数。
+    /// 扫描未完成时显示的是资产总数「约 N 张」，不减。
+    public static func excludingLowRes(_ row: SourceRow, count: Int, scanComplete: Bool) -> SourceRow {
+        guard scanComplete, count > 0 else { return row }
+        var r = row
+        r.count = max(0, row.count - count)
+        r.countLine = LocalizedLine(row.countLine.key, [CountFormat.grouped(r.count)])
+        return r
+    }
+
     /// 受限访问时来源页常驻「增加可用照片」（决定 1）。
     public static func showsAddPhotos(access: SourceAccess) -> Bool { access == .limited }
 

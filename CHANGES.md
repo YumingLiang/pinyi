@@ -13,6 +13,13 @@
 - **性能页**：新阶段 `sharpnessProbe`「清晰度探测」——各轮探测累计耗时、items = 实际探测张数；附注 `去重探测 / 缓存命中 / 排除 / 重配轮数 / 未解决格数`，性能页显示最近一次附注。重配轮的生成计时附注带「重配第 n 轮」。
 - **评审跟进测试**：`SharpnessFilterTests` 新增 4 个——重度不合格（2/3、90%、只剩 1 张）下每格都是探测通过的照片；兜底只在用完重配轮数后发生；轮数内能解决时结果与直接用剔除后快照生成完全一致（没有额外放宽上限）；每轮只探测本轮新出现的照片（按轮核对探测数）。`CellRefillTests`（MosaicCore，2 个）：只换指定格子、只用允许的素材、可超上限；无可用素材抛 `noCandidates`。
 - **后续（未做）**：探测结果持久化进索引（绑定 epoch），本 PR 只做会话缓存。
+- **产品跟进（「可用照片」= 筛选后）**：
+  - 来源页张数（全部照片 / 相簿行）在扫描完成后减去该来源已知不够清楚的张数（`SourceListLogic.excludingLowRes`）。
+  - 「开始拼图」的 200 张门槛按「索引可用 − 已知不够清楚」判断（`shortage.pregenerate` 生成前提示）。
+  - 生成前还不知道（第一次在该来源生成）、筛选后才不足 200 张时，结果页补显示 `shortage.pregenerate`（`AppState.postFilterShortageNotice`）；生成前已提示过则不重复。
+  - 结果页 `shortage.result` 一直按筛选后的候选数判断；最后兜底补格（`refill`）也把 `availableCandidates` / 供给改为筛选后快照的张数。`GenerationOutcome.availableAfterFilter` 记录筛选后张数。
+  - 「已知」= 最近一次在该来源生成时探测得出的；没探测过的照片无法预知，所以第一次只能在结果页补提示。
+- **文案 v1.2**：`generate.progress.checking` 改为「正在挑选清楚的照片…」，`export.size.uhd.desc` 改为「放大看得最清楚。（默认）」，`source.excluded_low_res` 不变；改 `copy_v1.1.md` 后用 `gen-localizable.py` 重新生成，`--check` 通过。
 - **测试**（`SharpnessFilterTests` 首版 12 个）：最终结果里没有被剔除的照片且每格都有图；N 去重、每张一次生成只探测一次；缓存避免重探（再生成 0 次探测、换拼法不重复、相册变化只清不合格）；探测中取消抛 `CancellationError`、无结果、不入缓存；并发 ≤ 8；全部不合格走 `noMaterial`；只剩 10 张时供给按剔除后判断；到达最多轮数报告未解决格数；未注入探测器时行为不变；快照剔除只动掩码；协调器来源页文案只对当前来源显示。
 - **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`App/Adapters/PhotoKitResolutionProbe.swift`、`LiveDependencies`（注入探测器）、来源页 / 进度页 / 性能页三处视图。需真机核对：`.highQualityFormat` + 无网络时 iCloud 照片的回调形态（nil + InCloud，还是降质图）；`.fast` 返回的像素尺寸。
 
