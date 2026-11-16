@@ -91,11 +91,14 @@ public protocol ThumbnailProviding: Sendable {
     func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult
     /// 预取下一批（`startCachingImages`）；默认不做。
     func startCaching(_ assetIDs: [String], request: ThumbnailRequest) async
-    /// 停止预取（`stopCachingImages` / 进后台时 `stopCachingImagesForAllAssets`）。
+    /// 停止预取（`stopCachingImages`）。
     func stopCaching(_ assetIDs: [String], request: ThumbnailRequest) async
+    /// 进后台时释放全部预取（`stopCachingImagesForAllAssets`，决定 5）。
+    func stopAllCaching() async
 }
 
 public extension ThumbnailProviding {
     func startCaching(_ assetIDs: [String], request: ThumbnailRequest) async {}
     func stopCaching(_ assetIDs: [String], request: ThumbnailRequest) async {}
+    func stopAllCaching() async {}
 }

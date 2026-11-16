@@ -109,6 +109,32 @@ public extension L10nKey {
     static let previewAdjust = L10nKey(rawValue: "preview.adjust")
     static let previewReshuffle = L10nKey(rawValue: "preview.reshuffle")
     static let shortageResult = L10nKey(rawValue: "shortage.result")
+    // 导出 / 保存 / 分享（文案 §4.9、§4.10、§5.3）
+    static let exportSizeSection = L10nKey(rawValue: "export.size.section")
+    static let exportSize4000 = L10nKey(rawValue: "export.size.4000")
+    static let exportSize4000Desc = L10nKey(rawValue: "export.size.4000.desc")
+    static let exportSize6000 = L10nKey(rawValue: "export.size.6000")
+    static let exportSize6000Desc = L10nKey(rawValue: "export.size.6000.desc")
+    static let exportDegraded = L10nKey(rawValue: "export.degraded")
+    static let exportProgressTitle = L10nKey(rawValue: "export.progress.title")
+    static let exportProgressHint = L10nKey(rawValue: "export.progress.hint")
+    static let exportInterrupted = L10nKey(rawValue: "export.interrupted")
+    static let exportRetry = L10nKey(rawValue: "export.retry")
+    static let saveSuccessTitle = L10nKey(rawValue: "save.success.title")
+    static let saveSuccessBody = L10nKey(rawValue: "save.success.body")
+    static let saveSuccessDone = L10nKey(rawValue: "save.success.done")
+    static let saveSuccessShare = L10nKey(rawValue: "save.success.share")
+    static let shareSheetTitle = L10nKey(rawValue: "share.sheet_title")
+    static let shareSuggestSave = L10nKey(rawValue: "share.suggest_save")
+    static let saveDiskFullTitle = L10nKey(rawValue: "save.disk_full.title")
+    static let saveDiskFullBody = L10nKey(rawValue: "save.disk_full.body")
+    static let saveDiskFullOK = L10nKey(rawValue: "save.disk_full.ok")
+    static let saveAddDeniedTitle = L10nKey(rawValue: "save.add_denied.title")
+    static let saveAddDeniedBody = L10nKey(rawValue: "save.add_denied.body")
+    static let saveAddDeniedSettings = L10nKey(rawValue: "save.add_denied.settings")
+    static let saveAddDeniedShare = L10nKey(rawValue: "save.add_denied.share")
+    static let saveFailed = L10nKey(rawValue: "save.failed")
+    static let saveFailedRetry = L10nKey(rawValue: "save.failed.retry")
     // 空状态
     static let emptyNoPhotosTitle = L10nKey(rawValue: "empty.no_photos.title")
     static let emptyNoPhotosBody = L10nKey(rawValue: "empty.no_photos.body")
@@ -154,6 +180,7 @@ public extension L10nKey {
         emptyNoPhotosTitle, emptyNoPhotosBody, emptyNoPhotosOK, emptyNotDownloadedTitle, emptyNotDownloadedBody, emptyNotDownloadedRetry,
         settingsTitle, settingsPerformance, settingsAbout, aboutTitle, aboutBody, appDisplayName,
         commonCancel, commonDone, commonBack, commonOK, commonClose, commonRetry,
+        exportSizeSection, exportSize4000, exportSize4000Desc, exportSize6000, exportSize6000Desc, exportDegraded, exportProgressTitle, exportProgressHint, exportInterrupted, exportRetry, saveSuccessTitle, saveSuccessBody, saveSuccessDone, saveSuccessShare, shareSheetTitle, shareSuggestSave, saveDiskFullTitle, saveDiskFullBody, saveDiskFullOK, saveAddDeniedTitle, saveAddDeniedBody, saveAddDeniedSettings, saveAddDeniedShare, saveFailed, saveFailedRetry,
     ]
 }
 

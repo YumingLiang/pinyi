@@ -1,0 +1,186 @@
+import Foundation
+import MosaicCore
+
+// 架构师 G-3：AppCoordinator 的依赖全部是协议，生产用 `.live`（App target），测试用假实现。
+// 不用单例、不在生产代码里放 `#if TESTING` 钩子。
+
+// MARK: - 相册
+
+/// 相册客户端：读取授权 / 枚举（`PhotoLibraryProviding`）+ 「仅添加」授权与写入相册（导出保存）。
+/// 取图走 `ThumbnailProviding`（扫描 / 预览）和 `MosaicExporting`（导出取原图）。
+public protocol PhotoLibraryClient: PhotoLibraryProviding {
+    /// 「仅添加照片」授权（`PHPhotoLibrary.authorizationStatus(for: .addOnly)`，T8：保存只要 add-only）。
+    func addOnlyAuthorizationStatus() -> PhotoAuthorization
+    func requestAddOnlyAuthorization() async -> PhotoAuthorization
+    /// 把文件写进系统相册（`PHAssetCreationRequest`）。
+    func saveImageToLibrary(fileURL: URL) async throws
+}
+
+// MARK: - 时钟
+
+/// 时钟：读单调时间 + 睡眠（提交间隔、去抖、内存采样间隔）。测试用手动推进的假时钟，不真睡。
+public protocol AppClock: Sendable {
+    /// 单调秒。
+    func now() -> Double
+    /// 睡 `seconds` 秒；被取消时抛 `CancellationError`。
+    func sleep(seconds: Double) async throws
+}
+
+public extension AppClock {
+    var monotonic: MonotonicClock { MonotonicClock { self.now() } }
+}
+
+/// 系统时钟（`ContinuousClock`）。
+public struct SystemClock: AppClock {
+    private let origin = ContinuousClock.now
+    public init() {}
+    public func now() -> Double {
+        let d = origin.duration(to: ContinuousClock.now)
+        return Double(d.components.seconds) + Double(d.components.attoseconds) * 1e-18
+    }
+    public func sleep(seconds: Double) async throws {
+        try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1e9))
+    }
+}
+
+// MARK: - 生命周期
+
+/// 需要后台宽限的工作（`beginBackgroundTask`）。
+public enum BackgroundWork: String, Sendable, Hashable, CaseIterable {
+    case scan, generate, export
+}
+
+public enum LifecycleEvent: Sendable, Hashable {
+    /// 回到前台并激活（scenePhase `.active`）。
+    case becameActive
+    /// 进入后台（scenePhase `.background`）。
+    case enteredBackground
+    /// 某项后台宽限到期（`beginBackgroundTask` 的 expiration handler）。
+    case backgroundTimeExpired(BackgroundWork)
+}
+
+/// 前台 / 后台 / 后台到期事件源 + 后台宽限申请。App 里由 scenePhase 与 `UIApplication.beginBackgroundTask` 驱动。
+public protocol LifecycleEvents: Sendable {
+    /// 事件流（每次调用返回同一事件源的一个订阅；`AppCoordinator.start()` 只订阅一次）。
+    func events() -> AsyncStream<LifecycleEvent>
+    /// 申请后台宽限；到期时事件流送出 `.backgroundTimeExpired(work)`。重复申请同一项是幂等的。
+    /// 主线程调用（`UIApplication.beginBackgroundTask` 需要主线程）。
+    @MainActor func beginBackgroundWork(_ work: BackgroundWork)
+    @MainActor func endBackgroundWork(_ work: BackgroundWork)
+}
+
+// MARK: - 本地偏好
+
+/// 只存两个布尔偏好（首启已看完、受限已确认）。App 用 `UserDefaults`。
+public protocol PreferenceStore: Sendable {
+    func bool(_ key: PreferenceKey) -> Bool
+    func set(_ value: Bool, for key: PreferenceKey)
+}
+
+public enum PreferenceKey: String, Sendable, Hashable, CaseIterable {
+    case onboardingCompleted = "onboarding.completed"
+    case limitedAcknowledged = "permission.limited.acknowledged"
+}
+
+// MARK: - 生成
+
+/// 生成引擎（`GenerationRunner` 是生产实现；测试可包一层计数 / 阻塞）。
+public protocol MosaicGenerating: Sendable {
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct
+    func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
+                   progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct
+}
+
+extension GenerationRunner: MosaicGenerating {}
+
+// MARK: - 导出
+
+/// 导出档位（用户两档；8000 只在 INTERNAL_TOOLS 构建由平台层提供入口）。
+public enum ExportSize: Int, Sendable, Hashable, CaseIterable, Codable {
+    case standard = 4000
+    case large = 6000
+    case internal8000 = 8000
+
+    public var longEdge: Int { rawValue }
+    public static let userChoices: [ExportSize] = [.standard, .large]
+
+    public var titleKey: L10nKey? {
+        switch self {
+        case .standard: return .exportSize4000
+        case .large: return .exportSize6000
+        case .internal8000: return nil
+        }
+    }
+}
+
+public struct ExportRequest: Sendable {
+    public var product: GenerationProduct
+    public var target: PixelBuffer
+    public var overlayAlpha: Double
+    public var size: ExportSize
+
+    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, size: ExportSize) {
+        self.product = product
+        self.target = target
+        self.overlayAlpha = overlayAlpha
+        self.size = size
+    }
+}
+
+public enum ExportError: Error, Sendable, Equatable {
+    /// 预检或写入中磁盘不足。
+    case insufficientStorage
+    /// 编码失败等其他错误。
+    case encodingFailed
+}
+
+/// 导出器：把结果按条带渲染成文件（`tmp/export/` 下），返回文件 URL。实现须在条带边界检查取消（B-34）。
+public protocol MosaicExporting: Sendable {
+    /// 本次导出预计需要的磁盘字节数（预检用）。
+    func estimatedBytes(for request: ExportRequest) -> Int64
+    /// 可用磁盘字节数（`volumeAvailableCapacityForImportantUsage`）；读不到返回 nil（不拦截）。
+    func availableBytes() -> Int64?
+    /// 渲染并编码到临时文件。被取消时抛 `CancellationError` 并删掉半截文件。
+    func export(_ request: ExportRequest, progress: @escaping @Sendable (Double) -> Void) async throws -> URL
+    /// 删除单个导出文件（保存 / 分享结束后）。
+    func discard(_ url: URL)
+    /// 启动时清空 `tmp/export/`（B-27：上次导出中被杀留下的临时文件）。
+    func removeStaleExports()
+}
+
+// MARK: - 依赖集合
+
+/// AppCoordinator 的全部依赖。
+public struct AppDependencies: Sendable {
+    public var library: any PhotoLibraryClient
+    public var thumbnails: any ThumbnailProviding
+    public var indexStore: any IndexStore
+    public var clock: any AppClock
+    public var lifecycle: any LifecycleEvents
+    public var preferences: any PreferenceStore
+    public var generator: any MosaicGenerating
+    public var exporter: any MosaicExporting
+    public var memory: any MemoryFootprintReading
+    public var perf: PerfRecorder
+    public var indexConfiguration: PhotoIndex.Configuration
+    public var initialSeed: UInt64
+
+    public init(library: any PhotoLibraryClient, thumbnails: any ThumbnailProviding, indexStore: any IndexStore,
+                clock: any AppClock, lifecycle: any LifecycleEvents, preferences: any PreferenceStore,
+                generator: any MosaicGenerating, exporter: any MosaicExporting, memory: any MemoryFootprintReading,
+                perf: PerfRecorder, indexConfiguration: PhotoIndex.Configuration = .init(), initialSeed: UInt64) {
+        self.library = library
+        self.thumbnails = thumbnails
+        self.indexStore = indexStore
+        self.clock = clock
+        self.lifecycle = lifecycle
+        self.preferences = preferences
+        self.generator = generator
+        self.exporter = exporter
+        self.memory = memory
+        self.perf = perf
+        self.indexConfiguration = indexConfiguration
+        self.initialSeed = initialSeed
+    }
+}

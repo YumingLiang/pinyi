@@ -27,7 +27,7 @@ func color(for id: String) -> (UInt8, UInt8, UInt8) {
 }
 
 /// 假相册。
-final class FakePhotoLibrary: PhotoLibraryProviding, Sendable {
+final class FakePhotoLibrary: PhotoLibraryClient, Sendable {
     struct State: Sendable {
         var auth: PhotoAuthorization = .authorized
         var authAfterRequest: PhotoAuthorization = .authorized
@@ -35,7 +35,14 @@ final class FakePhotoLibrary: PhotoLibraryProviding, Sendable {
         var albums: [AlbumInfo] = []
         var albumMembers: [String: [String]] = [:]
         var metadataCalls = 0
+        // PhotoLibraryClient（G-3）
+        var addOnlyAuth: PhotoAuthorization = .authorized
+        var addOnlyAfterRequest: PhotoAuthorization = .authorized
+        var addOnlyRequests = 0
+        var saveError: SaveErrorKind?
+        var savedFiles: [String] = []
     }
+    enum SaveErrorKind: Sendable { case generic, outOfSpace }
     let state = Locked(State())
 
     init(assetCount: Int = 0, prefix: String = "a") {
@@ -62,7 +69,24 @@ final class FakePhotoLibrary: PhotoLibraryProviding, Sendable {
         return m
     }
 
-    enum CocoaLikeError: Error { case notFound }
+    enum CocoaLikeError: Error { case notFound, saveFailed }
+
+    func addOnlyAuthorizationStatus() -> PhotoAuthorization { state.get().addOnlyAuth }
+    func requestAddOnlyAuthorization() async -> PhotoAuthorization {
+        state.update { s in s.addOnlyRequests += 1; s.addOnlyAuth = s.addOnlyAfterRequest; return s.addOnlyAuth }
+    }
+    func saveImageToLibrary(fileURL: URL) async throws {
+        let err = state.update { s -> SaveErrorKind? in
+            if s.saveError == nil { s.savedFiles.append(fileURL.lastPathComponent) }
+            return s.saveError
+        }
+        switch err {
+        case .generic?: throw CocoaLikeError.saveFailed
+        case .outOfSpace?: throw CocoaError(.fileWriteOutOfSpace)
+        case nil: break
+        }
+    }
+    func setAuth(_ a: PhotoAuthorization) { state.update { $0.auth = a } }
 
     // 便捷修改
     func delete(_ ids: Set<String>) { state.update { $0.assets.removeAll { ids.contains($0.id) } } }

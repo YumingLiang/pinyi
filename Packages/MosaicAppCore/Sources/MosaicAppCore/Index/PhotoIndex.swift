@@ -168,6 +168,8 @@ public actor PhotoIndex {
     /// 最近一次提交耗时（秒），MF-4 自适应间隔用。
     public private(set) var lastCommitSeconds: Double = 0
     private var commitSecondsThisScan: Double = 0
+    /// 进后台时请求尽快落盘（G-3「进后台时落盘」）：扫描循环在当前批次结束后无视提交策略立即提交一次。
+    private var checkpointRequested = false
 
     /// - Parameters:
     ///   - store: 持久化实现（MF-3）。App 用 `JSONIndexStore`，测试可换任意实现。
@@ -229,6 +231,15 @@ public actor PhotoIndex {
                     unavailableLocal: manifest.count(.unavailableLocal), failed: manifest.count(.failed),
                     isScanning: scanning, wasInterrupted: manifest.scanInProgress,
                     hasCompletedInitialScan: hasCompletedInitialScan)
+    }
+
+    /// 进后台时调用：若正在扫描，当前批次结束后立即提交（不等提交策略）；不在扫描时索引已是一致的，无需动作。
+    /// - Returns: 是否有扫描在进行（即本次请求会生效）。
+    @discardableResult
+    public func requestCheckpoint() -> Bool {
+        guard scanning else { return false }
+        checkpointRequested = true
+        return true
     }
 
     /// 生成开始 / 结束时调用：扫描并发随之在 `maxConcurrentRequests` 与 `concurrencyWhileGenerating` 间切换（下一批生效）。
@@ -310,7 +321,7 @@ public actor PhotoIndex {
             return summary
         }
         scanning = true
-        defer { scanning = false }
+        defer { scanning = false; checkpointRequested = false }
         manifest.scanInProgress = true
         try? commit()
 
@@ -367,10 +378,11 @@ public actor PhotoIndex {
                 processed += batch.count
                 batchStart += batch.count
                 // MF-4：整表重写是 O(n)。行数阈值随表长增长；时间触发要求 ≥ 300 行；两者都受占空比约束。
-                if policy.shouldCommit(uncommitted: uncommitted.count, tableCount: table.count,
+                if checkpointRequested || policy.shouldCommit(uncommitted: uncommitted.count, tableCount: table.count,
                                        secondsSinceLastCommit: clock.now() - lastCommit,
                                        lastCommitSeconds: lastCommitSeconds, isLastBatch: batchStart >= queue.count) {
                     summary.newlyAvailable += uncommitted.count
+                    checkpointRequested = false
                     try flush(&uncommitted)
                     lastCommit = clock.now()
                 }

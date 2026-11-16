@@ -20,6 +20,8 @@ public struct ScanFlow: Sendable, Hashable {
     public private(set) var progress = ScanProgress(processed: 0, total: 0, availableCount: 0, skippedUnavailable: 0, isResuming: false)
     /// 是否是首次扫描（显示 `scan.first_time_hint`）。
     public private(set) var isFirstScan = false
+    /// 后台到期暂停后回前台自动续扫：本轮不显示「接着上次继续」（决定 5：用户无感）。
+    public private(set) var resumeHintSuppressed = false
 
     public init() {}
 
@@ -33,6 +35,8 @@ public struct ScanFlow: Sendable, Hashable {
         case becameActive
         case finished
         case failed
+        /// 读取权限被收回（拒绝 / 受限后相册变了）：停止扫描、回到空闲，不提示（权限页会接管）。
+        case accessLost
     }
 
     public enum Effect: Sendable, Hashable {
@@ -46,10 +50,11 @@ public struct ScanFlow: Sendable, Hashable {
         case (_, .started(let first, let resuming)):
             phase = .scanning
             isFirstScan = first
-            progress.isResuming = resuming
+            progress.isResuming = resuming && !resumeHintSuppressed
             return []
         case (.scanning, .progressed(let p)), (.confirmingCancel, .progressed(let p)):
             progress = p
+            if resumeHintSuppressed { progress.isResuming = false }
             return []
         case (.scanning, .cancelTapped):
             phase = .confirmingCancel
@@ -66,13 +71,18 @@ public struct ScanFlow: Sendable, Hashable {
         case (.pausedInBackground, .becameActive):
             phase = .scanning
             progress.isResuming = false   // 回前台继续不提示
+            resumeHintSuppressed = true
             return [.startScan]
         case (.scanning, .finished), (.confirmingCancel, .finished):
             phase = .completed
+            resumeHintSuppressed = false
             return []
         case (.scanning, .failed), (.confirmingCancel, .failed):
             phase = .failed
             return []
+        case (.scanning, .accessLost), (.confirmingCancel, .accessLost), (.pausedInBackground, .accessLost):
+            phase = .idle
+            return [.cancelScan]
         default:
             return []
         }
