@@ -87,21 +87,28 @@ actor PhotoKitLibrary: PhotoLibraryClient {
     }
 
     func albums() async -> [AlbumInfo] {
-        var out: [AlbumInfo] = []
+        // Swift 6 region isolation：不用 enumerateObjects 闭包（SDK 里可能标 @Sendable / sending），
+        // PHFetchResult 先转数组再 for-in，可变状态只在本函数内。
         let imageOnly = PHFetchOptions()
         imageOnly.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
-        func add(_ c: PHAssetCollection) {
+        var collections = Self.array(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))  // 用户相簿
+        // 少量智能相簿（技术方案 §2.7）：个人收藏、自拍、人像
+        for sub in [PHAssetCollectionSubtype.smartAlbumFavorites, .smartAlbumSelfPortraits, .smartAlbumDepthEffect] {
+            collections += Self.array(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: sub, options: nil))
+        }
+        var out: [AlbumInfo] = []
+        out.reserveCapacity(collections.count)
+        for c in collections {
             let n = PHAsset.fetchAssets(in: c, options: imageOnly).count
             out.append(AlbumInfo(id: c.localIdentifier, title: c.localizedTitle ?? "", assetCount: n))
         }
-        // 用户相簿
-        let user = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
-        user.enumerateObjects { c, _, _ in add(c) }
-        // 少量智能相簿（技术方案 §2.7）：个人收藏、自拍、人像
-        for sub in [PHAssetCollectionSubtype.smartAlbumFavorites, .smartAlbumSelfPortraits, .smartAlbumDepthEffect] {
-            PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: sub, options: nil).enumerateObjects { c, _, _ in add(c) }
-        }
         return out
+    }
+
+    /// `PHFetchResult` → 数组（同步、无闭包）。
+    nonisolated static func array<T: AnyObject>(_ r: PHFetchResult<T>) -> [T] {
+        guard r.count > 0 else { return [] }
+        return r.objects(at: IndexSet(integersIn: 0..<r.count))
     }
 
     func assetIDs(inAlbum albumID: String) async throws -> [String] {
@@ -109,8 +116,6 @@ actor PhotoKitLibrary: PhotoLibraryClient {
         guard let c = cols.firstObject else { throw PhotoIndexError.albumUnreadable }
         let opts = PHFetchOptions()
         opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
-        var ids: [String] = []
-        PHAsset.fetchAssets(in: c, options: opts).enumerateObjects { a, _, _ in ids.append(a.localIdentifier) }
-        return ids
+        return Self.array(PHAsset.fetchAssets(in: c, options: opts)).map(\.localIdentifier)
     }
 }

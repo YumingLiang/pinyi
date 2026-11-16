@@ -42,7 +42,10 @@ struct TestAlbumView: View {
                 Section { Text(verbatim: "决定 13 待 AndyL 拍板：拍板前不提供「生成」。").foregroundStyle(.secondary) }
             }
             Section {
-                Button(role: .destructive) { start { try await writer.deleteAlbum(progress: update) } } label: {
+                Button(role: .destructive) {
+                    let w = writer
+                    start { report in try await w.deleteAlbum(progress: report) }
+                } label: {
                     Text(verbatim: "删除「\(TestAlbumPolicy.albumTitle)」相簿及其中照片")
                 }
                 .disabled(task != nil)
@@ -55,22 +58,28 @@ struct TestAlbumView: View {
         }
         .navigationTitle(Text(verbatim: TestAlbumPolicy.albumTitle))
         .confirmationDialog(Text(verbatim: "写入 \(count) 张合成图片到相册？"), isPresented: $confirmCreate, titleVisibility: .visible) {
-            Button { start { try await writer.create(plan: TestAlbumPlan(count: count), progress: update) } } label: { Text(verbatim: "写入") }
+            Button {
+                let w = writer, plan = TestAlbumPlan(count: count)   // @Sendable 闭包只捕获值，不捕获 View 的 self
+                start { report in try await w.create(plan: plan, progress: report) }
+            } label: { Text(verbatim: "写入") }
             Button(role: .cancel) {} label: { Text(L10nKey.commonCancel) }
         }
     }
 
-    private var update: @Sendable (TestAlbumProgress) -> Void {
-        { p in Task { @MainActor in progress = p } }
-    }
-
-    private func start(_ body: @escaping @Sendable () async throws -> Void) {
+    /// 进度经 AsyncStream 回到 MainActor（continuation 是 Sendable；不在 @Sendable 闭包里捕获 View 的 self）。
+    private func start(_ body: @escaping @Sendable (@escaping @Sendable (TestAlbumProgress) -> Void) async throws -> Void) {
+        let (stream, continuation) = AsyncStream<TestAlbumProgress>.makeStream()
         task = Task {
-            do { try await body() } catch is CancellationError {
-                progress.phase = .cancelled
+            let consumer = Task { for await p in stream { progress = p } }
+            var outcome: TestAlbumProgress.Phase?
+            do { try await body { continuation.yield($0) } } catch is CancellationError {
+                outcome = .cancelled
             } catch {
-                progress.phase = .failed("\(error)")
+                outcome = .failed("\(error)")
             }
+            continuation.finish()
+            await consumer.value
+            if let outcome { progress.phase = outcome }
             task = nil
         }
     }

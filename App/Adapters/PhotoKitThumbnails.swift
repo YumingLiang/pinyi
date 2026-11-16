@@ -31,9 +31,7 @@ actor PhotoKitThumbnails: ThumbnailProviding {
     }
 
     private nonisolated func assets(_ ids: [String]) -> [PHAsset] {
-        var out: [PHAsset] = []
-        PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil).enumerateObjects { a, _, _ in out.append(a) }
-        return out
+        PhotoKitLibrary.array(PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil))   // 不用 enumerateObjects 闭包
     }
 
     func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {
