@@ -191,7 +191,8 @@ public final class WorksController {
     public func exportSucceeded(layout: MosaicLayout) async {
         let ctx = resultContext()
         // 目标图：导出的是当前结果就用当前目标图；从作品再导出时，库里已有这份布局（查重直接命中，不会用到目标图）
-        let isCurrent = ctx.layout == layout
+        // 比较格子分配（不比参数：导出后又拖了叠加滑杆，也仍是这张结果）
+        let isCurrent = ctx.layout.map { $0.cols == layout.cols && $0.rows == layout.rows && $0.cellAssignments == layout.cellAssignments } ?? false
         let target = isCurrent ? ctx.target : nil
         await save(WorkDraft(layout: layout, target: target, overlayAlpha: layout.params.overlayAlpha,
                              tier: isCurrent ? ctx.tier : nil, seed: layout.params.seed, origin: .autoSavedOnExport),

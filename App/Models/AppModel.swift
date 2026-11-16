@@ -13,6 +13,8 @@ final class AppModel: ObservableObject {
     let perf: PerfRecorder
     let lifecycle: AppLifecycle
     private let thumbnails: PhotoKitThumbnails
+    /// 「我的作品」（逻辑在 MosaicAppCore 的 `WorksController`）。
+    let works: WorksModel
 
     @Published private(set) var state: AppState
     @Published private(set) var targetPreview: CGImage?
@@ -42,8 +44,23 @@ final class AppModel: ObservableObject {
         self.perf = perf
         self.lifecycle = lifecycle
         self.thumbnails = thumbnails
-        let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf))
+        // 导出成功 → 中继 → WorksController 自动存（AppDependencies 先于协调器创建，所以经中继转）
+        let relay = ExportSuccessRelay()
+        let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
+                                                             onExportSucceeded: relay.handler))
         self.coordinator = coordinator
+        let worksController = WorksController(store: FileWorksStore(directory: WorksLocation.directory,
+                                                                    images: ImageIOWorkImages(thumbnails: thumbnails)),
+                                              existence: PhotoKitExistenceChecker(),
+                                              images: ImageIOWorkImages(thumbnails: thumbnails))
+        worksController.attach(resultContext: { [weak coordinator] in
+            guard let c = coordinator else {
+                return WorkResultContext(layout: nil, target: nil, overlayAlpha: 0, tier: nil, resultRevision: 0)
+            }
+            return c.workResultContext
+        }, relay: relay)
+        worksController.exportHandler = coordinator
+        self.works = WorksModel(controller: worksController)
         self.state = coordinator.state
         coordinator.systemActionHandler = { action in
             switch action {
@@ -56,6 +73,7 @@ final class AppModel: ObservableObject {
 
     private func stateChanged(_ s: AppState) {
         state = s
+        works.controller.resultDidChange(revision: s.resultRevision)
         if s.resultRevision != renderedRevision {
             renderedRevision = s.resultRevision
             renderPreview()
@@ -98,7 +116,10 @@ final class AppModel: ObservableObject {
 
     // MARK: 动作（转发）
 
-    func start() async { coordinator.start() }
+    func start() async {
+        coordinator.start()
+        await works.start()
+    }
     func scenePhaseChanged(_ phase: ScenePhase) { lifecycle.scenePhaseChanged(phase) }
     func onboardingButtonTapped() { Task { await coordinator.onboardingButtonTapped() } }
     func onboardingSwiped(to page: Int) { coordinator.onboardingSwiped(to: page) }
