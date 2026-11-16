@@ -9,9 +9,11 @@
   - `LocalResolutionChecker`：最多 8 个请求同时在飞；Task 取消时 `cancelImageRequest` 并抛 `CancellationError`，取消后到达的结果不入缓存。
   - `LocalResolutionCache`：本会话按 localIdentifier 缓存；相册变化（`libraryDidChange`）时只清不合格条目（照片可能刚下载回本机），合格的保留。**未**持久化到索引（见风险）。
 - **界面**：来源页显示 `source.excluded_low_res`「有 N 张照片手机上的版本不够清楚，没有用上」（N = 当前来源里被剔除的不同照片数，换来源后不显示）；探测期间进度页正文换成 `generate.progress.checking`「正在挑出手机上够清楚的照片，请稍等。」。
-- **边界**：剔除后一张都不剩 → `NoSharpPhotosError` → `GenerationFailure.noMaterial`（现有「没有可用照片」路径），来源页仍显示 N；剩下 < 200 张时供给判断按剔除后的张数（结果页 `shortage.result` 规则不变：< 200 且放宽了约束）。重配 3 轮后仍有格子分到不合格照片时照常出图，`unresolvedCellCount` 进性能页附注。
+- **边界**：剔除后一张都不剩 → `NoSharpPhotosError` → `GenerationFailure.noMaterial`（现有「没有可用照片」路径），来源页仍显示 N；剩下 < 200 张时供给判断按剔除后的张数（结果页 `shortage.result` 规则不变：< 200 且放宽了约束）。重配 3 轮后仍有格子分到不合格照片（架构师 PR #5 评审 MUST）：**只把这些格子**换成「已探测且通过」的照片（`MosaicPipeline.refill`，MosaicCore 新增），忽略单张使用上限、尽量避开相邻重复（记 `.capIgnored` / `.neighborhoodIgnored`），其余格子不动；一张通过的都没有才走 `noMaterial`。最终结果里不会有未探测或不合格的照片（`unresolvedCellCount` 恒为 0），兜底格数 `finalFallbackCellCount` 进性能页附注。忽略上限只发生在这一步。
 - **性能页**：新阶段 `sharpnessProbe`「清晰度探测」——各轮探测累计耗时、items = 实际探测张数；附注 `去重探测 / 缓存命中 / 排除 / 重配轮数 / 未解决格数`，性能页显示最近一次附注。重配轮的生成计时附注带「重配第 n 轮」。
-- **测试**（`SharpnessFilterTests`，12 个）：最终结果里没有被剔除的照片且每格都有图；N 去重、每张一次生成只探测一次；缓存避免重探（再生成 0 次探测、换拼法不重复、相册变化只清不合格）；探测中取消抛 `CancellationError`、无结果、不入缓存；并发 ≤ 8；全部不合格走 `noMaterial`；只剩 10 张时供给按剔除后判断；到达最多轮数报告未解决格数；未注入探测器时行为不变；快照剔除只动掩码；协调器来源页文案只对当前来源显示。
+- **评审跟进测试**：`SharpnessFilterTests` 新增 4 个——重度不合格（2/3、90%、只剩 1 张）下每格都是探测通过的照片；兜底只在用完重配轮数后发生；轮数内能解决时结果与直接用剔除后快照生成完全一致（没有额外放宽上限）；每轮只探测本轮新出现的照片（按轮核对探测数）。`CellRefillTests`（MosaicCore，2 个）：只换指定格子、只用允许的素材、可超上限；无可用素材抛 `noCandidates`。
+- **后续（未做）**：探测结果持久化进索引（绑定 epoch），本 PR 只做会话缓存。
+- **测试**（`SharpnessFilterTests` 首版 12 个）：最终结果里没有被剔除的照片且每格都有图；N 去重、每张一次生成只探测一次；缓存避免重探（再生成 0 次探测、换拼法不重复、相册变化只清不合格）；探测中取消抛 `CancellationError`、无结果、不入缓存；并发 ≤ 8；全部不合格走 `noMaterial`；只剩 10 张时供给按剔除后判断；到达最多轮数报告未解决格数；未注入探测器时行为不变；快照剔除只动掩码；协调器来源页文案只对当前来源显示。
 - **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`App/Adapters/PhotoKitResolutionProbe.swift`、`LiveDependencies`（注入探测器）、来源页 / 进度页 / 性能页三处视图。需真机核对：`.highQualityFormat` + 无网络时 iCloud 照片的回调形态（nil + InCloud，还是降质图）；`.fast` 返回的像素尺寸。
 
 ## feat/app-layer：P0 预览「第二次放大失效」（真机 32ec2b5 Internal）

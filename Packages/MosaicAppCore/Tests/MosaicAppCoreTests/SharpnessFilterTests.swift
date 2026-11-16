@@ -225,13 +225,102 @@ final class SharpnessFilterTests: XCTestCase {
         XCTAssertEqual(p.lowRes.excludedCount, 290)
     }
 
-    func testMaxRoundsReachedReportsUnresolvedCells() async throws {
+    /// 最终结果的每一格都必须是「探测过且通过」的照片。
+    func assertEveryCellProbePassed(_ p: GenerationProduct, _ probe: FakeResolutionProbe, cache: LocalResolutionCache,
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        let ids = p.cellAssetIDs
+        XCTAssertEqual(ids.count, p.generation.layout.cellCount, file: file, line: line)
+        let probed = Set(probe.calls)
+        let bad = probe.state.get().unusable
+        for (cell, id) in ids.enumerated() {
+            guard let id else { return XCTFail("格子 \(cell) 没有照片", file: file, line: line) }
+            XCTAssertTrue(probed.contains(id), "格子 \(cell) 用了未探测的 \(id)", file: file, line: line)
+            XCTAssertFalse(bad.contains(id), "格子 \(cell) 用了不合格的 \(id)", file: file, line: line)
+            XCTAssertEqual(cache.verdict(for: id), .usable, file: file, line: line)
+        }
+        XCTAssertEqual(p.lowRes.unresolvedCellCount, 0, file: file, line: line)
+    }
+
+    /// 最后兜底：只在到达最多轮数后发生；只换坏格子、忽略单张上限；每格都是探测通过的照片。
+    func testFinalFallbackFillsOnlyFromProbePassedPhotos() async throws {
+        let snap = try await snapshot(assets: 300)
+        for (rounds, failRatio) in [(0, 3), (1, 10), (3, 10)] {
+            // failRatio = 10：90% 不合格（只有 a0、a10、a20… 合格）；3：三分之二不合格
+            let good = Set(stride(from: 0, to: 300, by: failRatio).map { "a\($0)" })
+            let bad = Set((0..<300).map { "a\($0)" }).subtracting(good)
+            let probe = FakeResolutionProbe(unusable: bad)
+            let cache = LocalResolutionCache()
+            let p = try await runner(probe, cache: cache, rounds: rounds)
+                .run(target: try target(), snapshot: snap, settings: GenerationSettings(density: .coarse), seed: 4)
+            assertEveryCellProbePassed(p, probe, cache: cache)
+            XCTAssertLessThanOrEqual(p.lowRes.rematchRounds, rounds)
+            if p.lowRes.finalFallbackCellCount > 0 {
+                XCTAssertEqual(p.lowRes.rematchRounds, rounds, "兜底只在用完重配轮数后发生")
+                XCTAssertGreaterThanOrEqual(p.generation.assignment.statistics.capIgnoredCount, p.lowRes.finalFallbackCellCount,
+                                            "补上的格子记为忽略上限")
+            }
+        }
+        // rounds = 0 且三分之二不合格：首轮必有坏格 → 一定走兜底
+        let probe = FakeResolutionProbe(unusable: everyThird(300).symmetricDifference(Set((0..<300).map { "a\($0)" })))
+        let cache = LocalResolutionCache()
+        let p = try await runner(probe, cache: cache, rounds: 0)
+            .run(target: try target(), snapshot: snap, settings: GenerationSettings(density: .coarse), seed: 2)
+        XCTAssertGreaterThan(p.lowRes.finalFallbackCellCount, 0)
+        assertEveryCellProbePassed(p, probe, cache: cache)
+    }
+
+    /// 能在轮数内解决时不放宽上限：结果与「直接用剔除后的快照生成」完全一致（没有额外的忽略上限）。
+    func testNoCapRelaxationWhenResolvedWithinRounds() async throws {
         let snap = try await snapshot(assets: 300)
         let probe = FakeResolutionProbe(unusable: everyThird(300))
-        let p = try await runner(probe, rounds: 0).run(target: try target(), snapshot: snap, settings: GenerationSettings(density: .coarse), seed: 2)
-        XCTAssertEqual(p.lowRes.rematchRounds, 0)
-        XCTAssertGreaterThan(p.lowRes.unresolvedCellCount, 0, "到达最多轮数仍不合格的格子要报告")
-        XCTAssertTrue(p.lowRes.excludedAssetIDs.isEmpty, "没被剔除的（仍在图上）不算进 N")
+        let cache = LocalResolutionCache()
+        let settings = GenerationSettings(density: .coarse)
+        let p = try await runner(probe, cache: cache).run(target: try target(), snapshot: snap, settings: settings, seed: 7)
+        XCTAssertEqual(p.lowRes.finalFallbackCellCount, 0)
+        assertEveryCellProbePassed(p, probe, cache: cache)
+        let plain = try await GenerationRunner().run(target: try target(), snapshot: p.snapshot, settings: settings, seed: 7)
+        XCTAssertEqual(p.generation.assignment.tiles, plain.generation.assignment.tiles)
+        XCTAssertEqual(p.generation.assignment.statistics.capIgnoredCount, plain.generation.assignment.statistics.capIgnoredCount)
+    }
+
+    /// 只剩 1 张合格：所有格子都用它（重复也比糊强），不走 noMaterial。
+    func testSinglePassedPhotoFillsEverything() async throws {
+        let snap = try await snapshot(assets: 300)
+        let bad = Set((1..<300).map { "a\($0)" })
+        let probe = FakeResolutionProbe(unusable: bad)
+        let cache = LocalResolutionCache()
+        let p = try await runner(probe, cache: cache, rounds: 1)
+            .run(target: try target(), snapshot: snap, settings: GenerationSettings(density: .coarse), seed: 3)
+        XCTAssertTrue(probe.calls.contains("a0"))
+        assertEveryCellProbePassed(p, probe, cache: cache)
+        XCTAssertEqual(Set(p.cellAssetIDs.compactMap { $0 }), ["a0"])
+        XCTAssertGreaterThan(p.lowRes.finalFallbackCellCount, 0)
+    }
+
+    /// 每轮只探测本轮新出现的照片（缓存保证），按轮核对探测数。
+    func testEachRoundProbesOnlyNewlyIntroducedPhotos() async throws {
+        let snap = try await snapshot(assets: 300)
+        let probe = FakeResolutionProbe(unusable: everyThird(300))
+        let cache = LocalResolutionCache()
+        let marks = Locked<[Int]>([])   // 每轮开始探测时 probe.calls 的长度
+        let p = try await runner(probe, cache: cache)
+            .run(target: try target(), snapshot: snap, settings: GenerationSettings(density: .coarse), seed: 7, progress: nil,
+                 stage: { s in if s == .checkingSharpness { marks.update { $0.append(probe.calls.count) } } })
+        let rounds = p.lowRes.rounds
+        XCTAssertEqual(rounds.count, p.lowRes.rematchRounds + 1)
+        XCTAssertGreaterThanOrEqual(rounds.count, 2, "这个场景至少重配一轮")
+        let m = marks.get() + [probe.calls.count]
+        XCTAssertEqual(m.count, rounds.count + 1)
+        var earlier = Set<String>()
+        for (r, stat) in rounds.enumerated() {
+            let callsThisRound = Array(probe.calls[m[r]..<m[r + 1]])
+            XCTAssertEqual(callsThisRound.count, stat.probed, "第 \(r) 轮")
+            XCTAssertEqual(stat.probed, stat.newlyIntroduced, "第 \(r) 轮只探测新出现的照片")
+            XCTAssertTrue(Set(callsThisRound).isDisjoint(with: earlier), "第 \(r) 轮没有重复探测前几轮的照片")
+            earlier.formUnion(callsThisRound)
+        }
+        XCTAssertEqual(rounds[0].probed, rounds[0].assignedDistinct, "首轮（空缓存）探测本轮全部照片")
+        XCTAssertEqual(rounds.map(\.probed).reduce(0, +), probe.calls.count)
     }
 
     func testWithoutCheckerBehavesAsBefore() async throws {

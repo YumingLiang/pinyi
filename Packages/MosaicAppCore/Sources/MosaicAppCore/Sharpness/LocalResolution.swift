@@ -68,6 +68,10 @@ public final class LocalResolutionCache: Sendable {
     public func knownUnusable() -> Set<String> {
         state.withLock { s in Set(s.compactMap { $0.value.isUsable ? nil : $0.key }) }
     }
+    /// 已知合格的 ID（最后兜底只从这里面挑）。
+    public func knownUsable() -> Set<String> {
+        state.withLock { s in Set(s.compactMap { $0.value.isUsable ? $0.key : nil }) }
+    }
     /// 相册变化时调用：清掉不合格条目。
     public func removeUnusable() { state.withLock { s in s = s.filter { $0.value.isUsable } } }
     public func removeAll() { state.withLock { $0.removeAll() } }
@@ -163,7 +167,21 @@ public struct LowResReport: Sendable, Hashable {
     public var cacheHits: Int
     /// 剔除后重配的轮数（0 = 第一次就全部合格）。
     public var rematchRounds: Int
-    /// 到达最多轮数后仍分到不合格照片的格子数（正常应为 0；非 0 时进日志）。
+    /// 每轮（第 0 轮 = 首次匹配）的探测统计。
+    public struct Round: Sendable, Hashable {
+        /// 本轮结果里用到的不同照片数。
+        public var assignedDistinct: Int
+        /// 其中本次生成前几轮没出现过的。
+        public var newlyIntroduced: Int
+        /// 本轮实际发出的探测请求数（缓存未命中）。
+        public var probed: Int
+        /// 本轮判为不合格的张数。
+        public var unusable: Int
+    }
+    public var rounds: [Round] = []
+    /// 最后兜底：到达最多轮数后仍分到不合格照片、被换成已通过照片（忽略单张上限）的格子数。
+    public var finalFallbackCellCount: Int = 0
+    /// 最终结果里仍是不合格 / 未探测照片的格子数。有了最后兜底后恒为 0（保留字段给日志断言）。
     public var unresolvedCellCount: Int
     /// 探测总耗时（秒）。
     public var probeSeconds: Double
@@ -187,7 +205,7 @@ public struct LowResReport: Sendable, Hashable {
 
     /// 性能页 / 日志附注。
     public var perfNote: String {
-        "去重探测 \(probedCount) · 缓存命中 \(cacheHits) · 排除 \(excludedCount) · 重配 \(rematchRounds) 轮 · 未解决 \(unresolvedCellCount) 格"
+        "去重探测 \(probedCount) · 缓存命中 \(cacheHits) · 排除 \(excludedCount) · 重配 \(rematchRounds) 轮 · 兜底补格 \(finalFallbackCellCount) · 未解决 \(unresolvedCellCount) 格"
     }
 }
 

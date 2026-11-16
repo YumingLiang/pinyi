@@ -168,6 +168,7 @@ public struct GenerationRunner: Sendable {
         var snap = initial
         excluded.formUnion(pre)
         var report = LowResReport(enabled: true)
+        var seenInRun = Set<String>()
         var round = 0
         while true {
             stage?(.matching)
@@ -191,20 +192,44 @@ public struct GenerationRunner: Sendable {
             report.probeSeconds += clock.now() - t0
             report.probedCount += pass.probed
             report.cacheHits += pass.cacheHits
+            let distinct = Set(cellIDs.compactMap { $0 })
+            report.rounds.append(LowResReport.Round(assignedDistinct: distinct.count,
+                                                    newlyIntroduced: distinct.subtracting(seenInRun).count,
+                                                    probed: pass.probed, unusable: pass.unusable.count))
+            seenInRun.formUnion(distinct)
             let bad = pass.unusable
-            if bad.isEmpty || round >= checker.maxRematchRounds {
-                report.unresolvedCellCount = bad.isEmpty ? 0 : cellIDs.reduce(0) { $0 + (($1.map { bad.contains($0) } ?? false) ? 1 : 0) }
-                // 未解决的（到达最多轮数仍不合格）也算「没用好」，但它们确实还在图上：不计入排除数，只进日志。
-                report.excludedAssetIDs = excluded
-                report.rematchRounds = round
-                perf?.record(.sharpnessProbe, seconds: report.probeSeconds, items: report.probedCount, note: report.perfNote)
-                progress?(1)
-                return GenerationProduct(generation: g, snapshot: snap, lowRes: report)
+            // 没有 ID 的格子（理论上不会出现）也当作不合格处理：最终每格都必须是探测通过的照片。
+            let badCells = cellIDs.indices.filter { cellIDs[$0].map { bad.contains($0) } ?? true }
+            if badCells.isEmpty {
+                return finish(g, snap, excluded, round)
             }
             let (next, removed) = try snap.excluding(assetIDs: bad)
             excluded.formUnion(removed)
             snap = next
-            round += 1
+            if round < checker.maxRematchRounds {
+                round += 1
+                continue
+            }
+            // 最后兜底（架构师 PR #5 评审）：到达最多轮数仍有格子分到不合格照片 → 只把这些格子换成
+            // 「已探测且通过」的照片，忽略单张使用上限（多重复几次也比糊强）。一张通过的都没有才走 noMaterial。
+            let passed = checker.cache.knownUsable()
+            var allowed = BitMask(count: snap.library.table.count)
+            for row in 0..<min(snap.assetIDsByRow.count, allowed.count) where snap.library.mask[row] {
+                if let id = snap.assetIDsByRow[row], passed.contains(id) { allowed[row] = true }
+            }
+            if allowed.setCount == 0 { throw NoSharpPhotosError(excludedCount: excluded.count) }
+            let filled = try await pipeline.refill(g, target: target, snapshot: snap.library, cells: badCells, allowed: allowed)
+            report.finalFallbackCellCount = badCells.count
+            return finish(filled, snap, excluded, round)
+        }
+
+        func finish(_ g: MosaicGeneration, _ snap: IndexSnapshot, _ excluded: Set<String>, _ round: Int) -> GenerationProduct {
+            report.excludedAssetIDs = excluded
+            report.rematchRounds = round
+            report.unresolvedCellCount = 0
+            perf?.record(.sharpnessProbe, seconds: report.probeSeconds, items: report.probedCount, note: report.perfNote)
+            progress?(1)
+            return GenerationProduct(generation: g, snapshot: snap, lowRes: report)
         }
     }
 }
