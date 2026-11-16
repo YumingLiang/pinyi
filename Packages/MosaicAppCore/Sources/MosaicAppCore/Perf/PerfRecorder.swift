@@ -1,4 +1,5 @@
 import Foundation
+import MosaicCore
 
 /// 性能计时的阶段（内部性能页，决定 13 / 技术方案 §5 退出线）。
 public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
@@ -26,6 +27,10 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
     case generateTotal
     /// 预览图绘制。
     case previewRender
+    /// 一轮扫描的墙钟总时长（note = `PerfNote.initialScan` / `.incrementalScan`）。
+    case scanTotal
+    /// 一轮扫描期间提交累计耗时（与 `scanTotal` 同 note；首扫占比 > 5% 是 SQLite 触发条件之一，MF-4 / MF-7）。
+    case scanCommitTotal
 
     /// 性能页上的显示名（内部页面，不进文案表）。
     public var label: String {
@@ -42,8 +47,16 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
         case .generateAssigning: return "生成·分配"
         case .generateTotal: return "生成·总计"
         case .previewRender: return "预览绘制"
+        case .scanTotal: return "扫描·总计"
+        case .scanCommitTotal: return "扫描·提交累计"
         }
     }
+}
+
+/// 样本附注里约定的取值。
+public enum PerfNote {
+    public static let initialScan = "initial"
+    public static let incrementalScan = "incremental"
 }
 
 /// 一条计时样本。
@@ -81,11 +94,11 @@ public struct MonotonicClock: Sendable {
 }
 
 /// 线程安全的计时记录器。只保留最近 `capacity` 条，内存有界。
-public final class PerfRecorder: @unchecked Sendable {
+/// G-1：状态放在 `LockedState` 里，本类型的 `Sendable` 由编译器检查（不再 `@unchecked`）。
+public final class PerfRecorder: Sendable {
     public let clock: MonotonicClock
     public let capacity: Int
-    private let lock = NSLock()
-    private var samples: [PerfSample] = []
+    private let samples = LockedState<[PerfSample]>([])
 
     public init(clock: MonotonicClock = .system, capacity: Int = 2000) {
         self.clock = clock
@@ -93,9 +106,11 @@ public final class PerfRecorder: @unchecked Sendable {
     }
 
     public func record(_ sample: PerfSample) {
-        lock.lock(); defer { lock.unlock() }
-        samples.append(sample)
-        if samples.count > capacity { samples.removeFirst(samples.count - capacity) }
+        let cap = capacity
+        samples.withLock { s in
+            s.append(sample)
+            if s.count > cap { s.removeFirst(s.count - cap) }
+        }
     }
 
     public func record(_ phase: PerfPhase, seconds: Double, items: Int = 0, note: String? = nil) {
@@ -119,27 +134,23 @@ public final class PerfRecorder: @unchecked Sendable {
         return try await body()
     }
 
-    public func allSamples() -> [PerfSample] {
-        lock.lock(); defer { lock.unlock() }
-        return samples
-    }
+    public func allSamples() -> [PerfSample] { samples.get() }
 
-    public func reset() {
-        lock.lock(); defer { lock.unlock() }
-        samples.removeAll()
-    }
+    public func reset() { samples.set([]) }
 
     public func report() -> PerfReport { PerfReport(samples: allSamples()) }
 }
 
 /// 生成阶段计时：把内核的进度回调（取样 → 匹配 → 分配）切成三段耗时。
 /// 回调可能来自任意线程，内部加锁。
-public final class GenerationPhaseTimer: @unchecked Sendable {
+public final class GenerationPhaseTimer: Sendable {
+    private struct State: Sendable {
+        var phaseStart: [MosaicProgressPhase: Double] = [:]
+        var lastPhase: MosaicProgressPhase?
+    }
     private let clock: MonotonicClock
-    private let lock = NSLock()
-    private var start: Double
-    private var phaseStart: [MosaicProgressPhase: Double] = [:]
-    private var lastPhase: MosaicProgressPhase?
+    private let start: Double
+    private let state = LockedState(State())
 
     public init(clock: MonotonicClock) {
         self.clock = clock
@@ -147,16 +158,18 @@ public final class GenerationPhaseTimer: @unchecked Sendable {
     }
 
     public func observe(_ phase: MosaicProgressPhase) {
-        lock.lock(); defer { lock.unlock() }
-        if phaseStart[phase] == nil { phaseStart[phase] = clock.now() }
-        lastPhase = phase
+        let now = clock.now()
+        state.withLock { s in
+            if s.phaseStart[phase] == nil { s.phaseStart[phase] = now }
+            s.lastPhase = phase
+        }
     }
 
     /// 结束：返回各阶段耗时（阶段 i 的结束 = 下一个出现的阶段开始，最后一段到 `finish` 时刻）。
     public func finish(cells: Int, note: String?) -> [PerfSample] {
-        lock.lock(); defer { lock.unlock() }
         let end = clock.now()
-        let ordered = MosaicProgressPhase.allCases.compactMap { p in phaseStart[p].map { (p, $0) } }
+        let starts = state.withLock { $0.phaseStart }
+        let ordered = MosaicProgressPhase.allCases.compactMap { p in starts[p].map { (p, $0) } }
         var out: [PerfSample] = []
         for (i, (p, t)) in ordered.enumerated() {
             let tEnd = i + 1 < ordered.count ? ordered[i + 1].1 : end

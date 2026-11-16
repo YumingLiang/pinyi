@@ -1,16 +1,16 @@
 import Foundation
+import XCTest
 import MosaicCore
 @testable import MosaicAppCore
 
-/// 线程安全的小盒子。
-final class Locked<T>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: T
-    init(_ v: T) { value = v }
-    func get() -> T { lock.lock(); defer { lock.unlock() }; return value }
-    func set(_ v: T) { lock.lock(); value = v; lock.unlock() }
+/// 线程安全的小盒子（G-1：基于 `LockedState`，Sendable 由编译器检查）。
+final class Locked<T: Sendable>: Sendable {
+    private let state: LockedState<T>
+    init(_ v: T) { state = LockedState(v) }
+    func get() -> T { state.get() }
+    func set(_ v: T) { state.set(v) }
     @discardableResult
-    func update<R>(_ f: (inout T) -> R) -> R { lock.lock(); defer { lock.unlock() }; return f(&value) }
+    func update<R: Sendable>(_ f: (inout T) -> R) -> R { state.withLock(f) }
 }
 
 /// 稳定哈希（FNV-1a），不用 `hashValue`（每次进程随机）。
@@ -27,8 +27,8 @@ func color(for id: String) -> (UInt8, UInt8, UInt8) {
 }
 
 /// 假相册。
-final class FakePhotoLibrary: PhotoLibraryProviding, @unchecked Sendable {
-    struct State {
+final class FakePhotoLibrary: PhotoLibraryProviding, Sendable {
+    struct State: Sendable {
         var auth: PhotoAuthorization = .authorized
         var authAfterRequest: PhotoAuthorization = .authorized
         var assets: [AssetMetadata] = []
@@ -88,8 +88,8 @@ final class FakePhotoLibrary: PhotoLibraryProviding, @unchecked Sendable {
 }
 
 /// 假缩略图来源：纯色 8×8 图；可指定"未下载" / "失败"的 id；记录最大并发；可在第 N 次请求时执行钩子（例如取消）。
-final class FakeThumbnails: ThumbnailProviding, @unchecked Sendable {
-    struct State {
+final class FakeThumbnails: ThumbnailProviding, Sendable {
+    struct State: Sendable {
         var unavailable: Set<String> = []
         var failing: Set<String> = []
         var colorOverride: [String: (UInt8, UInt8, UInt8)] = [:]
@@ -132,7 +132,7 @@ final class FakeThumbnails: ThumbnailProviding, @unchecked Sendable {
 }
 
 /// 可手动推进的时钟。
-final class ManualClock: @unchecked Sendable {
+final class ManualClock: Sendable {
     let t = Locked(0.0)
     func advance(_ d: Double) { t.update { $0 += d } }
     var clock: MonotonicClock { MonotonicClock { [t] in t.get() } }
@@ -149,5 +149,24 @@ func smallConfig(batch: Int = 16, concurrency: Int = 8, minRows: Int = 1) -> Pho
     c.batchSize = batch
     c.maxConcurrentRequests = concurrency
     c.minRowsPerCommit = minRows
+    c.minRowsForTimedCommit = minRows
+    c.commitDutyFactor = 0   // 测试里每批都按行数规则判断，不受真实耗时影响
     return c
+}
+
+/// 清单当前指向的 features 文件（MF-1：文件名带 epoch）。
+func currentFeaturesURL(_ dir: URL) throws -> URL {
+    let name = try XCTUnwrap(JSONIndexStore(directory: dir, backupExclusion: NoBackupExclusion()).currentFeaturesFile())
+    return dir.appendingPathComponent(name)
+}
+
+/// 目录里所有 features 文件名（排序）。
+func featureFiles(in dir: URL) -> [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+        .filter { $0 == "features.bin" || ($0.hasPrefix("features-") && $0.hasSuffix(".bin")) }.sorted()
+}
+
+/// 什么也不做的排除备份实现。
+struct NoBackupExclusion: BackupExclusionApplying {
+    func excludeFromBackup(_ url: URL) throws {}
 }

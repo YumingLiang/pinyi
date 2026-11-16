@@ -29,7 +29,7 @@ final class PhotoIndexTests: XCTestCase {
         let lib = FakePhotoLibrary(assetCount: 50)
         let thumbs = FakeThumbnails()
         thumbs.state.update { $0.unavailable = ["a3", "a4", "a5", "a6", "a7"]; $0.failing = ["a10", "a11"] }
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         let outcome = await idx.load()
         XCTAssertEqual(outcome, .fresh)
         let progressLog = Locked<[ScanProgress]>([])
@@ -58,7 +58,7 @@ final class PhotoIndexTests: XCTestCase {
         XCTAssertGreaterThan(thumbs.state.get().cachingStarted, 0)
 
         // 重新加载：完好、计数一致
-        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         let outcome2 = await idx2.load()
         XCTAssertEqual(outcome2, .intact)
         let st2 = await idx2.status()
@@ -74,7 +74,7 @@ final class PhotoIndexTests: XCTestCase {
         let dir = tempDir()
         let lib = FakePhotoLibrary(assetCount: 40)
         let thumbs = FakeThumbnails()
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx.load()
         _ = try await idx.synchronize()
         let before = await idx.table.count
@@ -110,7 +110,7 @@ final class PhotoIndexTests: XCTestCase {
         let dir = tempDir()
         let lib = FakePhotoLibrary(assetCount: 30)
         let thumbs = FakeThumbnails()
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx.load()
         _ = try await idx.synchronize()
         lib.delete(Set((0..<10).map { "a\($0 * 2)" }))   // 删 1/3
@@ -124,7 +124,7 @@ final class PhotoIndexTests: XCTestCase {
         XCTAssertEqual(snap.availableCount, 21)
         assertRowsMatchAssets(snap, thumbs: thumbs)
         // 重启后仍一致
-        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         let o = await idx2.load()
         XCTAssertEqual(o, .intact)
         assertRowsMatchAssets(try await idx2.snapshot(for: .allPhotos), thumbs: thumbs)
@@ -135,7 +135,7 @@ final class PhotoIndexTests: XCTestCase {
         let lib = FakePhotoLibrary(assetCount: 120)
         let taskBox = Locked<Task<ScanSummary, Error>?>(nil)
         let thumbs = FakeThumbnails(onRequest: { n in if n == 50 { taskBox.get()?.cancel() } })
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig(batch: 10, concurrency: 2))
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig(batch: 10, concurrency: 2))
         await idx.load()
         let task = Task { try await idx.synchronize() }
         taskBox.set(task)
@@ -152,7 +152,7 @@ final class PhotoIndexTests: XCTestCase {
 
         // 模拟被杀：新实例从磁盘加载继续
         let thumbs2 = FakeThumbnails()
-        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs2, configuration: smallConfig(batch: 10))
+        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs2, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig(batch: 10))
         let o = await idx2.load()
         XCTAssertEqual(o, .intact)
         let st2 = await idx2.status()
@@ -173,15 +173,15 @@ final class PhotoIndexTests: XCTestCase {
         let dir = tempDir()
         let lib = FakePhotoLibrary(assetCount: 12)
         let thumbs = FakeThumbnails()
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx.load()
         _ = try await idx.synchronize()
         // 篡改清单里的特征版本
         let url = dir.appendingPathComponent("index.json")
-        var m = try JSONDecoder().decode(IndexManifest.self, from: Data(contentsOf: url))
-        m.featureVersion = 1
-        try JSONEncoder().encode(m).write(to: url)
-        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        var m = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        m["featureVersion"] = 1
+        try JSONSerialization.data(withJSONObject: m).write(to: url)
+        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         let o = await idx2.load()
         guard case .rebuilt = o else { return XCTFail("应重建，实际 \(o)") }
         let _st1 = await idx2.status()
@@ -195,14 +195,14 @@ final class PhotoIndexTests: XCTestCase {
     func testCorruptManifestRebuilds() async throws {
         let dir = tempDir()
         let lib = FakePhotoLibrary(assetCount: 5)
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: FakeThumbnails(), configuration: smallConfig())
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: FakeThumbnails(), backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx.load()
         _ = try await idx.synchronize()
         try Data("{not json".utf8).write(to: dir.appendingPathComponent("index.json"))
-        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: FakeThumbnails(), configuration: smallConfig())
+        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: FakeThumbnails(), backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         let o = await idx2.load()
         guard case .rebuilt = o else { return XCTFail("\(o)") }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("features.bin").path))
+        XCTAssertEqual(featureFiles(in: dir), [], "丢弃重建时删掉所有 features 文件")
     }
 
     func testOrphanRowsTombstonedOnLoad() async throws {
@@ -210,13 +210,13 @@ final class PhotoIndexTests: XCTestCase {
         let dir = tempDir()
         let lib = FakePhotoLibrary(assetCount: 6)
         let thumbs = FakeThumbnails()
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx.load()
         _ = try await idx.synchronize()
         let t = await idx.table
         let extra = t.appending([t.record(0), t.record(1)])
-        try FeatureFile.write(extra, to: dir.appendingPathComponent("features.bin"))
-        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        try FeatureFile.write(extra, to: try currentFeaturesURL(dir))
+        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx2.load()
         let t2 = await idx2.table
         XCTAssertEqual(t2.count, 8)
@@ -229,13 +229,13 @@ final class PhotoIndexTests: XCTestCase {
         let dir = tempDir()
         let lib = FakePhotoLibrary(assetCount: 400)
         let thumbs = FakeThumbnails()
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig(batch: 100, minRows: 1000))
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig(batch: 100, minRows: 1000))
         await idx.load()
         _ = try await idx.synchronize()
-        let url = dir.appendingPathComponent("features.bin")
+        let url = try currentFeaturesURL(dir)
         let data = try Data(contentsOf: url)
         try data.prefix(data.count - 500).write(to: url)
-        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig(batch: 100))
+        let idx2 = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig(batch: 100))
         let o = await idx2.load()
         guard case .recoveredPrefix(let lost) = o else { return XCTFail("\(o)") }
         XCTAssertGreaterThan(lost, 0)
@@ -252,14 +252,14 @@ final class PhotoIndexTests: XCTestCase {
         let thumbs = FakeThumbnails(delayNanos: 2_000_000)
         var cfg = smallConfig(batch: 64, concurrency: 12)
         cfg.concurrencyWhileGenerating = 3
-        let idx = PhotoIndex(directory: tempDir(), library: lib, thumbnails: thumbs, configuration: cfg)
+        let idx = PhotoIndex(directory: tempDir(), library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: cfg)
         await idx.load()
         _ = try await idx.synchronize()
         XCTAssertLessThanOrEqual(thumbs.state.get().maxInFlight, 12)
         XCTAssertGreaterThan(thumbs.state.get().maxInFlight, 3)
 
         let thumbs2 = FakeThumbnails(delayNanos: 2_000_000)
-        let idx2 = PhotoIndex(directory: tempDir(), library: lib, thumbnails: thumbs2, configuration: cfg)
+        let idx2 = PhotoIndex(directory: tempDir(), library: lib, thumbnails: thumbs2, backupExclusion: RecordingBackupExclusion(), configuration: cfg)
         await idx2.load()
         await idx2.setGenerationActive(true)
         _ = try await idx2.synchronize()
@@ -283,7 +283,7 @@ final class PhotoIndexTests: XCTestCase {
         lib.setAlbum("baby", title: "宝宝", members: ["a1", "a2", "a3", "a2", "missing"])
         let thumbs = FakeThumbnails()
         thumbs.state.update { $0.unavailable = ["a3"] }
-        let idx = PhotoIndex(directory: tempDir(), library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx = PhotoIndex(directory: tempDir(), library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx.load()
         _ = try await idx.synchronize()
         let snap = try await idx.snapshot(for: .album(id: "baby"))
@@ -302,7 +302,7 @@ final class PhotoIndexTests: XCTestCase {
         let lib = FakePhotoLibrary(assetCount: 8)
         let thumbs = FakeThumbnails()
         thumbs.state.update { $0.unavailable = Set((0..<8).map { "a\($0)" }) }
-        let idx = PhotoIndex(directory: tempDir(), library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx = PhotoIndex(directory: tempDir(), library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx.load()
         _ = try await idx.synchronize()
         let st = await idx.status()
@@ -319,7 +319,7 @@ final class PhotoIndexTests: XCTestCase {
     }
 
     func testEmptyLibrary() async throws {
-        let idx = PhotoIndex(directory: tempDir(), library: FakePhotoLibrary(assetCount: 0), thumbnails: FakeThumbnails(),
+        let idx = PhotoIndex(directory: tempDir(), library: FakePhotoLibrary(assetCount: 0), thumbnails: FakeThumbnails(), backupExclusion: RecordingBackupExclusion(),
                              configuration: smallConfig())
         await idx.load()
         let s = try await idx.synchronize()
@@ -332,7 +332,7 @@ final class PhotoIndexTests: XCTestCase {
 
     func testPerfSamplesRecordedDuringScan() async throws {
         let perf = PerfRecorder()
-        let idx = PhotoIndex(directory: tempDir(), library: FakePhotoLibrary(assetCount: 30), thumbnails: FakeThumbnails(),
+        let idx = PhotoIndex(directory: tempDir(), library: FakePhotoLibrary(assetCount: 30), thumbnails: FakeThumbnails(), backupExclusion: RecordingBackupExclusion(),
                              configuration: smallConfig(batch: 10), perf: perf)
         await idx.load()
         _ = try await idx.synchronize()

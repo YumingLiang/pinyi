@@ -18,7 +18,7 @@ final class GenerationRunnerTests: XCTestCase {
     }
 
     func makeIndex(assets: Int) async throws -> PhotoIndex {
-        let idx = PhotoIndex(directory: dir, library: FakePhotoLibrary(assetCount: assets), thumbnails: FakeThumbnails(),
+        let idx = PhotoIndex(directory: dir, library: FakePhotoLibrary(assetCount: assets), thumbnails: FakeThumbnails(), backupExclusion: RecordingBackupExclusion(),
                              configuration: smallConfig(batch: 100, concurrency: 16, minRows: 1000))
         await idx.load()
         _ = try await idx.synchronize()
@@ -94,7 +94,7 @@ final class GenerationRunnerTests: XCTestCase {
         let lib = FakePhotoLibrary(assetCount: 2)
         let thumbs = FakeThumbnails()
         thumbs.state.update { $0.colorOverride = ["a0": (200, 30, 40), "a1": (20, 180, 90)] }
-        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, configuration: smallConfig())
+        let idx = PhotoIndex(directory: dir, library: lib, thumbnails: thumbs, backupExclusion: RecordingBackupExclusion(), configuration: smallConfig())
         await idx.load()
         _ = try await idx.synchronize()
         let snap = try await idx.snapshot(for: .allPhotos)

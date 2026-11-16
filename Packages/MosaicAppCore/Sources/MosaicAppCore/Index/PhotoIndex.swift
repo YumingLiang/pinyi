@@ -46,6 +46,8 @@ public struct ScanSummary: Sendable, Hashable {
     public var failed = 0
     public var compacted = false
     public var wallSeconds: Double = 0
+    /// 本轮扫描期间提交累计耗时（MF-4 / SQLite 触发条件「首扫提交 > 5%」）。
+    public var commitSeconds: Double = 0
     public init() {}
 }
 
@@ -105,8 +107,9 @@ public enum PhotoIndexError: Error, Sendable, Equatable {
 /// - 修改过的资产：旧行 tombstone，重新扫描后追加新行。
 /// - 删除的资产：tombstone + 删条目。空洞率 > 20% 时压缩并重映射行号。
 /// - 被打断（取消 / 被杀）：已提交的批次保留，下次从剩余的 `.pending` 继续。
-/// - 崩溃一致性：先写 features.bin 再写 index.json。加载时，清单里引用不到的行 → tombstone（孤儿行）；
-///   清单引用了超出文件长度的行 → 条目回到 `.pending`。
+/// - 持久化只经过 `IndexStore`（MF-3）。崩溃一致性由 store 保证（`JSONIndexStore`：features-<epoch>.bin + 清单记录文件名，MF-1）；
+///   加载后的一致性修复在 `IndexRepair`（与存储实现无关）。
+/// - 提交频率见 `CommitPolicy`（MF-4：提交占空比 ≤ 5%）。
 public actor PhotoIndex {
     public struct Configuration: Sendable, Hashable {
         /// 每批张数（方案 §5：200–500）。
@@ -115,10 +118,14 @@ public actor PhotoIndex {
         public var maxConcurrentRequests: Int = 24
         /// 生成进行中时的并发上限（方案 §5：降到 4，把 CPU 让给生成）。
         public var concurrencyWhileGenerating: Int = 4
-        /// 两次落盘之间至少累计的新行数；整表重写是 O(n)，太频繁会放大写入。
+        /// 按行数触发落盘的下限（实际阈值 = max(本值, 表长 × 10%)）；整表重写是 O(n)，太频繁会放大写入。
         public var minRowsPerCommit: Int = 1000
-        /// 距上次落盘超过该秒数也会落盘（被杀时最多丢这么多进度）。
+        /// 按时间触发落盘的最短间隔（秒）；实际间隔 = max(本值, `commitDutyFactor` × 上次提交耗时)（MF-4）。
         public var maxSecondsBetweenCommits: Double = 8
+        /// 按时间触发时至少累计的新行数（MF-4：避免大图库每 8 s 为几十行整表重写）。
+        public var minRowsForTimedCommit: Int = 300
+        /// 提交占空比控制：距上次提交须 ≥ 本值 × 上次提交耗时（20 ⇒ 提交占扫描时间 ≤ 约 5%）。0 = 不限（测试用）。
+        public var commitDutyFactor: Double = 20
         public var request: ThumbnailRequest = .scan
         public init() {}
 
@@ -129,19 +136,26 @@ public actor PhotoIndex {
             c.maxConcurrentRequests = min(max(c.maxConcurrentRequests, 1), 32)
             c.concurrencyWhileGenerating = min(max(c.concurrencyWhileGenerating, 1), c.maxConcurrentRequests)
             c.minRowsPerCommit = max(1, c.minRowsPerCommit)
+            c.minRowsForTimedCommit = max(1, c.minRowsForTimedCommit)
+            c.commitDutyFactor = max(0, c.commitDutyFactor)
             return c
+        }
+
+        public var commitPolicy: CommitPolicy {
+            CommitPolicy(minRowsForSizeTrigger: minRowsPerCommit, minRowsForTimedCommit: minRowsForTimedCommit,
+                         minInterval: maxSecondsBetweenCommits, dutyFactor: commitDutyFactor)
         }
     }
 
-    public nonisolated let directory: URL
-    public nonisolated var featuresURL: URL { directory.appendingPathComponent("features.bin") }
-    public nonisolated var manifestURL: URL { directory.appendingPathComponent("index.json") }
-
+    public nonisolated let store: any IndexStore
     private let library: any PhotoLibraryProviding
     private let thumbnails: any ThumbnailProviding
+    /// 排除备份设置失败的次数（不阻断索引；下次启动会再设）。
+    public private(set) var backupExclusionFailures = 0
     private let extractor: FeatureExtractor
     private let configuration: Configuration
     private let perf: PerfRecorder?
+    private let clock: MonotonicClock
 
     public private(set) var table: FeatureTable
     public private(set) var manifest: IndexManifest
@@ -151,85 +165,61 @@ public actor PhotoIndex {
     private var orderedIDs: [String] = []
     private var metadataByID: [String: AssetMetadata] = [:]
     private var hasCompletedInitialScan = false
+    /// 最近一次提交耗时（秒），MF-4 自适应间隔用。
+    public private(set) var lastCommitSeconds: Double = 0
+    private var commitSecondsThisScan: Double = 0
 
-    public init(directory: URL, library: any PhotoLibraryProviding, thumbnails: any ThumbnailProviding,
+    /// - Parameters:
+    ///   - store: 持久化实现（MF-3）。App 用 `JSONIndexStore`，测试可换任意实现。
+    ///   - clock: 提交间隔判断用；默认取 `perf?.clock`，再默认系统单调时钟。
+    public init(store: any IndexStore, library: any PhotoLibraryProviding, thumbnails: any ThumbnailProviding,
                 extractor: FeatureExtractor = FeatureExtractor(), configuration: Configuration = Configuration(),
-                perf: PerfRecorder? = nil) {
-        self.directory = directory
+                perf: PerfRecorder? = nil, clock: MonotonicClock? = nil) {
+        self.store = store
         self.library = library
         self.thumbnails = thumbnails
         self.extractor = extractor
         self.configuration = configuration.sanitized
         self.perf = perf
+        self.clock = clock ?? perf?.clock ?? .system
         self.table = FeatureTable(records: [], spec: extractor.spec)
         self.manifest = IndexManifest(featureVersion: extractor.spec.featureVersion)
+    }
+
+    /// 便捷：目录 + JSON 实现。`backupExclusion` 必填，避免 App 层漏接（索引不进 iCloud 备份是 TF1 必须项，MF-2）。
+    public init(directory: URL, library: any PhotoLibraryProviding, thumbnails: any ThumbnailProviding,
+                backupExclusion: any BackupExclusionApplying,
+                extractor: FeatureExtractor = FeatureExtractor(), configuration: Configuration = Configuration(),
+                perf: PerfRecorder? = nil, clock: MonotonicClock? = nil) {
+        self.init(store: JSONIndexStore(directory: directory, backupExclusion: backupExclusion),
+                  library: library, thumbnails: thumbnails, extractor: extractor, configuration: configuration,
+                  perf: perf, clock: clock)
     }
 
     // MARK: 加载
 
     /// 读取磁盘上的索引。任何不可恢复的问题都转成"丢弃重建"，不抛错。
+    /// 每次启动先 `store.prepare()`：建目录 + 目录级排除备份（MF-2，幂等）。
+    /// 调用方应把本方法放在启动关键路径之外（MF-4 / 评审 §3：`AppCoordinator.start()` 先出路由再后台加载）。
     @discardableResult
     public func load() -> IndexLoadOutcome {
-        let t0 = perf?.clock.now()
-        defer { if let t0, let perf { perf.record(.indexLoad, seconds: perf.clock.now() - t0, items: table.count) } }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let fm = FileManager.default
-        let hasFeatures = fm.fileExists(atPath: featuresURL.path)
-        let hasManifest = fm.fileExists(atPath: manifestURL.path)
-        if !hasFeatures && !hasManifest { return .fresh }
-
-        let spec = extractor.spec
-        var loadedManifest: IndexManifest
-        do {
-            let data = try Data(contentsOf: manifestURL)
-            loadedManifest = try JSONDecoder().decode(IndexManifest.self, from: data)
-        } catch {
-            return discardAll(reason: "index.json 缺失或损坏")
+        let t0 = clock.now()
+        defer { perf?.record(.indexLoad, seconds: clock.now() - t0, items: table.count) }
+        do { try store.prepare() } catch { backupExclusionFailures += 1 }
+        switch store.load(spec: extractor.spec) {
+        case .fresh:
+            return .fresh
+        case .unusable(let reason):
+            store.discardAll()
+            table = FeatureTable(records: [], spec: extractor.spec)
+            manifest = IndexManifest(featureVersion: extractor.spec.featureVersion)
+            return .rebuilt(reason: reason)
+        case .loaded(let stored):
+            let repaired = IndexRepair.repair(stored)
+            table = repaired.table
+            manifest = repaired.manifest
+            return repaired.outcome
         }
-        guard loadedManifest.formatVersion == IndexManifest.currentFormatVersion,
-              loadedManifest.featureVersion == spec.featureVersion else {
-            return discardAll(reason: "特征版本变化 \(loadedManifest.featureVersion) → \(spec.featureVersion)")
-        }
-
-        var outcome = IndexLoadOutcome.intact
-        var loadedTable = FeatureTable(records: [], spec: spec)
-        if hasFeatures {
-            do {
-                let r = try FeatureFile.read(from: featuresURL, recovery: .keepValidPrefix, expectedSpec: spec)
-                loadedTable = r.table
-                if case .recoveredPrefix = r.status { outcome = .recoveredPrefix(lostRows: r.rowsToRebuild.count) }
-            } catch let e as FeatureFileError where e.recommendedRecovery == .discardAndRebuild {
-                return discardAll(reason: "features.bin 不可用：\(e)")
-            } catch {
-                return discardAll(reason: "features.bin 读取失败：\(error)")
-            }
-        }
-
-        // 一致性修复：超出文件的引用 → pending；未被引用的行 → tombstone。
-        var lost = 0
-        for (id, var e) in loadedManifest.entries where e.status == .ok {
-            if let r = e.row, r >= 0, r < loadedTable.count, !loadedTable.flags[r].contains(.deleted) { continue }
-            e.status = .pending
-            e.row = nil
-            loadedManifest.entries[id] = e
-            lost += 1
-        }
-        let referenced = loadedManifest.referencedRows
-        for row in 0..<loadedTable.count where !referenced.contains(row) && !loadedTable.flags[row].contains(.deleted) {
-            loadedTable.markDeleted(row)
-        }
-        if case .intact = outcome, lost > 0 { outcome = .recoveredPrefix(lostRows: lost) }
-        table = loadedTable
-        manifest = loadedManifest
-        return outcome
-    }
-
-    private func discardAll(reason: String) -> IndexLoadOutcome {
-        try? FileManager.default.removeItem(at: featuresURL)
-        try? FileManager.default.removeItem(at: manifestURL)
-        table = FeatureTable(records: [], spec: extractor.spec)
-        manifest = IndexManifest(featureVersion: extractor.spec.featureVersion)
-        return .rebuilt(reason: reason)
     }
 
     // MARK: 状态
@@ -305,9 +295,11 @@ public actor PhotoIndex {
 
     /// 扫描所有 `.pending` 条目。
     public func scanPending(progress: (@Sendable (ScanProgress) -> Void)? = nil) async throws -> ScanSummary {
-        let clock = perf?.clock ?? MonotonicClock.system
+        let clock = self.clock
         let wall0 = clock.now()
         var summary = ScanSummary()
+        let isInitialScan = !manifest.entries.values.contains { $0.status == .ok }
+        commitSecondsThisScan = 0
         let queue = pendingQueue()
         let isResuming = manifest.scanInProgress
         guard !queue.isEmpty else {
@@ -330,6 +322,7 @@ public actor PhotoIndex {
                                skippedUnavailable: 0, isResuming: isResuming))
 
         let request = configuration.request
+        let policy = configuration.commitPolicy
         let extractor = self.extractor
         let thumbs = self.thumbnails
         let meta = metadataByID
@@ -373,10 +366,10 @@ public actor PhotoIndex {
                 perf?.record(.featureExtract, seconds: extractSeconds, items: batch.count, note: "累计 CPU")
                 processed += batch.count
                 batchStart += batch.count
-                // 整表重写是 O(n)：阈值随表长增长（≥ 10% 表长），总写入量 O(n log n) 级；另有时间上限兜底。
-                if uncommitted.count >= max(configuration.minRowsPerCommit, table.count / 10)
-                    || clock.now() - lastCommit >= configuration.maxSecondsBetweenCommits
-                    || batchStart >= queue.count {
+                // MF-4：整表重写是 O(n)。行数阈值随表长增长；时间触发要求 ≥ 300 行；两者都受占空比约束。
+                if policy.shouldCommit(uncommitted: uncommitted.count, tableCount: table.count,
+                                       secondsSinceLastCommit: clock.now() - lastCommit,
+                                       lastCommitSeconds: lastCommitSeconds, isLastBatch: batchStart >= queue.count) {
                     summary.newlyAvailable += uncommitted.count
                     try flush(&uncommitted)
                     lastCommit = clock.now()
@@ -397,6 +390,10 @@ public actor PhotoIndex {
         hasCompletedInitialScan = true
         summary.processed = processed
         summary.wallSeconds = clock.now() - wall0
+        summary.commitSeconds = commitSecondsThisScan
+        let note = isInitialScan ? PerfNote.initialScan : PerfNote.incrementalScan
+        perf?.record(.scanTotal, seconds: summary.wallSeconds, items: processed, note: note)
+        perf?.record(.scanCommitTotal, seconds: commitSecondsThisScan, items: processed, note: note)
         return summary
     }
 
@@ -441,16 +438,14 @@ public actor PhotoIndex {
         return true
     }
 
-    /// 原子提交：先 features.bin，后 index.json。
+    /// 原子提交（崩溃一致性由 `IndexStore` 保证，MF-1）。
     private func commit() throws {
-        let t0 = perf?.clock.now()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try FeatureFile.write(table, to: featuresURL)
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.sortedKeys]
-        let data = try enc.encode(manifest)
-        try data.write(to: manifestURL, options: .atomic)
-        if let t0, let perf { perf.record(.indexCommit, seconds: perf.clock.now() - t0, items: table.count) }
+        let t0 = clock.now()
+        try store.commit(table: table, manifest: manifest)
+        let dt = clock.now() - t0
+        lastCommitSeconds = dt
+        commitSecondsThisScan += dt
+        perf?.record(.indexCommit, seconds: dt, items: table.count)
     }
 
     // MARK: 快照

@@ -5,6 +5,10 @@
 // App target 里放 PhotoKit 适配器，测试里放 fake。
 import PackageDescription
 
+/// G-1：Swift 6 语言模式（swiftLanguageModes）下数据竞争诊断即错误；另把所有警告当错误。
+/// unsafeFlags 只允许用于本地 path 包——本项目三个包都只被本仓库以 path 依赖，零第三方依赖。
+let strictSettings: [SwiftSetting] = [.unsafeFlags(["-warnings-as-errors"])]
+
 let package = Package(
     name: "MosaicAppCore",
     platforms: [
@@ -21,12 +25,14 @@ let package = Package(
         .target(
             name: "MosaicAppCore",
             dependencies: [.product(name: "MosaicCore", package: "MosaicCore")],
-            path: "Sources/MosaicAppCore"
+            path: "Sources/MosaicAppCore",
+            swiftSettings: strictSettings
         ),
         .testTarget(
             name: "MosaicAppCoreTests",
             dependencies: ["MosaicAppCore", .product(name: "MosaicCore", package: "MosaicCore")],
-            path: "Tests/MosaicAppCoreTests"
+            path: "Tests/MosaicAppCoreTests",
+            swiftSettings: strictSettings
         ),
     ],
     swiftLanguageModes: [.v6]

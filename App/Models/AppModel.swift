@@ -53,7 +53,7 @@ final class AppModel: ObservableObject {
         thumbnails = PhotoKitThumbnails()
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Index", isDirectory: true)
-        index = PhotoIndex(directory: support, library: library, thumbnails: thumbnails, perf: perf)
+        index = PhotoIndex(directory: support, library: library, thumbnails: thumbnails, backupExclusion: FileBackupExclusion(), perf: perf)
         runner = GenerationRunner(pipeline: MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())), perf: perf)
         flow = MainFlow(initialSeed: UInt64.random(in: 1...UInt64.max))
     }

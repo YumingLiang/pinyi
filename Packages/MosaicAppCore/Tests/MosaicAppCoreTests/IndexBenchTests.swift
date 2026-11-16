@@ -10,7 +10,7 @@ final class IndexBenchTests: XCTestCase {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let perf = PerfRecorder()
-        let idx = PhotoIndex(directory: dir, library: FakePhotoLibrary(assetCount: 10_000), thumbnails: FakeThumbnails(),
+        let idx = PhotoIndex(directory: dir, library: FakePhotoLibrary(assetCount: 10_000), thumbnails: FakeThumbnails(), backupExclusion: RecordingBackupExclusion(),
                              configuration: PhotoIndex.Configuration(), perf: perf)
         await idx.load()
         let s = try await idx.synchronize()

@@ -13,7 +13,7 @@ public enum AssetIndexStatus: String, Sendable, Hashable, Codable {
 }
 
 /// 索引条目（localIdentifier → 状态 / 行号 / 修改时间）。
-public struct IndexEntry: Sendable, Hashable, Codable {
+public struct IndexEntry: Sendable, Hashable {
     public var modificationDate: Date?
     public var status: AssetIndexStatus
     /// `features.bin` 行号；仅 `.ok` 时非 nil。
@@ -26,12 +26,13 @@ public struct IndexEntry: Sendable, Hashable, Codable {
     }
 }
 
-/// 资产索引（`index.json`）。
+/// 资产索引清单（内存结构；落盘格式见 `JSONIndexStore` / `ManifestEnvelope`）。
 ///
-/// **偏离技术方案**：方案 §2.3 写的是 `index.sqlite`。为保持零依赖且可在 Linux 上测试，MVP 用一个原子写入的 JSON 文件；
-/// 10 万条约 10 MB，写入在扫描批次提交时进行（每批一次）。若真机上批次提交耗时过高，再换 SQLite（只改本文件 + `IndexStore`）。
-public struct IndexManifest: Sendable, Hashable, Codable {
-    public static let currentFormatVersion = 1
+/// TF1 接受 `index.json`（方案 v0.2 变更 33）：两文件原子写且用文件名（epoch）绑定、`formatVersion` + `featureVersion`、
+/// 放在 `IndexStore` 协议后面、提交占空比 ≤ 5%。触发 SQLite 条件时只换 `IndexStore` 实现。
+/// formatVersion 2（评审 d6fa750 MF-1）：清单记录 `featuresFile`，条目为数组行格式；v1 的索引加载时丢弃重建。
+public struct IndexManifest: Sendable, Hashable {
+    public static let currentFormatVersion = 2
 
     public var formatVersion: Int = IndexManifest.currentFormatVersion
     /// 写入时的特征版本（与 `features.bin` 头一致；不一致时丢弃重建）。
@@ -57,6 +58,16 @@ public struct IndexManifest: Sendable, Hashable, Codable {
             if let r = e.row, r >= 0, r < rowCount { out[r] = id }
         }
         return out
+    }
+
+    /// 所有 `.ok` 条目回到 `.pending`（features 文件丢失时）。
+    mutating func clearRowsBeyond(_ count: Int) {
+        for (id, var e) in entries where e.status == .ok {
+            if let r = e.row, r < count { continue }
+            e.status = .pending
+            e.row = nil
+            entries[id] = e
+        }
     }
 
     /// 压缩后按 `oldToNew` 重映射行号；映射为 nil 的条目回到 `.pending`（理论上不会发生：被引用的行不是 tombstone）。
