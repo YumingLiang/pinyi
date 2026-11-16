@@ -1,0 +1,50 @@
+# Linux：MosaicCore 纯 Swift 包的构建与测试（技术方案 §11.3 linux-core.yml）。
+# 每个 PR 必跑；便宜（Linux 2 核约 0.006 美元/分钟，公开仓库免费）。
+# ⚠️ 草稿：尚未在 GitHub 上运行过（目前没有远程仓库）。
+name: linux-core
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: linux-core-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mosaic-core:
+    name: MosaicCore (swift test on Linux)
+    runs-on: ubuntu-latest
+    # 与 Xcode 26 自带的 Swift 6.2 对齐（以 Xcode 的 `swift --version` 为准，升级 Xcode 时同步）。
+    container: swift:6.2
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Zero-network / zero-dependency guard
+        run: ./scripts/check-no-network.sh
+
+      - name: Localizable.strings 与文案表一致
+        run: |
+          apt-get update -qq && apt-get install -y -qq python3 >/dev/null
+          python3 scripts/gen-localizable.py --check
+
+      - name: Build MosaicCore
+        working-directory: Packages/MosaicCore
+        run: swift build
+
+      - name: Test MosaicCore
+        working-directory: Packages/MosaicCore
+        run: swift test --parallel
+
+      - name: Build MosaicAccelerate (Linux 上为空模块，只验证可解析/编译)
+        working-directory: Packages/MosaicAccelerate
+        run: swift build

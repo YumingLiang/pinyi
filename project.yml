@@ -1,0 +1,110 @@
+# XcodeGen 工程配置（技术方案 §11.2）。.xcodeproj 不入库，CI 每次 `xcodegen generate`。
+# ⚠️ 本文件在 Linux 上编写，尚未在 macOS / Xcode 上验证（无 Mac 环境）。首次 macOS CI 运行时需核对。
+name: PhotoMosaic
+
+options:
+  bundleIdPrefix: com.example.placeholder   # TODO(AndyL)：替换为真实反向域名
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: zh-Hans
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1"              # MVP 只做 iPhone
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"             # CI 用 github.run_number 覆盖
+    # 签名：CI 模拟器构建传 CODE_SIGNING_ALLOWED=NO；TestFlight 签名将由 fastlane match 注入（尚未配置）。
+    # DEVELOPMENT_TEAM: XXXXXXXXXX           # TODO(AndyL)：Apple Developer Team ID（不是密钥，可入库）
+
+packages:
+  MosaicCore:
+    path: Packages/MosaicCore
+  MosaicAccelerate:
+    path: Packages/MosaicAccelerate
+
+targets:
+  PhotoMosaic:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: App
+        excludes:
+          - "Resources/copy_v1.1.md"
+          - "Info.plist"
+      # 文案源文件（每条带稳定 key）：放进工程便于查阅，但不打包进 App（buildPhase: none）。
+      # 修改后运行 `python3 scripts/gen-localizable.py` 重新生成 zh-Hans.lproj/*.strings。
+      - path: App/Resources/copy_v1.1.md
+        buildPhase: none
+      # App/Resources/zh-Hans.lproj/Localizable.strings、InfoPlist.strings 随 App 目录作为资源打包（本地化变体组）。
+    dependencies:
+      - package: MosaicCore
+      - package: MosaicAccelerate
+    info:
+      path: App/Info.plist                   # 由 XcodeGen 生成（已 .gitignore）
+      properties:
+        CFBundleDisplayName: 拼忆              # 同 InfoPlist.strings（key app.display_name）；名称风险见 /workspace/pinyi/name_risk_v0.2.md
+        CFBundleLocalizations:
+          - zh-Hans
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # 权限文案：取自 copy_v1.1.md §2（key plist.nsPhotoLibrary*），同时由 zh-Hans.lproj/InfoPlist.strings 本地化
+        NSPhotoLibraryUsageDescription: 拼忆需要访问你的照片，才能用相册或相簿里的图片来拼马赛克。所有处理都在这台 iPhone 上完成，照片不会上传。
+        NSPhotoLibraryAddUsageDescription: 拼忆需要把做好的马赛克图保存到你的相册。图片只保存在这台 iPhone 上，不会上传。
+        # 技术方案 §2.6：避免受限访问时系统每次自动弹窗
+        PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
+        # 技术方案 §9.2：免出口合规问答
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.placeholder.photomosaic   # TODO(AndyL)：真实 Bundle ID
+        PRODUCT_NAME: PhotoMosaic
+        # App 图标：资产目录尚未加入（占位图标见 /workspace/pinyi/icons），加入后设 ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+
+  PhotoMosaicTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: AppTests
+    dependencies:
+      - target: PhotoMosaic
+      - package: MosaicCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.placeholder.photomosaic.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/PhotoMosaic.app/PhotoMosaic
+        BUNDLE_LOADER: $(TEST_HOST)
+
+schemes:
+  PhotoMosaic:
+    build:
+      targets:
+        PhotoMosaic: all
+        PhotoMosaicTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - name: PhotoMosaicTests
+        # MosaicCore 自身的 XCTest 也在 iOS 模拟器上跑一遍（XcodeGen 本地包测试目标语法，未经 macOS 验证）
+        - package: MosaicCore/MosaicCoreTests
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 技术方案 §9.2：零网络、不追踪、不收集数据。
+     NSPrivacyAccessedAPITypes 目前为空（骨架未使用需说明原因的 API）；
+     导出保存失败分支（技术方案 v0.2 §4.3 / 产品决定 17）落地时必须补 NSPrivacyAccessedAPICategoryDiskSpace + E174.1；
+     其余（UserDefaults CA92.1 / 文件时间戳 C617.1 / 系统启动时间 35F9.1）按实际使用补充，提交前按 Apple 文档核对。 -->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

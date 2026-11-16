@@ -1,0 +1,120 @@
+# macOS：XcodeGen 生成工程 → iOS 模拟器 build + 单元测试（技术方案 §11.3 ios.yml）。
+# ⚠️ 草稿：在 Linux 上编写，未在任何 macOS runner 上运行过。首次运行时需核对：
+#   - runner 标签 `macos-26` 与 Xcode 26 的安装路径（技术方案 §9.1：上传 App Store Connect 须 Xcode 26 + iOS 26 SDK）；
+#   - XcodeGen 对本地包测试目标（`package: MosaicCore/MosaicCoreTests`）的支持；
+#   - 模拟器设备选择脚本。
+# 费用：标准 macOS runner 约 0.062 美元/分钟（私有仓库从包含额度扣除），因此用 paths 过滤 + 并发取消控制触发。
+name: ios
+
+on:
+  pull_request:
+    paths:
+      - "App/**"
+      - "AppTests/**"
+      - "UITests/**"
+      - "Packages/PhotoIndex/**"
+      - "Packages/Renderer/**"
+      - "Packages/MosaicAccelerate/**"
+      - "project.yml"
+      - ".github/workflows/ios.yml"
+      # 纯 MosaicCore 变化只跑 linux-core（技术方案 §11.3）。
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ios-simulator:
+    name: iOS build + test (simulator)
+    runs-on: macos-26            # 未核实具体标签；不可用时改为带 Xcode 26 的 macos-15 镜像
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 26 found on runner"; ls /Applications; exit 1
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          d = json.load(sys.stdin)["devices"]
+          def ver(rt):
+              m = re.search(r"iOS-(\d+)-(\d+)", rt)
+              return (int(m.group(1)), int(m.group(2))) if m else (-1, -1)
+          for rt in sorted((r for r in d if "iOS" in r), key=ver, reverse=True):
+              for dev in d[rt]:
+                  if dev.get("isAvailable") and dev["name"].startswith("iPhone"):
+                      print(dev["udid"]); sys.exit(0)
+          sys.exit("no available iPhone simulator")
+          ')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl list devices | grep "$UDID"
+
+      # 无外部依赖，暂不缓存 SPM；DerivedData 缓存可在构建时间成为瓶颈后再加（key 含 project.yml 哈希）。
+      - name: Build for testing
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project PhotoMosaic.xcodeproj \
+            -scheme PhotoMosaic \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            | tee xcodebuild-build.log
+
+      - name: Unit tests (App + MosaicCore on simulator)
+        run: |
+          set -o pipefail
+          xcodebuild test-without-building \
+            -project PhotoMosaic.xcodeproj \
+            -scheme PhotoMosaic \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath DerivedData \
+            -resultBundlePath TestResults.xcresult \
+            | tee xcodebuild-test.log
+
+      # UI 冒烟测试（占位，T9 之后启用）：
+      #   xcrun simctl addmedia <udid> Fixtures/Photos/*.jpg
+      #   xcrun simctl privacy <udid> grant photos <bundle-id>
+      #   xcodebuild test-without-building ... -only-testing:PhotoMosaicUITests
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: |
+            TestResults.xcresult
+            xcodebuild-*.log
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # TestFlight（占位，不启用）。技术方案 §11.4：单独的 testflight.yml，仅 main 打 tag 或手动触发。
+  # 需要 AndyL 先完成：Apple Developer 账号、App Store Connect API Key、Bundle ID、App 记录、
+  # match 证书私有仓库；并把以下值存进 GitHub Secrets（绝不入库）：
+  #   ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8_BASE64 / MATCH_PASSWORD / MATCH_GIT_DEPLOY_KEY
+  # 步骤草图：
+  #   - bundle exec fastlane match appstore --readonly
+  #   - bundle exec fastlane build_app export_method:app-store
+  #   - bundle exec fastlane upload_to_testflight skip_waiting_for_build_processing:true
+  # ---------------------------------------------------------------------------

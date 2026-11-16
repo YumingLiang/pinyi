@@ -1,0 +1,19 @@
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+# Xcode（工程由 XcodeGen 生成，不入库）
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.xcresult
+# XcodeGen 生成的 Info.plist
+App/Info.plist
+# 签名材料绝不入库
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+# 系统
+.DS_Store
