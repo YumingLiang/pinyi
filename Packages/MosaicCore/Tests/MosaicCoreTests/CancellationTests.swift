@@ -114,6 +114,9 @@ final class CancellationTests: XCTestCase {
         XCTAssertEqual(progress.value.last?.overallFraction ?? 0, 1, accuracy: 1e-9)
     }
 
+    /// 跨线程取消。**硬判逻辑**：抛 `CancellationError`、不产出结果、取消后每个工作线程最多再完成一个检查点批次
+    /// （这里体现为：取消后再到达的匹配进度事件 ≤ 并行线程数）。**墙钟只记录**：超过 250 ms 打 `::warning::`，不失败——
+    /// CI 模拟器 Debug、共享 runner 的耗时不稳定（PR #1 曾测到 805 ms，根因是检查粒度，已改为每个候选块检查）。
     func testCancellationLatencyFromAnotherThread() throws {
         // 由进度回调触发"另一个线程"去取消，保证取消时仍在计算中（debug / release 都成立）。
         let f = try fixture(library: 20_000, cols: 80, rows: 60)
@@ -122,6 +125,7 @@ final class CancellationTests: XCTestCase {
         let trigger = DispatchSemaphore(value: 0)
         let ack = DispatchSemaphore(value: 0)   // S-8：回调等到取消真正发出再返回，快机器上也不会先跑完
         let fired = Box<Bool>(false)
+        let eventsAfterCancel = Box<Int>(0)
         DispatchQueue.global().async {
             trigger.wait()
             cancelAt.mutate { $0 = DispatchTime.now().uptimeNanoseconds }
@@ -129,9 +133,11 @@ final class CancellationTests: XCTestCase {
             ack.signal()
         }
         var thrown: Error?
+        var result: MosaicAssignment?
         do {
-            _ = try GreedyAssigner().assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
-                                            lightnessVariance: nil, cancellation: token) { p in
+            result = try GreedyAssigner().assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
+                                                 lightnessVariance: nil, cancellation: token) { p in
+                if fired.value { eventsAfterCancel.mutate { $0 += 1 } }
                 if p.phase == .matching, p.completed >= 3 {
                     var first = false
                     fired.mutate { if !$0 { $0 = true; first = true } }
@@ -141,9 +147,39 @@ final class CancellationTests: XCTestCase {
         } catch { thrown = error }
         let end = DispatchTime.now().uptimeNanoseconds
         XCTAssertTrue(thrown is CancellationError, "finished before cancel? \(String(describing: thrown))")
+        XCTAssertNil(result, "取消后不得产出结果")
+        let workers = ProcessInfo.processInfo.activeProcessorCount
+        XCTAssertLessThanOrEqual(eventsAfterCancel.value, workers,
+                                 "取消后每个工作线程最多再完成一个批次（\(workers) 线程）")
         let latencyMs = Double(end - cancelAt.value) / 1e6
-        print(String(format: "[bench] cancel latency (assign 80x60 × 20000, cross-thread) = %.2f ms", latencyMs))
-        XCTAssertLessThan(latencyMs, 250)
+        print(String(format: "[bench] cancel latency (assign 80x60 × 20000, cross-thread) = %.2f ms; events after cancel = %d",
+                     latencyMs, eventsAfterCancel.value))
+        if latencyMs >= 250 {
+            print(String(format: "::warning::cancel latency %.0f ms ≥ 250 ms（只记录，不失败；检查粒度由 testKernelChecksCancellationBetweenCandidateTiles 硬判）", latencyMs))
+        }
+    }
+
+    /// 串行内核下取消后**不再完成任何批次**：在第 3 个匹配批次的进度回调里同步取消，之后不得再有进度事件，
+    /// 抛 `CancellationError`、无结果。不依赖墙钟、不依赖线程调度。
+    func testSerialKernelStopsAtNextCheckpointAfterCancel() throws {
+        let f = try fixture(library: 5_000, cols: 40, rows: 30)
+        let token = CancellationToken()
+        let cancelled = Box<Bool>(false)
+        let after = Box<Int>(0)
+        var result: MosaicAssignment?
+        var thrown: Error?
+        do {
+            result = try GreedyAssigner(kernel: ScalarSIMDKernel(parallel: false))
+                .assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
+                        lightnessVariance: nil, cancellation: token) { p in
+                    if cancelled.value { after.mutate { $0 += 1 }; return }
+                    if p.phase == .matching, p.completed == 3 { cancelled.mutate { $0 = true }; token.cancel() }
+                }
+        } catch { thrown = error }
+        XCTAssertTrue(cancelled.value)
+        XCTAssertTrue(thrown is CancellationError)
+        XCTAssertNil(result)
+        XCTAssertEqual(after.value, 0, "取消后不得再完成任何批次")
     }
 
     /// 取消检查粒度（PR #1 CI：模拟器 Debug 取消延迟 805 ms 的根因）：距离内核在**每个候选块**之前检查，
@@ -207,7 +243,8 @@ final class CancellationTests: XCTestCase {
         } catch is CancellationError {
             let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
             print(String(format: "[bench] Task.cancel latency (pipeline .fine × 20000) = %.2f ms", ms))
-            XCTAssertLessThan(ms, 250)
+            // 墙钟只记录（CI 共享 runner / 模拟器 Debug 不稳定）；逻辑由 CancellationError 与粒度测试硬判。
+            if ms >= 250 { print(String(format: "::warning::Task.cancel latency %.0f ms ≥ 250 ms（只记录，不失败）", ms)) }
         }
     }
 

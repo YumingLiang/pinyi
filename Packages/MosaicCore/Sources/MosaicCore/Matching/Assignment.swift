@@ -536,8 +536,10 @@ public struct GreedyAssigner: Sendable {
             if canExpand, perCellExpansions < config.perCellExpansionLimit || depths.isEmpty {
                 perCellExpansions += 1
                 try check.check()
+                // 单格扩展也要扫全库：传令牌，内核在每个候选块之前检查（10 万素材时约 100 个检查点）。
                 list = try kernel.topK(queries: cellFeatures.subset(cell), candidates: library,
-                                       k: expandedK, mask: mask).neighbors(forQuery: 0)
+                                       k: expandedK, mask: mask, cancellation: cancellation,
+                                       progress: nil).neighbors(forQuery: 0)
                 if tryStrict(cell, list, .expandedCandidates) { continue }
             }
             if depths.isEmpty { try finalFailure(cell, list) } else { deferred.append(cell) }
