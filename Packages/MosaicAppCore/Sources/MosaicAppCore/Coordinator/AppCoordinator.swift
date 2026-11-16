@@ -30,6 +30,7 @@ public final class AppCoordinator {
     private var scanTask: Task<Void, Never>?
     private var generationTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
+    private var lastExportPurpose: ExportPurpose = .save
     private var lifecycleTask: Task<Void, Never>?
     private var memorySamplingTask: Task<Void, Never>?
     /// 被取消、尚未结束的任务（`settle()` 等它们收尾）。
@@ -439,6 +440,39 @@ public final class AppCoordinator {
         state.export = .idle
     }
 
+    /// 失败提示的主按钮（文案 §5.3）：权限被拒 →「去设置」；空间不足 →「我知道了」；其他 →「再试一次」（同一用途重来）。
+    public func exportFailurePrimaryTapped() async {
+        guard case .failed(let f) = state.export else { return }
+        state.export = .idle
+        switch f {
+        case .addDenied: systemActionHandler?(.openSettings)
+        case .diskFull: break
+        case .other:
+            if lastExportPurpose == .share { shareTapped() } else { await saveTapped() }
+        }
+    }
+
+    /// 失败提示的次按钮：只有权限被拒时有「分享」（不需要相册权限）。
+    public func exportFailureSecondaryTapped() {
+        guard case .failed(let f) = state.export, f.secondaryKey != nil else { return }
+        state.export = .idle
+        shareTapped()
+    }
+
+    /// 导出被后台宽限打断后的「重新导出」（`export.retry`）：按被打断时的用途重来。
+    public func exportRetryTapped() async {
+        guard case .interrupted = state.export else { return }
+        state.export = .idle
+        if lastExportPurpose == .share { shareTapped() } else { await saveTapped() }
+    }
+
+    /// 保存成功页的「分享」（`save.success.share`）。
+    public func saveSuccessShareTapped() {
+        guard case .saved = state.export else { return }
+        state.export = .idle
+        shareTapped()
+    }
+
     /// 用户在导出中取消（若平台层提供入口）。
     public func cancelExport() {
         exportInterruptedByBackground = false
@@ -446,6 +480,7 @@ public final class AppCoordinator {
     }
 
     private func beginExport(_ purpose: ExportPurpose) {
+        lastExportPurpose = purpose
         guard let product, let target else { state.export = .failed(.other); return }
         let exporter = dependencies.exporter
         let library = dependencies.library

@@ -18,6 +18,12 @@ enum MosaicPreviewRenderer {
         return ImagePixels.cgImage(p)
     }
 
+    /// T7：目标图裁到网格区域（与导出条带叠加用同一裁剪），预览里按滑杆 α 实时叠加。
+    static func overlay(_ product: GenerationProduct, target: PixelBuffer) -> CGImage? {
+        let crop = product.generation.layout.cropRect
+        return ImagePixels.cgImage(target)?.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height).integral)
+    }
+
     /// 缩略图预览。在调用方的隔离域（MainActor）上画，取图在后台有界并发。
     @MainActor
     static func thumbnails(_ product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double,

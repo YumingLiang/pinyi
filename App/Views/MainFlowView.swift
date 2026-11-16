@@ -195,27 +195,38 @@ struct GenerationProgressView: View {
 
 struct ResultView: View {
     @EnvironmentObject var model: AppModel
-    @State private var scale: CGFloat = 1
 
     var body: some View {
-        VStack(spacing: 12) {
-            if case .result(let o) = model.flow.generation.phase, o.shouldShowShortageNotice {
-                Text(L10nKey.shortageResult).font(.footnote).foregroundStyle(.secondary)
+        ScrollView {
+            VStack(spacing: 12) {
+                if case .result(let o) = model.flow.generation.phase, o.shouldShowShortageNotice {
+                    Text(L10nKey.shortageResult).font(.footnote).foregroundStyle(.secondary)
+                }
+                if let img = model.resultImage {
+                    // T7：普通缩放预览（MagnificationGesture + 平移），不用 CATiledLayer；叠加层随滑杆实时变化。
+                    ZoomableMosaicView(image: img, overlay: model.overlayImage, overlayAlpha: model.overlayAlpha)
+                        .aspectRatio(CGFloat(img.width) / CGFloat(max(1, img.height)), contentMode: .fit)
+                }
+                Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
+                // T7：结果页的叠加滑杆（0–0.3）
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L10nKey.overlaySection).font(.subheadline.bold())
+                    Slider(value: $model.overlayAlpha, in: 0...OverlayBlendLimits.maxAlpha) {
+                        Text(L10nKey.overlaySection)
+                    } minimumValueLabel: { Text(L10nKey.overlayLeft).font(.caption2) } maximumValueLabel: { Text(L10nKey.overlayRight).font(.caption2) }
+                    Text(L10nKey.overlayHint).font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button { model.send(.backToSettings) } label: { Text(L10nKey.previewAdjust) }.buttonStyle(.bordered)
+                    Button { model.send(.reshuffleTapped) } label: { Text(L10nKey.previewReshuffle) }.buttonStyle(.bordered)
+                }
+                .disabled(model.exportPhase.isBusy)
+                // T8：导出尺寸 + 保存 / 分享
+                ExportControls()
             }
-            if let img = model.resultImage {
-                // ⚠️ MVP 预览：MagnificationGesture 放大位图；方案 §2.8 的 CATiledLayer 分层预览留给后续卡片。
-                Image(decorative: img, scale: 1).resizable().interpolation(.none).scaledToFit()
-                    .scaleEffect(scale)
-                    .gesture(MagnificationGesture().onChanged { scale = max(1, min(8, $0)) })
-            }
-            Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
-            HStack {
-                Button { model.send(.backToSettings) } label: { Text(L10nKey.previewAdjust) }.buttonStyle(.bordered)
-                Button { model.send(.reshuffleTapped) } label: { Text(L10nKey.previewReshuffle) }.buttonStyle(.borderedProminent)
-            }
-            // 保存 / 分享（导出 4000 / 6000）不在本卡范围（T10/T11）。
+            .padding()
         }
-        .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))
+        .modifier(ExportResultModifier())
     }
 }

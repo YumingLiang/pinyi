@@ -1,5 +1,57 @@
 # CHANGES
 
+## feat/render-export：T7 叠加滑杆 + 普通缩放预览、T8 条带导出 / 保存 / 分享（基于 feat/app-layer）
+
+### 改动
+
+- **T7 预览**
+  - `ZoomableMosaicView`：双指缩放 1–6 倍、拖动平移（限制在图内）、双击在 1× / 3× 间切换。不用 CATiledLayer；预览位图长边 ≤ 2400 px，放大时最近邻插值。
+  - 结果页加叠加滑杆（0–0.3）。叠加层是裁到网格区域的目标图，SwiftUI 用 `opacity(α)` 叠在马赛克上，拖动实时生效，不重画马赛克。导出时在每条带里用同一个 α 混合（sRGB 编码值上的 α 混合，与 `OverlayBlend` 同公式）。
+- **T8 导出（逻辑在 MosaicAppCore `Export/StripExporter.swift`，Linux 有测试）**
+  - `ExportGeometry`：导出尺寸、每格像素、条带（默认每条 ≤ 512 px，按整行格子对齐）、磁盘预算（raw 暂存 + 2 × JPEG 上界 + 50 MB 余量）、单条带内存峰值（6000 档 < 13 MB）。
+  - `StripExporter`（实现 `MosaicExporting`）：
+    - 存储预检不足时直接抛 `insufficientStorage`，不渲染、不建文件。
+    - 逐条渲染并追加到 `tmp/export/<uuid>.rgba`，**每条之前 `Task.checkCancellation()`**（B-34）。
+    - 编码到 `<uuid>.jpg` 后删掉 raw。取消或出错时 raw 与半截输出都删掉。
+    - 写入中磁盘满（`CocoaError.fileWriteOutOfSpace` / ENOSPC）统一映射为 `insufficientStorage`，其余映射为 `encodingFailed`。
+  - 平台层（App）只有两块：`CGStripRenderer`（条带画布 + 有界并发取缩略图 + 叠加）和 `ImageIOJPEGEncoder`（`CGDataProvider(url:)` 读 raw，质量 0.9）。
+    - 缩略图先按格子大小取高质量（≤ 512 px，零网络）；取不到的退回 128 px 扫描缩略图。
+  - 保存只要「仅添加」相册权限（`PHAccessLevel.addOnly`），用 `PHAssetCreationRequest` 写入。分享用 `UIActivityViewController`，面板关闭后删临时文件。
+  - 失败文案全部用 copy v1.1 的 key，判断顺序是权限 > 空间 > 其他：
+    - 权限被拒：`save.add_denied.*`，主按钮「去设置」，次按钮「分享」。
+    - 空间不足：`save.disk_full.*`，按钮「我知道了」。
+    - 其他：`save.failed` + `save.failed.retry`，按原用途重来。
+    - 后台打断：`export.interrupted` + `export.retry`。
+    - 成功：`save.success.*`（含「分享」）。
+    - 导出中：`export.progress.*`。
+  - 协调器新增 `exportFailurePrimaryTapped` / `exportFailureSecondaryTapped` / `exportRetryTapped` / `saveSuccessShareTapped`，并记录上次导出用途。
+  - B-27：启动时 `removeStaleExports()` 清空整个 `tmp/export/`。
+  - 8000 档只在 `INTERNAL_TOOLS` 构建的尺寸选择里出现（决定 12）。
+
+### 测试（`StripExporterTests`，9 个）
+
+| 测试 | 编号 |
+|---|---|
+| `testGeometryStripsCoverImageAndBudgets` | 条带并集 = 整图、格子全覆盖、预算公式、6000 档单条带 < 13 MB |
+| `testSuccessWritesStripsInOrderEncodesAndRemovesRaw` | 自上而下顺序写入、只剩输出文件、进度单调到 1 |
+| `testCancelDuringStripLoopStopsAtNextStripBoundary_B34` | B-34：取消后只完成当前条带、不开始下一条、不编码、不留文件 |
+| `testStoragePrecheckFailsBeforeRendering_B17` | B-17 预检 |
+| `testDiskFullDuringWriteMapsToInsufficientStorage_B17` | B-17 写入中磁盘满（Cocoa / POSIX ENOSPC） |
+| `testOtherFailureMapsToEncodingFailed_B30` | B-30 |
+| `testRemoveStaleExportsClearsDirectory_B27` | B-27 |
+| `testCoordinatorSaveWithStripExporterLeavesNoTempFiles` | 协调器 + 真实 StripExporter：保存后、分享面板关闭后都不留临时文件 |
+| `testExportResultButtonsFollowCopyKeys_B16_B17_B18_B30` | 各提示按钮的 key 与动作 |
+
+AppTests（模拟器）：`testImageIOEncoderWritesJPEGFromRawStripFile`、`testStaleExportsRemoved`。
+
+### 盲写风险（macOS CI / 真机核对）
+
+- R23：`CGDataProvider(url:)` + `CGImageDestination` 编码 6000×4500 时 ImageIO 是否仍整张解到内存。需真机看 phys_footprint，若超预算改用 `CGImageDestinationAddImageFromSource` 分块或 HEIC tile。
+- R24：叠加用的目标图是 2048 长边的降采样图，6000 档导出时被放大；α ≤ 0.3，影响有限。
+- R25：`completionWithItemsHandler` 与 `sheet(onDismiss:)` 都会调 `shareFinished()`，第二次是空操作。
+- R26：`export.degraded` 提示（部分原图未下载、导出时降级）**未接**，需要渲染器回报降级格数，留到后续。
+
+
 ## feat/app-layer：评审 d6fa750 必须修 MF-1～MF-7、架构师 G-1（严格并发 + TSan）/ G-3（AppCoordinator）、QA 跟进
 
 ### 对照表
