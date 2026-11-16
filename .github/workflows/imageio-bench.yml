@@ -1,0 +1,50 @@
+# ImageIO 流式写 JPEG 的峰值内存基准。只在推送到 ci/imageio-bench 分支时跑，不进 main。
+name: imageio-bench
+on:
+  push:
+    branches: ["ci/imageio-bench"]
+permissions:
+  contents: read
+concurrency:
+  group: imageio-bench-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  bench:
+    name: ImageIO JPEG ${{ matrix.label }}
+    runs-on: macos-26
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: "300MP", w: 20000, h: 15000 }
+          - { label: "708MP", w: 30720, h: 23040 }
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swiftc -O Tools/imageio-bench/main.swift -o imageio-bench
+      - name: Run with /usr/bin/time -l
+        shell: bash
+        run: |
+          set +e
+          sysctl hw.memsize
+          /usr/bin/time -l ./imageio-bench ${{ matrix.w }} ${{ matrix.h }} "$RUNNER_TEMP/out.jpg" > out.txt 2> time.txt
+          code=$?
+          cat out.txt time.txt
+          rss=$(awk '/maximum resident set size/ {print $1}' time.txt)
+          peak=$(awk '/peak memory footprint/ {print $1}' time.txt)
+          real=$(awk '/ real / {print $1}' time.txt)
+          {
+            echo "### ImageIO JPEG ${{ matrix.label }} (${{ matrix.w }}×${{ matrix.h }})"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 退出码 | $code |"
+            echo "| 耗时（s） | ${real:-n/a} |"
+            echo "| maximum resident set size | $(( ${rss:-0} / 1048576 )) MiB |"
+            echo "| peak memory footprint | $(( ${peak:-0} / 1048576 )) MiB |"
+            echo "| 程序输出 | $(cat out.txt) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
