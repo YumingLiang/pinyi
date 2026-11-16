@@ -1,6 +1,5 @@
 # Linux：MosaicCore / MosaicAppCore 纯 Swift 包的构建与测试（技术方案 §11.3 linux-core.yml）。
 # 每个 PR 必跑；便宜（Linux 2 核约 0.006 美元/分钟，公开仓库免费）。
-# ⚠️ 草稿：尚未在 GitHub 上运行过（目前没有远程仓库）。
 name: linux-core
 
 on:
@@ -20,10 +19,11 @@ jobs:
   mosaic-core:
     name: MosaicCore + MosaicAppCore (swift test on Linux)
     runs-on: ubuntu-latest
-    # 钉到具体 tag：Docker Hub 官方镜像 `swift:6.3.3-noble`（2026-11-16 用 registry API 核实存在，
-    # 多架构 index digest sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa）。与 ios.yml 所用 macos-26 runner 的默认 Xcode 26.6（自带 Swift 6.3.3）对齐；
-    # 升级 Xcode 时同步改这里。不用浮动 tag（6.3 / latest），避免 CI 无声换编译器。
-    container: swift:6.3.3-noble
+    # 钉到 tag + digest：Docker Hub 官方镜像 `swift:6.3.3-noble` 的多架构 index digest
+    # （2026-11-16 用 registry API `HEAD /v2/library/swift/manifests/6.3.3-noble` 读 Docker-Content-Digest 核实）。
+    # 与 ios.yml 所用 macos-26 runner 的默认 Xcode 26.6（自带 Swift 6.3.3）对齐；升级 Xcode 时三个 job 一起改。
+    # 不用浮动 tag（6.3 / latest），tag 被重推也不会无声换编译器。
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +56,27 @@ jobs:
         working-directory: Packages/MosaicAccelerate
         run: swift build
 
+  # 架构师 G-1：ThreadSanitizer。每个 PR 必跑、阻断合并（需在分支保护里把本 job 设为 required check）。
+  # 跳过性能基准（PerformanceTests / IndexBenchTests：TSan 下慢 5–15 倍且只测耗时，不增加竞态覆盖）。
+  # macOS 上的 TSan 不在这里（由运维另行评估，手动触发）。
+  tsan:
+    name: ThreadSanitizer (swift test --sanitize=thread, Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
+    timeout-minutes: 30
+    env:
+      TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: TSan MosaicCore
+        working-directory: Packages/MosaicCore
+        run: swift test --sanitize=thread --skip PerformanceTests
+
+      - name: TSan MosaicAppCore
+        working-directory: Packages/MosaicAppCore
+        run: swift test --sanitize=thread --skip IndexBenchTests
+
   # QA A-21：全规模性能基线（10,800 格 × 5 万合成候选，release），单独 job，不拖慢上面的门禁。
   # **只记录、不阻断**：job 级 continue-on-error，且软阈值默认只打印 ::warning::
   # （设 MOSAIC_BENCH_ASSERT=1 才断言；runner 核数与 box 8 核不同，阈值未在 runner 上标定）。
@@ -63,7 +84,7 @@ jobs:
   mosaic-core-bench:
     name: MosaicCore full-scale bench (A-21, release, informational)
     runs-on: ubuntu-latest
-    container: swift:6.3.3-noble
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
     timeout-minutes: 30
     continue-on-error: true
     env:
