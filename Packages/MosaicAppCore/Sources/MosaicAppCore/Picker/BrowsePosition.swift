@@ -86,10 +86,10 @@ public protocol BrowsePositionStoring: Sendable {
 
 /// `BrowsePositionStoring` 的生产实现，存进 `PreferenceDataStore`（key 见 `BrowsePage.preferenceKey`，值为 `BrowsePosition` 的 JSON）。
 ///
-/// **T2 实现**；T0 只有占位，调用会崩溃。恢复规则：
+/// **T2 实现**（Linux 单测：`BrowsePositionStoreTests`）。恢复规则：
 /// 1. 没存过 → `.allPhotosTop(.noSavedPosition)`。
 /// 2. 相簿不可见 → `.allPhotosTop(.albumUnavailable)`（「全部照片」始终可见）。
-/// 3. 锚点找不到 → `.allPhotosTop(.anchorMissing)`（不停在原相簿顶部：设计 §3）。
+/// 3. 锚点找不到（或给出负下标）→ `.allPhotosTop(.anchorMissing)`（不停在原相簿顶部：设计 §3）。
 /// 4. 否则 → `.anchor(album, index, offset)`。
 /// 两页互不影响。
 public struct BrowsePositionStore: BrowsePositionStoring {
@@ -98,20 +98,56 @@ public struct BrowsePositionStore: BrowsePositionStoring {
     public init(backend: any PreferenceDataStore) { self.backend = backend }
 
     public func position(for page: BrowsePage) -> BrowsePosition? {
-        fatalError("T2: BrowsePositionStore.position 未实现")
+        guard let data = backend.data(forKey: page.preferenceKey) else { return nil }
+        return Self.decode(data)
     }
 
+    /// 存不下的值（锚点 id 为空、偏移不是有限数）不写，保留上一次存的位置——
+    /// 这种值只可能来自调用方的瞬时状态（比如布局还没算完），不值得覆盖一个好的旧位置。
     public func save(_ position: BrowsePosition, for page: BrowsePage) {
-        fatalError("T2: BrowsePositionStore.save 未实现")
+        guard Self.isStorable(position), let data = Self.encode(position) else { return }
+        backend.setData(data, forKey: page.preferenceKey)
     }
 
     public func clear(_ page: BrowsePage) {
-        fatalError("T2: BrowsePositionStore.clear 未实现")
+        backend.setData(nil, forKey: page.preferenceKey)
     }
 
     public func restore(for page: BrowsePage,
                         isSelectable: (SourceSelection) -> Bool,
                         indexOfAnchor: (BrowsePosition) -> Int?) -> BrowseRestoreResult {
-        fatalError("T2: BrowsePositionStore.restore 未实现")
+        guard let saved = position(for: page) else { return .allPhotosTop(reason: .noSavedPosition) }
+        // 「全部照片」始终可见，不问调用方。
+        if saved.album != .allPhotos, !isSelectable(saved.album) {
+            return .allPhotosTop(reason: .albumUnavailable)
+        }
+        guard let index = indexOfAnchor(saved), index >= 0 else {
+            return .allPhotosTop(reason: .anchorMissing)
+        }
+        return .anchor(album: saved.album, anchorIndex: index, anchorOffset: saved.anchorOffset)
+    }
+
+    // MARK: 编解码（T2）
+
+    /// 当前格式：`BrowsePosition` 的 JSON（键名即属性名，`album` 用 `SourceSelection` 的合成 Codable）。
+    static func encode(_ position: BrowsePosition) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(position)
+    }
+
+    /// 解不开、版本不是 `currentVersion`（含将来的新版本和旧的 0）、或内容不合法 → nil（按「没存过」处理）。
+    static func decode(_ data: Data) -> BrowsePosition? {
+        guard let p = try? JSONDecoder().decode(BrowsePosition.self, from: data),
+              p.version == BrowsePosition.currentVersion,
+              isStorable(p)
+        else { return nil }
+        return p
+    }
+
+    static func isStorable(_ p: BrowsePosition) -> Bool {
+        guard !p.anchorAssetID.isEmpty, p.anchorOffset.isFinite else { return false }
+        if case .album(let id) = p.album, id.isEmpty || id == AlbumEntry.allPhotosID { return false }
+        return true
     }
 }
