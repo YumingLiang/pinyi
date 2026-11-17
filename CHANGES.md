@@ -10,20 +10,20 @@
 - **保存**（`FileWorksStore.save` → `WorkSaveResult{summary, outcome: inserted / updatedOverlay / unchanged}`）：没有同指纹 → 新存；同指纹同强度 → 不写盘；同指纹只差强度 → 原地更新（B10-3/8）：重画预览、更新 layout.json 的 `params.overlayAlpha` 和 meta 的强度 / 预览尺寸 / `updatedAt`；id、createdAt、列表位置、格子、文件名不变，不留历史。文件先写临时名再 `rename(2)` 替换，meta.json 最后写（提交点）；中途失败原作品完整；更新中被删报 notFound、不复活。同指纹保存按 `inFlight` 排队。
 - **命中哪一份**（B10-9/12）：`WorkSummary.saveTarget(in:fingerprint:preferred:)`，存储层和按钮状态共用：结果页记住的作品（还在且同指纹）优先；否则同指纹里 `updatedAt ?? createdAt` 最大的那份。旧数据重复不合并、不删。排序仍按 createdAt 倒序（B10-7）。
 - **旧数据迁移**：`WorkMeta.currentFormatVersion = 2`，新增 `updatedAt`。读到 v1 时按 layout.json 补算新指纹并原子写回（写不回就只记内存）。
-- **按钮状态**（B10-5/6）：`WorkSaveStatus` = `idle / saving / saved(id) / needsUpdate(id) / failed`，`canSave` / `canUpdate` / `isEnabled`。已存且没改 →「已存到我的作品」用已有的 `preview.saved_to_works`，不可点（`works.saved` 作废，没有新增）；只改强度 →「更新这张作品」`works.update`，不弹确认，成功后约 2 秒轻提示 `works.updated`（`WorksState.toast`），新存一张不提示。保存失败时结果不变就一直显示失败。`unsavedPrompt`（`.none / .unsaved / .alphaChanged(id)`）只给 feat/start-new 用，本分支不接线。
+- **按钮状态**（B10-5/6）：`WorkSaveStatus` = `idle / saving / saved(id) / needsUpdate(id) / failed`，`canSave` / `canUpdate` / `isEnabled`。已存且没改 →「已存到我的作品」用已有的 `preview.saved_to_works`，不可点（`works.saved` 作废，没有新增）；只改强度 →「更新这张作品」`works.update`，不弹确认，成功后约 2 秒轻提示 `works.updated`（`WorksState.toast`），新存一张不提示。保存失败时结果不变就一直显示失败。结果页按钮文案 / 可点由 `WorksState.saveButtonKey` / `isSaveButtonEnabled`（QA A12，= `WorkSaveStatus.buttonKey` / `isEnabled`）给出，视图直接用。`unsavedPrompt`（`.none / .unsaved / .alphaChanged(id)`）只给 feat/start-new 用，本分支不接线。
 - **「再调一调」只改强度不重新生成**（B10-13/14，协调人方案①，QA A10）：
   - `GenerationMachine` 新事件 `.restoreLastResult`：只在 `.idle` 且有 `lastOutcome` 时回到 `.result(lastOutcome)`，没有 effect，不消耗种子；生成中 / 取消确认框上忽略；导出中忽略。
-  - `AppCoordinator` 记下当前 `product` 是用哪组输入生成的（目标图代次（换图 / 重新裁剪都会 +1）、来源、密度；不含叠加强度）。`settingsPrimaryAction`：输入没变 → `.done`（`common.done`「完成」），否则 `.start`（`generate.cta`）。`settingsDoneTapped()` 回到原结果：格子、种子、`resultRevision` 都不变，AppModel 回结果页时按新强度重画预览。`generateTapped()` 仍是「开始拼图」，总是重新生成。设置页主按钮按 `settingsPrimaryAction` 显示和分派。
+  - `AppCoordinator` 记下当前 `product` 是用哪组输入生成的（目标图代次（换图 / 重新裁剪都会 +1）、来源、密度；不含叠加强度）。`settingsPrimaryAction: SettingsPrimaryAction { .done, .generate }`（QA A11）：输入没变 → `.done`（`common.done`「完成」），否则 `.generate`（`generate.cta`）。`adjustDoneTapped() async` 回到原结果：格子、种子、`resultRevision` 都不变，AppModel 回结果页时按新强度重画预览。`generateTapped()` 仍是「开始拼图」，总是重新生成。设置页主按钮按 `settingsPrimaryAction` 显示和分派。
   - 调整期间保留的只有原来就保留的那一份 `product`（`backToSettings` 原本也不释放它），预览位图离开结果页照常释放，所以没有额外内存。改了密度开始生成后取消：旧结果和 product 不变，把密度改回去又能「完成」。
   - `WorksController` 记住「当前结果对应的作品 id」（和 `resultRevision` 绑定；存 / 更新成功时记下），「再调一调」来回不丢；换拼法 / 重新生成（revision 变了）才清掉。`currentWorkID` 可读。保存时把它作为 `WorkDraft.preferredWorkID` 传给存储层。
   - 作品查看页这一轮没有强度入口（B10-13）。
 - **缺图计数**（B7）：`works.missing` 用 v1.3「有 {count} 格原来的照片现在用不了，这几格会稍模糊」，`missingCount` 按格计数（`cellAssignments` 里照片不在的格子数，同一张照片占多格算多格）。导出时取不到的格子保持原有兜底，没有新增 128px 逻辑。
 - **文案**：`copy_v1.1.md` §5.5 删 `works.menu.delete`、`works.saved`，加 `works.update`、`works.updated`、`quick.unsaved.update_title`（键先同步，接线在 feat/start-new）；同步 v1.4 相簿多选、`quick.*`；`gen-localizable.py` 重新生成。`common.done` 已在文案表里。
 - **测试**：
-  - 新增 `AdjustRoundTripTests`（13 条）：状态机 restore 的前置条件 / 不消耗种子 / 生成中和取消框上无效；只改强度往返格子、种子、revision 不变且不调生成器；`generateTapped` 总是重新生成；改密度 → `.start` 重新生成、改回 → `.done`；换目标图 → `.start`；生成中取消后旧结果仍可「完成」回去；存过 → 往返 → `needsUpdate(id)` → 更新同一张 + 轻提示 → 换拼法清掉 id；没存过的往返仍是未存；改密度后另存；`saveTarget` 命中规则（记住的优先、`updatedAt ?? createdAt` 最大）。
+  - 新增 `AdjustRoundTripTests`（12 条）：状态机 restore 的前置条件 / 不消耗种子 / 生成中和取消框上无效；只改强度往返格子、种子、revision 不变且不调生成器；`generateTapped` 总是重新生成；改密度 → `.generate` 重新生成、改回 → `.done`；换目标图 → `.generate`；生成中取消后旧结果仍可「完成」回去；存过 → 往返 → `needsUpdate(id)` → 更新同一张 + 轻提示 → 换拼法清掉 id；没存过的往返仍是未存；改密度后另存；`saveTarget` 命中规则（记住的优先、`updatedAt ?? createdAt` 最大）。
   - `WorksSaveRulesTests`：指纹口径、原地更新、并发、更新中被删、更新失败、旧数据迁移和重复、按钮状态 / 轻提示。
-  - QA `QAWorksRulesTests`（33 条）和 `pending/QAWorksRulesPendingInterfaceTests`（13 条）接入，改动都标了「全栈改 / 全栈加」：seed 不进指纹（按 AndyL 口径反转 QA 的两条断言）；`setAlpha` 通知 controller；旧数据重复用 `makeLegacyDuplicate` 构造；「再调一调」往返改走 `settingsDoneTapped()`。
-  - 结果：MosaicAppCore `swift test --no-parallel` 402 个，0 失败，3 跳过；MosaicCore 153 个，0 失败。App 层改动 Linux 上编译不了，未在真机 / Xcode 编过。
+  - QA 测试计划 v0.4 的 `QAWorksRulesTests`（34 条）和 `pending/QAWorksRulesPendingInterfaceTests`（19 条，A1–A12 全部按计划里的名字实现）接入，改动都标了「全栈改 / 全栈加」：seed 不进指纹（按 AndyL 口径反转 QA 的两条断言）；`setAlpha` 通知 controller；旧数据重复用 `makeLegacyDuplicate` 构造；pending 的 A2 指纹断言（seed / 密度名）同理反转。
+  - 结果：MosaicAppCore `swift test --no-parallel` 409 个，0 失败，3 跳过；`check-photo-fetch.sh`、`check-no-network.sh` 通过；MosaicCore 153 个，0 失败。App 层改动 Linux 上编译不了，未在真机 / Xcode 编过。
 
 
 ## feat/picker-t3：`fetchKeyAssets` 纳入隐藏照片检查（QA #9 补丁）

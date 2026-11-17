@@ -52,7 +52,7 @@ final class AdjustRoundTripTests: XCTestCase {
         let c = h.coordinator
         c.setTarget(try CoordinatorHarness.target())
         c.start(); await c.settle()
-        XCTAssertEqual(c.settingsPrimaryAction, .start, "第一次进设置页：开始拼图")
+        XCTAssertEqual(c.settingsPrimaryAction, .generate, "第一次进设置页：开始拼图")
         await c.generateTapped(); await c.settle()
         await waitFor(c, "生成完") { if case .result = $0.flow.generation.phase { return true }; return false }
         return (h, c)
@@ -71,7 +71,7 @@ final class AdjustRoundTripTests: XCTestCase {
         XCTAssertNotNil(c.product, "调整期间保留结果（和改动前一样只留一份 product，不额外占内存）")
         c.setOverlayAlpha(0.22)
         XCTAssertEqual(c.settingsPrimaryAction, .done)
-        c.settingsDoneTapped(); await c.settle()
+        await c.adjustDoneTapped(); await c.settle()
 
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertEqual(h.generator.calls.get(), calls, "不重新生成")
@@ -104,9 +104,9 @@ final class AdjustRoundTripTests: XCTestCase {
         let rev = c.state.resultRevision
         c.send(.backToSettings)
         c.setDensity(c.state.flow.settings.density == .fine ? .coarse : .fine)
-        XCTAssertEqual(c.settingsPrimaryAction, .start, "改了密度：开始拼图")
+        XCTAssertEqual(c.settingsPrimaryAction, .generate, "改了密度：开始拼图")
         XCTAssertEqual(c.settingsPrimaryAction.titleKey, .generateCTA)
-        c.settingsDoneTapped(); await c.settle()
+        await c.adjustDoneTapped(); await c.settle()
         XCTAssertEqual(c.state.flow.step, .settings, "不是「完成」时点 done 无效")
         let calls = h.generator.calls.get()
         await c.generateTapped(); await c.settle()
@@ -125,7 +125,7 @@ final class AdjustRoundTripTests: XCTestCase {
         let d = c.state.flow.settings.density
         c.send(.backToSettings)
         c.setDensity(d == .fine ? .coarse : .fine)
-        XCTAssertEqual(c.settingsPrimaryAction, .start)
+        XCTAssertEqual(c.settingsPrimaryAction, .generate)
         c.setDensity(d)
         XCTAssertEqual(c.settingsPrimaryAction, .done)
         c.stop()
@@ -135,7 +135,7 @@ final class AdjustRoundTripTests: XCTestCase {
         let (_, c) = try await generated()
         c.send(.backToSettings)
         c.setTarget(try CoordinatorHarness.target())               // 换图 / 重新裁剪 = 新目标图
-        XCTAssertEqual(c.settingsPrimaryAction, .start)
+        XCTAssertEqual(c.settingsPrimaryAction, .generate)
         c.stop()
     }
 
@@ -156,16 +156,16 @@ final class AdjustRoundTripTests: XCTestCase {
         gen.gate.set(gate)
         Task { await c.generateTapped() }
         await gate.reached.wait()
-        XCTAssertEqual(c.settingsPrimaryAction, .start, "生成中不是「完成」")
-        c.settingsDoneTapped()
+        XCTAssertEqual(c.settingsPrimaryAction, .generate, "生成中不是「完成」")
+        await c.adjustDoneTapped()
         XCTAssertTrue(c.state.isGenerating, "生成中点 done 无效")
         c.send(.cancelTapped); c.send(.cancelConfirmed)
         await gate.release.open(); await c.settle()
         XCTAssertEqual(c.state.flow.generation.phase, .idle)
-        XCTAssertEqual(c.settingsPrimaryAction, .start, "密度还是改过的")
+        XCTAssertEqual(c.settingsPrimaryAction, .generate, "密度还是改过的")
         c.setDensity(d)
         XCTAssertEqual(c.settingsPrimaryAction, .done)
-        c.settingsDoneTapped(); await c.settle()
+        await c.adjustDoneTapped(); await c.settle()
         XCTAssertEqual(c.workResultContext.layout?.cellAssignments, before.cellAssignments)
         c.stop()
     }
@@ -191,7 +191,7 @@ final class AdjustRoundTripTests: XCTestCase {
 
         c.send(.backToSettings); w.resultContextDidChange()
         c.setOverlayAlpha(min(OverlayBlendLimits.maxAlpha, c.state.flow.settings.overlayAlpha + 0.1))
-        c.settingsDoneTapped(); await c.settle()
+        await c.adjustDoneTapped(); await c.settle()
         w.resultDidChange(revision: c.state.resultRevision); w.resultContextDidChange()
         XCTAssertEqual(w.state.saveStatus, .needsUpdate(id), "回来后按钮是「更新这张作品」")
         XCTAssertEqual(w.currentWorkID, id, "经过「再调一调」来回，作品 id 不丢")
@@ -201,7 +201,7 @@ final class AdjustRoundTripTests: XCTestCase {
         XCTAssertEqual(w.state.summaries.map(\.id), [id])
 
         // 往返但没改强度：仍是已存
-        c.send(.backToSettings); c.settingsDoneTapped(); await c.settle()
+        c.send(.backToSettings); await c.adjustDoneTapped(); await c.settle()
         w.resultContextDidChange()
         XCTAssertEqual(w.state.saveStatus, .saved(id))
 
@@ -219,7 +219,7 @@ final class AdjustRoundTripTests: XCTestCase {
         let w = await works(c)
         c.send(.backToSettings); c.setOverlayAlpha(0.2)
         XCTAssertEqual(c.settingsPrimaryAction, .done, "没存过的结果也一样：只改强度 → 完成")
-        c.settingsDoneTapped(); await c.settle()
+        await c.adjustDoneTapped(); await c.settle()
         w.resultContextDidChange()
         XCTAssertEqual(w.state.saveStatus, .idle)
         await w.saveCurrentResultTapped()

@@ -323,23 +323,23 @@ public final class AppCoordinator {
 
     /// 设置页主按钮（B10.14）：「再调一调」进来后，和当前结果相比只动了叠加强度（或什么都没动）→ `.done`「完成」
     /// （`common.done`）：回到原结果，格子 / 种子不变，只按新强度重画；动了密度、来源、目标图（含裁剪，换图即换代次）→
-    /// `.start`「开始拼图」，重新生成，算新的一张。没有可回去的结果（首次进设置页、失败后结果已丢）也是 `.start`。
+    /// `.generate`「开始拼图」，重新生成，算新的一张。没有可回去的结果（首次进设置页、失败后结果已丢）也是 `.generate`。
     public var settingsPrimaryAction: SettingsPrimaryAction {
         guard product != nil, target != nil, let inputs = productInputs, inputs == currentInputs,
-              state.flow.generation.lastOutcome != nil, case .idle = state.flow.generation.phase else { return .start }
+              state.flow.generation.lastOutcome != nil, case .idle = state.flow.generation.phase else { return .generate }
         return .done
     }
 
     /// 设置页「完成」：回到上一次结果，不跑生成；`resultRevision` 不变（作品 id 保留，存过且强度变了 → `works.update`）。
     /// 平台层回到结果页时按新强度重画预览（AppModel 进结果页时重画）。不是 `.done` 时忽略。
-    public func settingsDoneTapped() {
+    public func adjustDoneTapped() async {
         guard settingsPrimaryAction == .done, !state.export.isBusy else { return }
         send(.restoreLastResult)
     }
 
 
     /// 「开始拼图」。并发点击只处理第一次（互斥）；导出进行中忽略。总是重新生成：
-    /// 「再调一调」回来只改了叠加强度时，设置页主按钮是「完成」（`settingsPrimaryAction == .done`），走 `settingsDoneTapped()`。
+    /// 「再调一调」回来只改了叠加强度时，设置页主按钮是「完成」（`settingsPrimaryAction == .done`），走 `adjustDoneTapped()`。
     public func generateTapped() async {
         guard !generateGatePending, !state.export.isBusy, !state.isGenerating else { return }
         generateGatePending = true

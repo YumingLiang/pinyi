@@ -3,7 +3,7 @@ import XCTest
 import MosaicCore
 @testable import MosaicAppCore
 
-// 全栈接入（fix/works-delete）：A1–A10 按这里的名字实现。按已定规则改了两处断言（标「全栈改」）：
+// 全栈接入（fix/works-delete）：A1–A12 按这里的名字实现。按已定规则改了两处断言（标「全栈改」）：
 //   A2 的 seed / 密度名：AndyL 22:20 定「去重只看格子分配、cols/rows 和 targetCrop」，seed、密度名不进内容指纹
 //   （改密度在真实流程里会改 cols/rows，指纹照样不同）。
 // 规则原文：product/hd-export-req-v0.2.md B5、B7、B9-6~9、B10 第 1–13 条（产品答复 22:40、22:45）。
@@ -19,7 +19,13 @@ import MosaicCore
 //   A7  WorksState.toast: L10nKey?                    更新成功置 .worksUpdated（约 2 s 由平台层清掉）；新存一张不置
 //   A8  WorksController.unsavedPrompt: UnsavedPrompt  .none / .unsaved（quick.unsaved.title）/ .alphaChanged(WorkID)（quick.unsaved.update_title）
 //   A9  L10nKey.worksUpdate / .worksUpdated / .quickUnsavedTitle / .quickUnsavedUpdateTitle；「已存」沿用 previewSavedToWorks，works.saved 作废
-//   A10 「再调一调」只改强度后回到结果：保留原结果（格子 + seed 不变），resultDidChange 后状态为 .needsUpdate(id)（B10.3）
+//   A10 「再调一调」只改强度后回到结果：保留原结果（格子 + seed 不变），状态为 .needsUpdate(id)（B10.3 / B10.14，协调人定方案①）
+//   A11 AppCoordinator.settingsPrimaryAction: SettingsPrimaryAction { .done, .generate }
+//       —— 与 lastOutcome 相比只动了强度（或什么都没动）→ .done（common.done）；动了密度 / 来源 / 目标图等 → .generate（generate.cta）
+//       AppCoordinator.adjustDoneTapped() async —— 回到原结果，不跑匹配、不换种子、只按新强度重画叠加层和预览；
+//       之后通知 WorksController（overlayAlphaDidChange 或等价机制）
+//   A12 WorksState.saveButtonKey: L10nKey —— .idle → preview.save_to_works；.saved → preview.saved_to_works（不可点）；
+//       .needsUpdate → works.update；isSaveButtonEnabled 与之对应
 @MainActor
 final class QAWorksRulesPendingInterfaceTests: XCTestCase {
     private func store(_ dir: URL) -> FileWorksStore { FileWorksStore(directory: dir, images: FakeWorkImages(), now: FakeWallClock().provider) }
@@ -217,7 +223,7 @@ final class QAWorksRulesPendingInterfaceTests: XCTestCase {
         c.stop()
     }
 
-    /// A10 / B10.3：「再调一调」往返——结果 revision 变了，但格子和 seed 与已存版本相同、只差强度 → .needsUpdate(id)，不是 .idle。
+    /// A10 / B10.3（controller 单元级）：回到结果时即使 revision 变了，只要格子和 seed 与已存版本相同、只差强度 → .needsUpdate(id)，不是 .idle。
     func testAdjustRoundTripEntersNeedsUpdate() async throws {
         let ctx = Ctx()
         let c = controller(makeTempDir().appendingPathComponent("Works"), ctx)
@@ -236,6 +242,140 @@ final class QAWorksRulesPendingInterfaceTests: XCTestCase {
         ctx.revision += 1; c.resultDidChange(revision: ctx.revision)
         XCTAssertEqual(c.state.saveStatus, .saved(id))
         c.stop()
+    }
+
+    // MARK: A11 / A12「再调一调」（B10.14）
+
+    @MainActor private final class Flow {
+        let ch: CoordinatorHarness
+        let works: WorksController
+        init() throws {
+            ch = CoordinatorHarness(assets: 300)
+            let images = FakeWorkImages()
+            works = WorksController(store: FileWorksStore(directory: makeTempDir(), images: images), existence: FakeExistence(), images: images)
+            let c = ch.coordinator
+            works.attach(resultContext: { [weak c] in c!.workResultContext }, relay: ExportSuccessRelay())
+        }
+        var c: AppCoordinator { ch.coordinator }
+        func generate() async throws {
+            c.setTarget(try CoordinatorHarness.target()); c.start(); await c.settle()
+            await c.generateTapped(); await c.settle()
+            await waitFor(c, "结果") { if case .result = $0.flow.generation.phase { return true }; return false }
+            await works.start()
+            works.resultDidChange(revision: c.state.resultRevision)
+        }
+        func layout() throws -> MosaicLayout { try XCTUnwrap(c.workResultContext.layout) }
+        func back() async { c.send(.backToSettings); await c.settle() }
+        func done() async {
+            await c.adjustDoneTapped(); await c.settle()
+            await waitFor(c, "回到结果") { if case .result = $0.flow.generation.phase { return true }; return false }
+            works.resultDidChange(revision: c.state.resultRevision)
+            works.overlayAlphaDidChange(c.state.flow.settings.overlayAlpha)
+        }
+        func bump(_ d: Double) -> Double { min(OverlayBlendLimits.maxAlpha, c.state.flow.settings.overlayAlpha + d) }
+        func stop() { works.stop(); c.stop() }
+    }
+
+    /// ① 只改强度回来：每格照片 ID 和裁剪完全一致、种子不变、没有跑匹配（生成计数为 0）。
+    func testAdjustAlphaOnlyDoneKeepsCellsSeedAndRunsNoMatching() async throws {
+        let f = try Flow()
+        try await f.generate()
+        let before = try f.layout()
+        let calls = f.ch.generator.calls.get()
+        await f.back()
+        f.c.setOverlayAlpha(f.bump(0.1))
+        XCTAssertEqual(f.c.settingsPrimaryAction, .done, "只改强度 → 主按钮「完成」")
+        await f.done()
+        let after = try f.layout()
+        XCTAssertEqual(after.cellAssignments, before.cellAssignments, "每格照片 ID 和裁剪一致")
+        XCTAssertEqual(after.params.seed, before.params.seed, "种子不变")
+        XCTAssertEqual(after.cols, before.cols); XCTAssertEqual(after.rows, before.rows)
+        XCTAssertEqual(f.ch.generator.calls.get() - calls, 0, "没有跑匹配")
+        XCTAssertNotEqual(after.params.overlayAlpha, before.params.overlayAlpha, "强度是新的")
+        f.stop()
+    }
+
+    /// ② 存过的结果只改强度回来：状态 needsUpdate，按钮 works.update；点了更新同一张。
+    func testAdjustAlphaOnlySavedResultNeedsUpdate() async throws {
+        let f = try Flow()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        guard case .saved(let id) = f.works.state.saveStatus else { return XCTFail("应已存") }
+        await f.back()
+        f.c.setOverlayAlpha(f.bump(0.1))
+        await f.done()
+        XCTAssertEqual(f.works.state.saveStatus, .needsUpdate(id))
+        XCTAssertEqual(f.works.state.saveButtonKey, .worksUpdate)
+        await f.works.saveCurrentResultTapped()
+        XCTAssertEqual(f.works.state.summaries.map(\.id), [id])
+        XCTAssertEqual(f.works.state.saveStatus, .saved(id))
+        XCTAssertEqual(f.works.state.saveButtonKey, .previewSavedToWorks)
+        f.stop()
+    }
+
+    /// ③ 改了密度：主按钮回到 generate.cta，生成（计数 +1）后再存是新的一张。
+    func testAdjustDensityChangedRegeneratesAndSavesNew() async throws {
+        let f = try Flow()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        let calls = f.ch.generator.calls.get()
+        await f.back()
+        let other = DensityChoice.allCases.first { $0 != f.c.state.flow.settings.density }!
+        f.c.setDensity(other)
+        XCTAssertEqual(f.c.settingsPrimaryAction, .generate, "改了密度 → 「开始拼图」")
+        await f.c.generateTapped(); await f.c.settle()
+        await waitFor(f.c, "结果") { if case .result = $0.flow.generation.phase { return true }; return false }
+        XCTAssertEqual(f.ch.generator.calls.get() - calls, 1, "重新生成")
+        f.works.resultDidChange(revision: f.c.state.resultRevision)
+        XCTAssertEqual(f.works.state.saveStatus, .idle)
+        await f.works.saveCurrentResultTapped()
+        XCTAssertEqual(f.works.state.count, 2, "新的一张")
+        f.stop()
+    }
+
+    /// ④a 没存过的结果只改强度回来：仍是未存（preview.save_to_works），不跑匹配。
+    func testAdjustAlphaOnlyUnsavedStaysUnsaved() async throws {
+        let f = try Flow()
+        try await f.generate()
+        let calls = f.ch.generator.calls.get()
+        await f.back()
+        f.c.setOverlayAlpha(f.bump(0.1))
+        XCTAssertEqual(f.c.settingsPrimaryAction, .done)
+        await f.done()
+        XCTAssertEqual(f.works.state.saveStatus, .idle)
+        XCTAssertEqual(f.works.state.saveButtonKey, .previewSaveToWorks)
+        XCTAssertEqual(f.ch.generator.calls.get(), calls)
+        XCTAssertEqual(f.works.state.count, 0)
+        f.stop()
+    }
+
+    /// ④b 强度改了又改回原值：主按钮「完成」；回来后状态是已存（不可点），没有写盘。
+    func testAdjustAlphaRestoredIsDoneAndSaved() async throws {
+        let f = try Flow()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        guard case .saved(let id) = f.works.state.saveStatus else { return XCTFail() }
+        let original = f.c.state.flow.settings.overlayAlpha
+        await f.back()
+        f.c.setOverlayAlpha(f.bump(0.1))
+        f.c.setOverlayAlpha(original)
+        XCTAssertEqual(f.c.settingsPrimaryAction, .done, "什么都没改（改回原值）也是「完成」")
+        await f.done()
+        XCTAssertEqual(f.works.state.saveStatus, .saved(id))
+        XCTAssertEqual(f.works.state.saveButtonKey, .previewSavedToWorks)
+        XCTAssertEqual(f.works.state.count, 1)
+        f.stop()
+    }
+
+    /// ④c 强度和密度都改了：按生成处理（generate.cta），回来是新的结果。
+    func testAdjustAlphaAndDensityChangedIsGenerate() async throws {
+        let f = try Flow()
+        try await f.generate()
+        await f.back()
+        f.c.setOverlayAlpha(f.bump(0.1))
+        f.c.setDensity(DensityChoice.allCases.first { $0 != f.c.state.flow.settings.density }!)
+        XCTAssertEqual(f.c.settingsPrimaryAction, .generate)
+        f.stop()
     }
 
     // MARK: A8 未保存提示（B10.4 / B10.11）

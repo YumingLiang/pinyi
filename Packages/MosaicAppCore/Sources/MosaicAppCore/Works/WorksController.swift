@@ -34,6 +34,16 @@ public enum WorkSaveStatus: Sendable, Hashable {
 
     /// 按钮能不能点。
     public var isEnabled: Bool { canSave || canUpdate }
+
+    /// 按钮文案（QA A12）：没存 / 存失败 / 保存中 → `preview.save_to_works`；已存 → `preview.saved_to_works`（不可点）；
+    /// 只改了叠加强度 → `works.update`。保存中界面显示转圈，key 仍按「存到我的作品」给。
+    public var buttonKey: L10nKey {
+        switch self {
+        case .saved: return .previewSavedToWorks
+        case .needsUpdate: return .worksUpdate
+        case .idle, .saving, .failed: return .previewSaveToWorks
+        }
+    }
 }
 
 /// 未保存提示的种类（B10-4 / B10-11；QA works-rules A8）。弹窗由 feat/start-new「再拼一张」接线，本分支只提供判断。
@@ -84,6 +94,10 @@ public struct WorksState: Sendable, Hashable {
 
     public var count: Int { summaries.count }
     public var isEmpty: Bool { isLoaded && summaries.isEmpty }
+    /// 结果页「存到我的作品」按钮当前文案（QA A12，= `saveStatus.buttonKey`）。
+    public var saveButtonKey: L10nKey { saveStatus.buttonKey }
+    /// 结果页「存到我的作品」按钮能不能点（QA A12，= `saveStatus.isEnabled`；平台层另外在导出中置灰）。
+    public var isSaveButtonEnabled: Bool { saveStatus.isEnabled }
     /// 列表底部常驻提示（需求 B8）。
     public static let keepHintKey = L10nKey.worksKeepHint
     /// 查看页 / 导出前的缺失提示（`works.missing`，参数：格数）。

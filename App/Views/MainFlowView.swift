@@ -160,8 +160,8 @@ struct SettingsStepView: View {
                 // B10.14：「再调一调」进来只动了叠加强度 →「完成」回原结果（不重新生成）；否则「开始拼图」
                 let action = model.settingsPrimaryAction
                 Button {
-                    if action == .done { model.settingsDoneTapped() } else { model.generateTapped() }
-                } label: { Text(action.titleKey).frame(maxWidth: .infinity) }
+                    if action == .done { model.adjustDoneTapped() } else { model.generateTapped() }
+                } label: { Text(action == .done ? L10nKey.commonDone : L10nKey.generateCTA).frame(maxWidth: .infinity) }
                     .buttonStyle(.borderedProminent).controlSize(.large)
             }
         }

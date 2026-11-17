@@ -229,9 +229,10 @@ public struct GenerationMachine: Sendable, Hashable {
     }
 }
 
-/// 设置页主按钮（B10.14）：`.start` =「开始拼图」重新生成；`.done` = `common.done`「完成」，回到原结果只改叠加强度。
+/// 设置页主按钮（B10.14，QA A11）：`.generate` =「开始拼图」（`generate.cta`）重新生成；
+/// `.done` = `common.done`「完成」，回到原结果只改叠加强度。
 public enum SettingsPrimaryAction: Sendable, Hashable {
-    case start
+    case generate
     case done
 
     public var titleKey: L10nKey { self == .done ? .commonDone : .generateCTA }

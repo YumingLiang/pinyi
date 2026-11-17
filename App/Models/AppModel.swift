@@ -150,7 +150,7 @@ final class AppModel: ObservableObject {
     /// 设置页主按钮（B10.14）：只改了叠加强度 →「完成」回原结果；否则「开始拼图」。
     var settingsPrimaryAction: SettingsPrimaryAction { coordinator.settingsPrimaryAction }
     /// 设置页「完成」：回到原结果，不重新生成（进结果页时按新强度重画预览）。
-    func settingsDoneTapped() { coordinator.settingsDoneTapped() }
+    func adjustDoneTapped() { Task { await coordinator.adjustDoneTapped() } }
     /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
     func retryTapped() { Task { await coordinator.retryTapped() } }
 

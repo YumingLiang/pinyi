@@ -604,40 +604,29 @@ final class QAWorksRulesTests: XCTestCase {
         }
     }
 
-    // MARK: B10.3 / B10.13「再调一调」往返（预览页存了之后改强度再回来 = 更新）
+    // MARK: B10.14「再调一调」：只改强度 → 「完成」回原结果；改其他参数 → 「开始拼图」重新生成
+    // 行为用例需要新接口（A11），放在 pending/QAWorksRulesPendingInterfaceTests.swift；这里只放现在能编译的守卫。
 
-    /// 真协调器：生成 → 存 →「再调一调」(backToSettings) → 只拖强度 → 回到结果 → 存：应更新同一张。
-    /// 现状：backToSettings 丢掉结果（GenerationMachine.swift:186 phase = .idle），回来只能「开始拼图」重跑，
-    /// 且种子换成 MosaicSeed.next(after:)（GenerationMachine.swift:154），格子和 seed 都变 —— 按规则 2/4 只能算新的一张。
-    func testRule4_AdjustRoundTripAlphaOnlyUpdatesSameWork() async throws {
-        let ch = CoordinatorHarness(assets: 300)
-        let c = ch.coordinator
-        c.setTarget(try CoordinatorHarness.target()); c.start(); await c.settle()
-        await c.generateTapped(); await c.settle()
-        let images = FakeWorkImages()
-        let works = WorksController(store: FileWorksStore(directory: makeTempDir(), images: images), existence: FakeExistence(), images: images)
-        works.attach(resultContext: { [weak c] in c!.workResultContext }, relay: ExportSuccessRelay())
-        await works.start()
-        works.resultDidChange(revision: c.state.resultRevision)
-        await works.saveCurrentResultTapped()
-        guard case .saved(let id) = works.state.saveStatus else { return XCTFail("应已存") }
-        let saved = try await works.store.load(id).layout
+    /// 两个主按钮 key 都在文案表和 allUsed 里，文案正确、干净。
+    func testGuard14_DoneAndGenerateKeysPresent() throws {
+        XCTAssertEqual(L10nKey.commonDone.rawValue, "common.done")
+        XCTAssertEqual(L10nKey.generateCTA.rawValue, "generate.cta")
+        XCTAssertEqual(try Self.stringsValue("common.done"), "完成")
+        XCTAssertEqual(try Self.stringsValue("generate.cta"), "开始拼图")
+        let used = Set(L10nKey.allUsed.map(\.rawValue))
+        XCTAssertTrue(used.contains("common.done"))
+        XCTAssertTrue(used.contains("generate.cta"))
+    }
 
-        c.send(.backToSettings); await c.settle()                // 「再调一调」
-        c.setOverlayAlpha(min(OverlayBlendLimits.maxAlpha, saved.params.overlayAlpha + 0.1))
-        // 全栈改：B10.14 只改强度时设置页主按钮是「完成」（settingsPrimaryAction == .done），走 settingsDoneTapped()；
-        // generateTapped() 仍是「开始拼图」= 重新生成。
-        XCTAssertEqual(c.settingsPrimaryAction, .done)
-        c.settingsDoneTapped(); await c.settle()                 // 回到结果
-        await waitFor(c, "回到结果") { if case .result = $0.flow.generation.phase { return true }; return false }
-        works.resultDidChange(revision: c.state.resultRevision)
-        let back = try XCTUnwrap(c.workResultContext.layout)
-        XCTAssertEqual(back.cellAssignments, saved.cellAssignments, "只改强度回来，格子应与已存版本一致")
-        XCTAssertEqual(back.params.seed, saved.params.seed, "只改强度回来，seed 应不变")
-        XCTAssertNotEqual(works.state.saveStatus, .idle, "应进入「更新这张作品」(needsUpdate)，不是「存到我的作品」")
-        await works.saveCurrentResultTapped()
-        XCTAssertEqual(works.state.summaries.map(\.id), [id], "更新同一张，不新增")
-        works.stop(); c.stop()
+    /// 源码守卫：设置页（SettingsStepView）主按钮按条件在 common.done 与 generate.cta 之间切换。
+    func testRule14_SettingsViewUsesDoneAndGenerate() throws {
+        let src = try String(contentsOf: Self.repoRoot.appendingPathComponent("App/Views/MainFlowView.swift"), encoding: .utf8)
+        guard let start = src.range(of: "struct SettingsStepView") else { return XCTFail("找不到 SettingsStepView") }
+        let rest = src[start.upperBound...]
+        let end = rest.range(of: "\nstruct ")?.lowerBound ?? rest.endIndex
+        let view = String(rest[..<end])
+        XCTAssertTrue(view.contains("L10nKey.generateCTA"), "改了其他参数时仍是「开始拼图」")
+        XCTAssertTrue(view.contains("L10nKey.commonDone"), "只改强度时主按钮显示「完成」(common.done)")
     }
 
     /// B10.13：作品查看页这一轮没有强度入口（无 Slider / overlayAlpha / 「再调一调」）。

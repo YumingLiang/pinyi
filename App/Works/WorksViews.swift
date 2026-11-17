@@ -33,14 +33,13 @@ struct SaveToWorksButton: View {
         VStack(spacing: 4) {
             Button { works.saveCurrentResult() } label: {
                 switch status {
-                case .saved: Label { Text(L10nKey.previewSavedToWorks) } icon: { Image(systemName: "checkmark") }
                 case .saving: ProgressView()
-                case .needsUpdate: Text(L10nKey.worksUpdate)
-                default: Text(L10nKey.previewSaveToWorks)
+                case .saved: Label { Text(works.state.saveButtonKey) } icon: { Image(systemName: "checkmark") }
+                default: Text(works.state.saveButtonKey)
                 }
             }
             .buttonStyle(.bordered)
-            .disabled(!status.isEnabled || !model.canExport)
+            .disabled(!works.state.isSaveButtonEnabled || !model.canExport)
             if status == .failed { Text(L10nKey.worksSaveFailed).font(.caption).foregroundStyle(.red) }
             if let toast = works.state.toast {
                 Text(toast).font(.caption).foregroundStyle(.secondary).transition(.opacity)
