@@ -89,6 +89,14 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     /// 预览兜底图（作品目录内，PNG，无损；按格拼成一张、每格与预览每格同像素，只有兜底格位置有像素，其余为 0）。布局里 `fallback == true` 的格子
     /// 从这里按格裁出、放大填充。没有兜底格时为 nil。旧作品缺省 nil。
     public var fallbackFile: String?
+    /// 兜底规则版本（架构师 11-17）：2 = 隐藏 / 拿不准的格子填目标平均色、只有确认删除才裁旧预览。
+    /// nil / 1 = 旧版（补不上的格子一律裁旧预览，兜底图和预览可能带着隐藏照片的像素），打开 / 导出前整体迁移。
+    public var fallbackVersion: Int?
+    public static let currentFallbackVersion = 2
+    /// 旧版兜底需要迁移：版本 < 2 且存过兜底格。列表 / 查看页在迁移（重画预览）完成前不显示旧预览，用占位图。
+    public var needsFallbackMigration: Bool {
+        (fallbackVersion ?? 1) < Self.currentFallbackVersion && (fallbackCellCount > 0 || fallbackFile != nil)
+    }
     /// 目标图本机版本的有效长边（px，photo-picker-v0.1 §6.1；内部性能页显示）。旧作品 / 未记录为 nil。
     public var targetLocalLongSide: Int?
     /// 叠加降级系数 k（`OverlayDegrade`，另一条线计算；内部性能页显示）。旧作品 / 未记录为 nil。
@@ -128,7 +136,8 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     enum CodingKeys: String, CodingKey {
         case formatVersion, id, createdAt, columns, rows, tier, photoCount, missingCount, overlayAlpha, seed, fingerprint,
              origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, updatedAt, pendingPreviewFile,
-             droppedPhotoCount, replacedCellCount, fallbackCellCount, fallbackFile, targetLocalLongSide, overlayDegradeFactor
+             droppedPhotoCount, replacedCellCount, fallbackCellCount, fallbackFile, targetLocalLongSide, overlayDegradeFactor,
+             fallbackVersion
     }
 
     public init(from decoder: any Decoder) throws {
@@ -154,6 +163,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         replacedCellCount = try c.decodeIfPresent(Int.self, forKey: .replacedCellCount) ?? 0
         fallbackCellCount = try c.decodeIfPresent(Int.self, forKey: .fallbackCellCount) ?? 0
         fallbackFile = try c.decodeIfPresent(String.self, forKey: .fallbackFile)
+        fallbackVersion = try c.decodeIfPresent(Int.self, forKey: .fallbackVersion)
         targetLocalLongSide = try c.decodeIfPresent(Int.self, forKey: .targetLocalLongSide)
         overlayDegradeFactor = try c.decodeIfPresent(Double.self, forKey: .overlayDegradeFactor)
         pendingPreviewFile = try c.decodeIfPresent(String.self, forKey: .pendingPreviewFile)
@@ -265,6 +275,8 @@ public struct WorkSummary: Sendable, Hashable, Identifiable {
     public var createdAt: Date { meta.createdAt }
     /// 最近一次保存时间：`updatedAt`，没有就用 `createdAt`（B10-12：旧数据多份同指纹时按它取最大的那份）。
     public var lastSavedAt: Date { meta.updatedAt ?? meta.createdAt }
+    /// 列表 / 查看页显示占位图而不是预览：旧版兜底还没迁移（预览可能带隐藏照片的像素），重画完成前不显示。
+    public var showsPlaceholder: Bool { meta.needsFallbackMigration }
     public init(meta: WorkMeta, previewURL: URL) {
         self.meta = meta
         self.previewURL = previewURL
@@ -363,24 +375,40 @@ public protocol WorkImageEncoding: Sendable {
     func writeFallback(_ image: PixelBuffer, into directory: URL) async throws -> WorkImageFile
 }
 
+/// 一次查询的结果：还在的 ID + 取不到的 ID 各自的原因（需求 4.8 第 5e 条，架构师 11-17 最终方案）。
+public struct PhotoAvailability: Sendable, Hashable {
+    /// 仍然存在、可访问（且不是隐藏）的。
+    public var present: Set<String>
+    /// 取不到的 → 原因（hidden / deleted / unknown）。
+    public var missing: [String: MissingReason]
+    public init(present: Set<String>, missing: [String: MissingReason]) {
+        self.present = present
+        self.missing = missing
+    }
+}
+
 /// 原照片还在不在（App 里是 `PHAsset.fetchAssets(withLocalIdentifiers:)`，一次批量查）。
 ///
-/// App 实现必须**不含隐藏照片**（includeHiddenAssets = false）：后来被隐藏的照片和已删除的一样返回「不在」（需求 v0.4 §4.8 5a）。
+/// App 实现必须**不含隐藏照片**（includeHiddenAssets = false）：后来被隐藏的照片和已删除的一样「不在」（需求 v0.4 §4.8 5a）。
+/// 取不到的原因另由 `PhotoFetch.classifyMissing`（唯一一处只读元数据的 includeHiddenAssets 例外）分出。
 public protocol PhotoExistenceChecking: Sendable {
-    /// 返回 `identifiers` 里仍然存在、可访问的那部分。
+    /// 返回 `identifiers` 里仍然存在、可访问的那部分（补格时查候选可见性用）。
     func existingIdentifiers(among identifiers: [String]) async -> Set<String>
+    /// 还在的 ID + 缺失原因（作品打开 / 导出前的缺图处理用）。**只读元数据，不请求任何图像。**
+    /// 默认：`existingIdentifiers` 之外的一律 `.unknown`（按隐藏处理）。
+    func availability(among identifiers: [String]) async -> PhotoAvailability
     /// 「取不到」能不能当成真的没了（完整相册权限时为 true）。受限访问 / 无权限时，没选进来的照片也取不到，
     /// 这时只计数提示，**不**改写作品（否则会把整张作品清空）。默认 true。
     func canConfirmMissing() async -> Bool
-    /// 取不到的原照片为什么取不到（隐藏 / 删除 / 拿不准，需求 4.8 第 5e 条）。**只读元数据，不请求任何图像**
-    /// （App 里是 `PhotoFetch.missingPhotoMetadata` + `MissingPhotoClassifier`）。默认一律「拿不准」（按隐藏处理，不用旧预览）。
-    func missingReasons(among identifiers: Set<String>) async -> [String: MissingPhotoReason]
 }
 
 extension PhotoExistenceChecking {
     public func canConfirmMissing() async -> Bool { true }
-    public func missingReasons(among identifiers: Set<String>) async -> [String: MissingPhotoReason] {
-        MissingPhotoClassifier.classify(identifiers, found: [:], fullAccess: false)
+    public func availability(among identifiers: [String]) async -> PhotoAvailability {
+        let present = await existingIdentifiers(among: identifiers)
+        var missing: [String: MissingReason] = [:]
+        for id in identifiers where !id.isEmpty && !present.contains(id) { missing[id] = .unknown }
+        return PhotoAvailability(present: present, missing: missing)
     }
 }
 

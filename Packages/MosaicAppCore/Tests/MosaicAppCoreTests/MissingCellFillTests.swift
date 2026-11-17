@@ -4,7 +4,7 @@ import MosaicCore
 @testable import MosaicAppCore
 
 /// 缺图格子的兜底分两种（需求 4.8 第 5e 条，架构师 11-17 意见二）：原照片被隐藏（或拿不准）→ 填目标图这一格的平均色；
-/// 确认删除 → 旧预览裁切（4b）。原因只靠只读元数据分（`missingReasons`），不请求任何图像。
+/// 确认删除 → 旧预览裁切（4b）。原因只靠只读元数据分（`availability` / `PhotoFetch.classifyMissing`），不请求任何图像。
 @MainActor
 final class MissingCellFillTests: XCTestCase {
     typealias RGB8 = FakeWorkImages.RGB8
@@ -12,7 +12,7 @@ final class MissingCellFillTests: XCTestCase {
     // MARK: 纯函数
 
     func testDecideTable() {
-        for reason in [MissingPhotoReason.hidden, .deleted, .unknown, nil] {
+        for reason in [MissingReason.hidden, .deleted, .unknown, nil] {
             XCTAssertEqual(MissingCellFill.decide(reason: reason, hasCandidate: true), .candidate, "有候选一律用候选")
         }
         XCTAssertEqual(MissingCellFill.decide(reason: .deleted, hasCandidate: false), .previewCrop)
@@ -22,10 +22,36 @@ final class MissingCellFillTests: XCTestCase {
     }
 
     func testClassifier() {
-        let full = MissingPhotoClassifier.classify(["h", "d", "v", ""], found: ["h": true, "v": false], fullAccess: true)
+        let full = MissingPhotoClassifier.classify(["h", "d", "v", ""], found: ["h": true, "v": false], access: .full)
         XCTAssertEqual(full, ["h": .hidden, "d": .deleted, "v": .unknown], "查到但不是隐藏（竞态）→ 拿不准；空 ID 忽略")
-        let limited = MissingPhotoClassifier.classify(["h", "d"], found: ["h": true], fullAccess: false)
+        let limited = MissingPhotoClassifier.classify(["h", "d"], found: ["h": true], access: .limited)
         XCTAssertEqual(limited, ["h": .hidden, "d": .unknown], "受限访问查不到不能算删除")
+        let none = MissingPhotoClassifier.classify(["d"], found: [:], access: .none)
+        XCTAssertEqual(none, ["d": .unknown], "没有权限：拿不准")
+    }
+
+    /// 分类只做一次元数据查询（全部 ID 一起），不请求任何图像：查询闭包只拿到 ID、只返回 isHidden，
+    /// 同时用计数缩略图假实现确认整个缺图处理过程取图 0 次。
+    func testClassifyMissingIsOneMetadataLookupAndNoImages() async throws {
+        var lookups: [[String]] = []
+        let r = MissingPhotoClassifier.classify(["b", "a", ""], access: .full) { ids in lookups.append(ids); return ["a": true] }
+        XCTAssertEqual(lookups, [["a", "b"]], "一次查询，空 ID 不查")
+        XCTAssertEqual(r, ["a": .hidden, "b": .deleted])
+        var none = 0
+        _ = MissingPhotoClassifier.classify([""], access: .full) { _ in none += 1; return [:] }
+        XCTAssertEqual(none, 0, "没有要查的 ID 不查")
+
+        let h = Harness()
+        let id = try await h.save(["a", "b", "c", "d", "e", "f"])
+        let work = try await h.store.load(id)
+        h.existence.hide("b"); h.existence.delete("c")
+        let before = h.images.state.get().imageReads
+        let availability = await h.existence.availability(among: work.layout.uniqueAssetIDs)
+        XCTAssertEqual(availability.missing, ["b": .hidden, "c": .deleted])
+        XCTAssertEqual(availability.present, ["a", "d", "e", "f"])
+        XCTAssertEqual(h.existence.metadataCalls.get(), 1)
+        XCTAssertEqual(h.images.state.get().imageReads, before, "分类不取任何图")
+        XCTAssertEqual(h.existence.imageRequests.get(), 0)
     }
 
     func testTargetColorIsCellAverage() throws {

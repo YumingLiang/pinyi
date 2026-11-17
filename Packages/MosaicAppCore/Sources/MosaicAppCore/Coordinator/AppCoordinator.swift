@@ -37,8 +37,6 @@ public final class AppCoordinator {
     var settingsBeforeQuickAgain: (settings: GenerationSettings, selection: SourceSelection)?
     /// 「存到我的作品」（`WorksController`）：未保存提示要问它当前结果存没存过、以及「保存」按钮去存。弱引用，不成环。
     public weak var resultSaver: (any CurrentResultSaving)?
-    /// 作品补格器（4b，`IndexWorkRematcher`）：它有自己的清晰度缓存（生成链路不再带 sharpness），相册变化时一起失效（P3）。
-    public var worksRematcher: (any MissingCellRematching)?
     /// 每换一次目标图 +1（PixelBuffer 不做内容比较，用代次判断「目标图换没换」）。
     var targetGeneration = 0
     /// `product` 是用哪组输入生成的（不含叠加强度）。设置页点「开始拼图」时若和当前输入一样，
@@ -326,7 +324,6 @@ public final class AppCoordinator {
     /// 到点做一次全量 diff + 扫描（决定 11）。时间走注入的时钟。
     public func libraryDidChange() {
         dependencies.generator.invalidateLocalResolution()   // 不合格的照片可能刚下载回本机
-        worksRematcher?.invalidateLocalResolution(dropping: [])   // 作品补格用的那份缓存也清（P3）
         changeDebouncer.noteChange(at: dependencies.clock.now())
         scheduleDebounce()
     }

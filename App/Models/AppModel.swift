@@ -52,7 +52,7 @@ final class AppModel: ObservableObject {
         let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
                                                              onExportSucceeded: relay.handler))
         self.coordinator = coordinator
-        // 4b 补格：索引快照 + 生成用的同一套匹配器和清晰度缓存（取不到时各自新建，零网络）
+        // 4b 补格：索引快照 + 生成用的同一套匹配器（一次匹配，不做逐张清晰度探测；架构师 11-17），零网络
         let runner = coordinator.dependencies.generator as? GenerationRunner
         let existence = PhotoKitExistenceChecker()
         let rematcher = IndexWorkRematcher(
@@ -61,7 +61,6 @@ final class AppModel: ObservableObject {
                 return try await coordinator.worksRematchSnapshot()
             },
             existence: existence,
-            sharpness: runner?.sharpness ?? LocalResolutionChecker(probe: PhotoKitResolutionProbe()),
             pipeline: runner?.pipeline ?? MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())))
         let worksController = WorksController(store: FileWorksStore(directory: WorksLocation.directory,
                                                                     images: ImageIOWorkImages(thumbnails: thumbnails)),
@@ -75,7 +74,6 @@ final class AppModel: ObservableObject {
             return c.workResultContext
         }, relay: relay)
         worksController.exportHandler = CoordinatorWorkExporter(coordinator: coordinator)
-        coordinator.worksRematcher = rematcher   // 相册变化时补格的清晰度缓存一起失效（P3）
         coordinator.resultSaver = worksController   // 「再拼一张」未保存提示：问存没存过 / 去存（弱引用）
         self.works = WorksModel(controller: worksController)
         self.state = coordinator.state
@@ -114,7 +112,10 @@ final class AppModel: ObservableObject {
         }
         if case .main = s.route, changeObserver == nil {
             changeObserver = LibraryChangeObserver { [weak self] in
-                Task { @MainActor in self?.coordinator.libraryDidChange() }
+                Task { @MainActor in
+                    self?.coordinator.libraryDidChange()
+                    self?.works.libraryDidChange()   // P3：相册变了，之前「重找过没找到」的作品下次打开再找
+                }
             }
         }
     }

@@ -44,6 +44,9 @@ jobs:
       - name: Hidden-photo guard self-test (rule 4 positive / negative cases)
         run: bash scripts/tests/check-photo-fetch-test.sh
 
+      - name: Hidden-photo guard self-test (rule 5 InternalTools only in Internal builds)
+        run: bash scripts/tests/check-photo-fetch-internal-test.sh
+
       - name: Localizable.strings 与文案表一致
         run: |
           apt-get update -qq && apt-get install -y -qq python3 >/dev/null

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-photo-fetch.sh 规则 2 唯一例外（PhotoFetch.missingPhotoMetadata，只读元数据）的正反例。
+# check-photo-fetch.sh 规则 2 唯一例外（PhotoFetch.classifyMissing，只读元数据）的正反例。
 # 每个用例在临时目录里搭一个最小的 App/，拷一份脚本进去跑，断言退出码。CI 的 Linux job 调用；本地直接运行。
 set -uo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,15 +29,15 @@ run_case() {
 
 PF=App/Adapters/PhotoFetch.swift
 OK_LINE='        o.includeHiddenAssets = true   // photo-fetch: hidden-metadata-only 只读元数据分类隐藏/删除，不请求图像'
-# 放在 missingPhotoMetadata 函数体里（规则 2b）
-fn() { printf 'enum PhotoFetch {\n    static func missingPhotoMetadata(_ ids: [String]) -> [String: Bool] {\n        let o = PHFetchOptions()\n%s\n%s\n        return [:]\n    }\n}' "$1" "${2:-}"; }
+# 放在 classifyMissing 函数体里（规则 2b）
+fn() { printf 'enum PhotoFetch {\n    static func classifyMissing(_ ids: Set<String>) -> [String: MissingReason] {\n        let o = PHFetchOptions()\n%s\n%s\n        return [:]\n    }\n}' "$1" "${2:-}"; }
 OK_FILE=$(fn "$OK_LINE")
 
 # ---- 正例 ----
 run_case "PhotoFetch.swift 函数体里带标记和理由" 0 $PF "$OK_FILE"
 run_case "函数体里注释提到 requestImage 不算" 0 $PF "$(fn "$OK_LINE" '        // 不调 requestImage')"
 run_case "没有任何 includeHiddenAssets = true" 0 $PF 'o.includeHiddenAssets = false'
-run_case "注释里提到不算" 0 $PF '// includeHiddenAssets = true 只能出现在 missingPhotoMetadata'
+run_case "注释里提到不算" 0 $PF '// includeHiddenAssets = true 只能出现在 classifyMissing'
 
 # ---- 反例 ----
 run_case "PhotoFetch.swift 里无标记" 1 $PF 'o.includeHiddenAssets = true'
@@ -47,7 +47,7 @@ run_case "其他文件带标记也不放行" 1 App/Works/WorksAdapters.swift "$O
 run_case "InternalTools 带标记也不放行" 1 App/InternalTools/TestAlbumWriter.swift "$OK_LINE"
 run_case "AppTests 带标记也不放行" 1 AppTests/Foo.swift "$OK_LINE"
 run_case "PhotoFetch.swift 里第二处" 1 $PF "$(fn "$OK_LINE" "$OK_LINE")"
-run_case "标记不在 missingPhotoMetadata 里（2b）" 1 $PF "$OK_LINE"
+run_case "标记不在 classifyMissing 里（2b）" 1 $PF "$OK_LINE"
 run_case "标记在别的函数里（2b）" 1 $PF $'enum PhotoFetch {\n    static func other() {\n'"$OK_LINE"$'\n    }\n}'
 run_case "函数体里请求图像 requestImage（2b）" 1 $PF "$(fn "$OK_LINE" '        PHImageManager.default().requestImage(for: a, targetSize: s, contentMode: .aspectFit, options: nil) { _, _ in }')"
 run_case "函数体里取资源（2b）" 1 $PF "$(fn "$OK_LINE" '        _ = PHAssetResource.assetResources(for: a)')"

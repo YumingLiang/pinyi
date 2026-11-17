@@ -1,33 +1,42 @@
 import Foundation
 import MosaicCore
 
-/// 原照片为什么取不到（需求 4.8 第 5e 条，架构师 11-17 意见「二」）。
-public enum MissingPhotoReason: Sendable, Hashable {
-    /// 照片还在，但被设成了隐藏。
+/// 原照片为什么取不到（需求 4.8 第 5e 条，架构师 11-17 最终方案）。
+public enum MissingReason: Sendable, Hashable {
+    /// 查得到且 `isHidden`：照片还在，被设成了隐藏。
     case hidden
-    /// 确认已删除（完整相册权限下按 ID 连隐藏照片也查不到）。
+    /// 完整授权下按 ID（连隐藏照片一起）查不到：确认已删除。
     case deleted
-    /// 拿不准（受限访问 / 无权限时查不到；或查到了却不是隐藏的，属于竞态）。一律按隐藏处理。
+    /// 其余（受限访问下查不到、无权限、查到却不是隐藏的竞态）：拿不准，按隐藏处理。
     case unknown
 }
 
-/// 把「只读元数据」的查询结果分成隐藏 / 删除 / 拿不准。纯函数，Linux 有测试。
-/// App 侧只调一次 `PhotoFetch.missingPhotoMetadata`（唯一的 includeHiddenAssets 例外，只看能不能查到、isHidden），不请求任何图像。
+/// 相册授权（分类用）。
+public enum LibraryAccess: Sendable, Hashable {
+    case full, limited, none
+}
+
+/// 缺图分类（纯逻辑，Linux 有测试）。App 侧 `PhotoFetch.classifyMissing` 把「连隐藏照片一起按 ID 查一次」的结果
+/// （查得到的 ID → isHidden）交给它；查询本身只读元数据，**不请求任何图像**。
 public enum MissingPhotoClassifier {
-    /// - Parameters:
-    ///   - ids: 取不到的原照片 ID。
-    ///   - found: 连隐藏照片一起查时查到的 ID → `isHidden`。
-    ///   - fullAccess: 完整相册权限。只有这时「查不到」才算确认删除。
-    public static func classify(_ ids: Set<String>, found: [String: Bool], fullAccess: Bool) -> [String: MissingPhotoReason] {
-        var out: [String: MissingPhotoReason] = [:]
+    public static func classify(_ ids: Set<String>, found: [String: Bool], access: LibraryAccess) -> [String: MissingReason] {
+        var out: [String: MissingReason] = [:]
         for id in ids where !id.isEmpty {
             if let hidden = found[id] {
                 out[id] = hidden ? .hidden : .unknown
             } else {
-                out[id] = fullAccess ? .deleted : .unknown
+                out[id] = access == .full ? .deleted : .unknown
             }
         }
         return out
+    }
+
+    /// 带查询的版本：`lookup` 只调一次（全部 ID 一起），返回查得到的 ID → isHidden。
+    public static func classify(_ ids: Set<String>, access: LibraryAccess,
+                                lookup: ([String]) -> [String: Bool]) -> [String: MissingReason] {
+        let list = ids.filter { !$0.isEmpty }.sorted()
+        guard !list.isEmpty else { return [:] }
+        return classify(Set(list), found: lookup(list), access: access)
     }
 }
 
@@ -43,7 +52,8 @@ public enum MissingCellFill: Sendable, Hashable {
     /// - Parameters:
     ///   - reason: 原照片缺失原因；nil（例如早就是空格子、原因已不可考）按拿不准处理。
     ///   - hasCandidate: 有没有找到合格的相近照片。
-    public static func decide(reason: MissingPhotoReason?, hasCandidate: Bool) -> MissingCellFill {
+    /// 有候选 → 用候选；deleted → 旧预览裁切（4b）；hidden / unknown / 不知道 → 目标图这一格的平均色（按格计入 works.missing）。
+    public static func decide(reason: MissingReason?, hasCandidate: Bool) -> MissingCellFill {
         if hasCandidate { return .candidate }
         switch reason {
         case .deleted: return .previewCrop

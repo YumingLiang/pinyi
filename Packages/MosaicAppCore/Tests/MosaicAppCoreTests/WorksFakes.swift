@@ -144,13 +144,16 @@ final class FakeWorkImages: WorkImageEncoding, Sendable {
 }
 
 /// 假「原照片还在不在」。`hidden` / `deleted` 里的 ID 都取不到（App 里按 ID 取图不含隐藏照片）；
-/// 缺图原因（`missingReasons`，只读元数据）按 App 同一套 `MissingPhotoClassifier` 分：隐藏的查得到且 isHidden，删除的查不到。
+/// 缺图原因（`availability`，只读元数据）按 App 同一套 `MissingPhotoClassifier` 分：隐藏的查得到且 isHidden，删除的查不到。
 final class FakeExistence: PhotoExistenceChecking, Sendable {
     let deleted = Locked(Set<String>())
     let hidden = Locked(Set<String>())
+    /// 查询次数（`existingIdentifiers` / `availability` 都算）。
     let calls = Locked(0)
-    /// `missingReasons` 被调了几次（只读元数据）。
+    /// 元数据分类（模拟 `PhotoFetch.classifyMissing` 那一次查询）被调了几次。
     let metadataCalls = Locked(0)
+    /// 分类时请求的图像次数（App 侧的分类绝不取图；假实现里没有取图路径，恒为 0，留作断言锚点）。
+    let imageRequests = Locked(0)
     /// false = 模拟受限访问 / 无权限（取不到也不能确认是真没了）。
     let fullAccess = Locked(true)
     func existingIdentifiers(among identifiers: [String]) async -> Set<String> {
@@ -159,12 +162,17 @@ final class FakeExistence: PhotoExistenceChecking, Sendable {
         return Set(identifiers.filter { !gone.contains($0) })
     }
     func canConfirmMissing() async -> Bool { fullAccess.get() }
-    func missingReasons(among identifiers: Set<String>) async -> [String: MissingPhotoReason] {
-        metadataCalls.update { $0 += 1 }
+    func availability(among identifiers: [String]) async -> PhotoAvailability {
+        let present = await existingIdentifiers(among: identifiers)
+        let missing = Set(identifiers.filter { !$0.isEmpty && !present.contains($0) })
+        guard !missing.isEmpty else { return PhotoAvailability(present: present, missing: [:]) }
         let h = hidden.get(), all = fullAccess.get()
-        // 受限访问时没选进来的照片元数据也查不到：隐藏的也查不到
-        let found = Dictionary(uniqueKeysWithValues: identifiers.filter { all && h.contains($0) }.map { ($0, true) })
-        return MissingPhotoClassifier.classify(identifiers, found: found, fullAccess: all)
+        let reasons = MissingPhotoClassifier.classify(missing, access: all ? .full : .limited) { ids in
+            metadataCalls.update { $0 += 1 }
+            // 受限访问时没选进来的照片元数据也查不到：隐藏的也查不到
+            return Dictionary(uniqueKeysWithValues: ids.filter { all && h.contains($0) }.map { ($0, true) })
+        }
+        return PhotoAvailability(present: present, missing: reasons)
     }
     /// 模拟在「照片」App 里把照片设为隐藏：PhotoKit 按 ID 取（includeHiddenAssets = false）不再返回它。
     func hide(_ ids: String...) { hidden.update { $0.formUnion(ids) } }

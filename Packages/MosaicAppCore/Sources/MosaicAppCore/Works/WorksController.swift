@@ -205,6 +205,8 @@ public final class WorksController {
     /// 结果页记住的「当前结果对应的作品」（B10-13）：存 / 更新成功后记下，和结果版本号绑定。
     /// 「再调一调」只改叠加强度再回来不重新生成、版本号不变 → 一直记得；换拼法 / 重新生成（版本号变了）才清掉。
     private var remembered: (revision: Int, id: WorkID)?
+    /// P3：作品 → 上次「重找留白格、没找到」时的布局指纹。布局没变、相册也没变就不再重找。
+    private var settledBlankRetries: [WorkID: String] = [:]
 
     private struct FingerprintKey: Equatable {
         var revision: Int
@@ -459,14 +461,20 @@ public final class WorksController {
         }
     }
 
-    /// 布局里取不到的原照片 ID。App 的 `PhotoExistenceChecking` 不含隐藏照片，所以后来被隐藏的和已删除的一样算缺失
-    /// （需求 v0.4 §4.8 5a：App 分不清、也不开能看到隐藏照片的查询）。
+    /// 布局里取不到的原照片 ID。App 的 `PhotoExistenceChecking` 不含隐藏照片，所以后来被隐藏的和已删除的一样算缺失（5a）。
     func missingAssetIDs(_ layout: MosaicLayout) async -> Set<String> {
-        let ids = layout.uniqueAssetIDs
-        guard !ids.isEmpty else { return [] }
-        let present = await existence.existingIdentifiers(among: ids)
-        return Set(ids.filter { !present.contains($0) })
+        Set(await missingAssets(layout).keys)
     }
+
+    /// 取不到的原照片 → 原因（hidden / deleted / unknown；只读元数据，不取图）。
+    func missingAssets(_ layout: MosaicLayout) async -> [String: MissingReason] {
+        let ids = layout.uniqueAssetIDs
+        guard !ids.isEmpty else { return [:] }
+        return await existence.availability(among: ids).missing
+    }
+
+    /// 相册变化（新照片、取消隐藏……）：之前「重找过、没找到」的记录作废，下次打开再找（P3）。
+    public func libraryDidChange() { settledBlankRetries.removeAll() }
 
     /// 缺图处理（photo-picker-v0.1 §5.1「我的作品」；需求 v0.4 §4.8 5a / 5b；hd-export-req-v0.2 F2 / F5「4b」）：
     /// - 没有缺失：什么都不动（不重画预览）。
@@ -488,25 +496,39 @@ public final class WorksController {
         var missingShown: Int
         /// 写进 meta.missingCount 的「还没处理的缺失原照片数」。
         var pending: Int
-        /// 还没处理的缺失格（导出时临时从预览裁切兜底）。
+        /// 还没处理的缺失格（导出时临时补：deleted 从预览裁切，其余填目标平均色）。
         var pendingCells: Set<Int> = []
+        /// 这些格子的缺失原因。
+        var pendingReasons: [Int: MissingReason] = [:]
     }
 
     func reconcileMissing(_ work: Work) async -> ReconcileOutcome? {
-        let missing = await missingAssetIDs(work.layout)
+        let reasons = await missingAssets(work.layout)
+        let missing = Set(reasons.keys)
         if Task.isCancelled { return nil }
-        // 之前兜底 / 留白的格子（找不到替代）：有补格器时每次打开再试一次，补上了按 works.replaced 提示一次
-        let retryBlanks = rematcher != nil && (work.meta.droppedPhotoCount > 0 || work.meta.fallbackCellCount > 0)
-            && work.layout.cellAssignments.contains { $0.localIdentifier.isEmpty }
+        // 旧版兜底（fallbackVersion < 2）：整体作废旧兜底图、重新走一遍，重画预览（不需要完整权限：不动缺失照片的格子）
+        let migrate = work.meta.needsFallbackMigration
+        // 之前兜底 / 留白的格子（找不到替代）：有补格器时再试一次，补上了按 works.replaced 提示一次。
+        // P3：同一布局重找过一次没找到，相册没变化之前不再重找（`libraryDidChange` 清记录；重开 App 也会再试一次）。
+        let hasBlanks = work.layout.cellAssignments.contains { $0.localIdentifier.isEmpty }
+        let retryBlanks = rematcher != nil && hasBlanks
+            && (work.meta.droppedPhotoCount > 0 || work.meta.fallbackCellCount > 0)
+            && (migrate || settledBlankRetries[work.id] != WorkFingerprint.of(work.layout))
         let pendingCells = Set(work.layout.cellAssignments.indices.filter { missing.contains(work.layout.cellAssignments[$0].localIdentifier) })
-        let unchanged = ReconcileOutcome(work: work, replaced: 0, missingShown: 0, pending: missing.count, pendingCells: pendingCells)
+        var pendingReasons: [Int: MissingReason] = [:]
+        for cell in pendingCells { pendingReasons[cell] = reasons[work.layout.cellAssignments[cell].localIdentifier] }
+        let unchanged = ReconcileOutcome(work: work, replaced: 0, missingShown: 0, pending: missing.count,
+                                         pendingCells: pendingCells, pendingReasons: pendingReasons)
         let nothingToDo = ReconcileOutcome(work: work, replaced: 0, missingShown: 0, pending: 0)
-        guard !missing.isEmpty || retryBlanks else { return nothingToDo }
-        guard await existence.canConfirmMissing() else { return unchanged }
-        var targets = missing
+        guard !missing.isEmpty || retryBlanks || migrate else { return nothingToDo }
+        let canConfirm = await existence.canConfirmMissing()
+        guard canConfirm || migrate else { return unchanged }
+        // 受限访问时只做迁移：缺失照片的格子不动（没选进来的照片也取不到，不能当成没了）
+        let fix = canConfirm ? missing : []
+        var targets = fix
         if retryBlanks { targets.insert("") }   // "" = 兜底 / 留白格，一起重新找
-        var result = WorkRematchResult.allBlank(work.layout, missing: missing)
-        if let rematcher {
+        var result = WorkRematchResult.allBlank(work.layout, missing: fix)
+        if let rematcher, !targets.isEmpty {
             var target: PixelBuffer?
             if let url = work.targetURL { target = try? await images.readTarget(at: url) }
             do {
@@ -514,27 +536,30 @@ public final class WorksController {
             } catch is CancellationError {
                 return nil
             } catch WorkRematchError.indexUnavailable {
-                return unchanged   // 索引还没好：不改作品，下次打开再补
+                if !migrate { return unchanged }   // 索引还没好：不改作品，下次打开再补（迁移照做：旧预览不能再显示）
             } catch {
                 // 补格本身出错：退回兜底（隐藏照片照样不会再出现）
             }
             lastRematchNote = result.note
         }
         if Task.isCancelled { return nil }   // 取消：不写回半成品
-        // 找不到相近照片时怎么补要看原照片为什么没了（隐藏 / 删除 / 拿不准，只读元数据，不取图）
-        let reasons = missing.isEmpty ? [:] : await existence.missingReasons(among: missing)
-        if Task.isCancelled { return nil }
         do {
-            let updated = try await store.applyRematch(result, base: work.layout, for: work.id, reasons: reasons)
-            guard updated.layout != work.layout else {
+            // 找不到相近照片的格子按 `MissingCellFill.decide(reason:)` 补：deleted → 旧预览裁切；hidden / unknown → 目标平均色
+            let updated = try await store.applyRematch(result, base: work.layout, for: work.id,
+                                                       reasons: canConfirm ? reasons : [:], migrateFallbacks: migrate)
+            if retryBlanks, updated.layout.cellAssignments.contains(where: { $0.localIdentifier.isEmpty }) {
+                settledBlankRetries[work.id] = WorkFingerprint.of(updated.layout)
+            }
+            guard updated.layout != work.layout || updated.meta != work.meta else {
                 // 没有改动（之前兜底的这次仍没补上）/ 已被别处处理
                 return missing.isEmpty ? nothingToDo : unchanged
             }
-            // P3：格子换掉之后清晰度缓存失效，被换掉的原照片（删除 / 隐藏）不再留在缓存里
-            rematcher?.invalidateLocalResolution(dropping: missing)
             let base = work.layout.cellAssignments, now = updated.layout.cellAssignments
             let newlyUnfilled = base.indices.filter { !base[$0].localIdentifier.isEmpty && now[$0].localIdentifier.isEmpty }.count
-            return ReconcileOutcome(work: updated, replaced: result.replacedCells, missingShown: newlyUnfilled, pending: 0)
+            return ReconcileOutcome(work: updated, replaced: result.replacedCells, missingShown: newlyUnfilled,
+                                    pending: canConfirm ? 0 : missing.count,
+                                    pendingCells: canConfirm ? [] : pendingCells,
+                                    pendingReasons: canConfirm ? [:] : pendingReasons)
         } catch {
             return unchanged
         }
@@ -571,14 +596,9 @@ public final class WorksController {
         // 兜底格（存盘的）+ 纯色格 + 没处理的缺失格（受限访问等，临时补：确认删除的从预览裁，其余填目标平均色）：
         // 导出放大填充，不出白格，颜色与预览一致
         let hasFill = updated.layout.cellAssignments.contains { $0.fallback || $0.fill != nil }
-        var transientReasons: [Int: MissingPhotoReason] = [:]
-        if !outcome.pendingCells.isEmpty {
-            let ids = Set(outcome.pendingCells.map { updated.layout.cellAssignments[$0].localIdentifier })
-            let byID = await existence.missingReasons(among: ids)
-            for cell in outcome.pendingCells { transientReasons[cell] = byID[updated.layout.cellAssignments[cell].localIdentifier] }
-        }
         let fallbacks = hasFill || !outcome.pendingCells.isEmpty
-            ? await store.fallbackTiles(for: updated.id, transientCells: outcome.pendingCells, transientReasons: transientReasons) : [:]
+            ? await store.fallbackTiles(for: updated.id, transientCells: outcome.pendingCells,
+                                        transientReasons: outcome.pendingReasons) : [:]
         await handler.exportWork(layout: updated.layout, target: target, fallbacks: fallbacks, purpose: purpose)
     }
 

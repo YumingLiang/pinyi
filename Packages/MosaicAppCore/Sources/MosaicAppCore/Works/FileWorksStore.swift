@@ -22,15 +22,17 @@ public protocol WorksStore: Sendable {
     func setMissingCount(_ count: Int, for id: WorkID) async throws
     /// 写回一次补格结果（4b）：新布局、预览兜底图、重画预览，累计 `replacedCellCount` / `fallbackCellCount` / `droppedPhotoCount`。
     /// 磁盘上的布局已经不是 `base`（期间别处已经处理过）或结果没有改动时，什么都不写，返回磁盘上的现状。
-    /// `reasons`：缺失原照片 → 原因（`MissingPhotoReason`）。找不到相近照片的格子按 `MissingCellFill.decide`：
+    /// `reasons`：缺失原照片 → 原因（`MissingReason`）。找不到相近照片的格子按 `MissingCellFill.decide`：
     /// 确认删除 → 旧预览裁切（`WorkFallbackImages`）；隐藏 / 拿不准 / 没给原因 → 目标图这一格的平均色（`CellAssignment.fill`）。
+    /// `migrateFallbacks`：旧版兜底（`WorkMeta.needsFallbackMigration`）整体作废——旧兜底图删掉、这些格子（这次没补上照片的）
+    /// 一律填目标平均色（旧预览可能已被隐藏像素污染，删除的也不裁），重画预览，写 `fallbackVersion = 2`。
     func applyRematch(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID,
-                      reasons: [String: MissingPhotoReason]) async throws -> Work
+                      reasons: [String: MissingReason], migrateFallbacks: Bool) async throws -> Work
     /// 导出用的格子填充图：已标记兜底的格子（存盘的兜底图）+ 纯色格（`fill`）+ `transientCells`（还没处理的缺失格，
     /// 受限访问 / 索引未就绪时临时补，**不**存盘：`transientReasons` 里确认删除的从当前预览裁，其余填目标平均色）。
     /// 读不到时缺的格子不在结果里（导出留白）。
     func fallbackTiles(for id: WorkID, transientCells: Set<Int>,
-                       transientReasons: [Int: MissingPhotoReason]) async -> [Int: PixelBuffer]
+                       transientReasons: [Int: MissingReason]) async -> [Int: PixelBuffer]
     /// 启动时清理上次被杀留下的临时目录 / 待删目录。
     func removeIncomplete() async
 }
@@ -329,17 +331,19 @@ public actor FileWorksStore: WorksStore {
     /// 不会出现「新布局 + 旧预览（还看得到隐藏照片）」。
     /// 指纹随新布局更新：从作品再导出成功后自动保存仍能查重命中，不会多出一份。
     public func applyRematch(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID,
-                             reasons: [String: MissingPhotoReason] = [:]) async throws -> Work {
-        try await serialized(id) { try await self.performApply(result, base: base, for: id, reasons: reasons) }
+                             reasons: [String: MissingReason] = [:], migrateFallbacks: Bool = false) async throws -> Work {
+        try await serialized(id) {
+            try await self.performApply(result, base: base, for: id, reasons: reasons, migrate: migrateFallbacks)
+        }
     }
 
     /// 不补格、全部兜底 / 留白（测试 / 没有补格器时）。
     public func dropMissingPhotos(_ assetIDs: Set<String>, for id: WorkID,
-                                  reasons: [String: MissingPhotoReason] = [:]) async throws -> Work {
+                                  reasons: [String: MissingReason] = [:]) async throws -> Work {
         try await serialized(id) {
             let work = try await self.load(id)
             return try await self.performApply(.allBlank(work.layout, missing: assetIDs), base: work.layout, for: id,
-                                               reasons: reasons)
+                                               reasons: reasons, migrate: false)
         }
     }
 
@@ -369,15 +373,19 @@ public actor FileWorksStore: WorksStore {
     }
 
     public func fallbackTiles(for id: WorkID, transientCells: Set<Int>,
-                              transientReasons: [Int: MissingPhotoReason] = [:]) async -> [Int: PixelBuffer] {
+                              transientReasons: [Int: MissingReason] = [:]) async -> [Int: PixelBuffer] {
         guard let work = try? await load(id) else { return [:] }
         let marked = work.layout.cellAssignments.indices.filter { work.layout.cellAssignments[$0].fallback }
-        var tiles = await storedFallbacks(work, cells: marked)
+        // 旧版兜底（还没迁移）：旧兜底图 / 当前预览都可能带隐藏像素，一律不用，旧兜底格也按目标色临时补
+        let legacy = work.meta.needsFallbackMigration
+        var tiles = legacy ? [:] : await storedFallbacks(work, cells: marked)
         for (cell, tile) in MissingCellFill.colorTiles(work.layout) { tiles[cell] = tile }
-        let extra = transientCells.filter { tiles[$0] == nil && $0 < work.layout.cellAssignments.count }.sorted()
+        var wanted = transientCells
+        if legacy { wanted.formUnion(marked) }
+        let extra = wanted.filter { tiles[$0] == nil && $0 < work.layout.cellAssignments.count }.sorted()
         guard !extra.isEmpty else { return tiles }
         // 没处理的缺失格：确认删除的从当前预览裁；隐藏 / 拿不准的填目标平均色（当前预览里可能就是隐藏照片的像素）
-        let crop = extra.filter { MissingCellFill.decide(reason: transientReasons[$0], hasCandidate: false) == .previewCrop }
+        let crop = legacy ? [] : extra.filter { MissingCellFill.decide(reason: transientReasons[$0], hasCandidate: false) == .previewCrop }
         let color = extra.filter { !crop.contains($0) }
         if !color.isEmpty {
             let target = await readTargetCopy(work)
@@ -402,8 +410,9 @@ public actor FileWorksStore: WorksStore {
     }
 
     private func performApply(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID,
-                              reasons: [String: MissingPhotoReason]) async throws -> Work {
+                              reasons: [String: MissingReason], migrate: Bool) async throws -> Work {
         let work = try await load(id)
+        let migrate = migrate && work.meta.needsFallbackMigration   // 别处已迁移过：按普通写回
         var layout = result.layout
         guard work.layout == base, layout.cols == base.cols, layout.rows == base.rows,
               layout.cellAssignments.count == base.cellAssignments.count else { return work }
@@ -413,7 +422,10 @@ public actor FileWorksStore: WorksStore {
         // - 补上了照片的：丢掉兜底图和纯色。
         let cells = base.cellAssignments.indices
         let newlyEmpty = cells.filter { !base.cellAssignments[$0].localIdentifier.isEmpty && layout.cellAssignments[$0].localIdentifier.isEmpty }
-        let keptFallback = cells.filter { base.cellAssignments[$0].fallback && layout.cellAssignments[$0].localIdentifier.isEmpty }
+        // 迁移时旧兜底图整体作废（不逐格判断）：仍空着的旧兜底格一律填目标色
+        let keptFallback = migrate ? [] : cells.filter { base.cellAssignments[$0].fallback && layout.cellAssignments[$0].localIdentifier.isEmpty }
+        let migratedCells = migrate
+            ? cells.filter { base.cellAssignments[$0].fallback && layout.cellAssignments[$0].localIdentifier.isEmpty } : []
         for i in cells {
             layout.cellAssignments[i].fallback = false
             let stillEmpty = layout.cellAssignments[i].localIdentifier.isEmpty
@@ -423,8 +435,9 @@ public actor FileWorksStore: WorksStore {
         let decisions = Dictionary(uniqueKeysWithValues: newlyEmpty.map {
             ($0, MissingCellFill.decide(reason: reasons[base.cellAssignments[$0].localIdentifier], hasCandidate: false))
         })
-        let cropCells = newlyEmpty.filter { decisions[$0] == .previewCrop }
-        let colorCells = newlyEmpty.filter { decisions[$0] == .targetColor }
+        // 迁移的那一次不裁旧预览（旧预览可能已被隐藏像素污染）：这次新空出来的删除格也填目标色
+        let cropCells = migrate ? [] : newlyEmpty.filter { decisions[$0] == .previewCrop }
+        let colorCells = newlyEmpty.filter { !cropCells.contains($0) } + migratedCells
         let target = await readOverlayTarget(work)
         if !cropCells.isEmpty, let old = try? await images.readImage(at: work.summary.previewURL) {
             for (cell, tile) in WorkFallbackImages.crop(from: old, cells: cropCells, layout: base, target: target,
@@ -437,7 +450,7 @@ public actor FileWorksStore: WorksStore {
             let copy = target != nil ? target : await readTargetCopy(work)   // 叠加时已读过就复用
             for cell in colorCells { layout.cellAssignments[cell].fill = MissingCellFill.targetColor(cell: cell, layout: base, target: copy) }
         }
-        guard layout != base else { return work }
+        guard layout != base || migrate else { return work }   // 迁移：即使布局没变也要重画预览、写版本 2
         // 纯色格的填充图（不进兜底图 atlas）：预览重画用；导出同样经 `fallbackTiles` 拿到同一颜色
         var drawTiles = tiles
         for (cell, t) in MissingCellFill.colorTiles(layout) { drawTiles[cell] = t }
@@ -477,6 +490,7 @@ public actor FileWorksStore: WorksStore {
             meta.previewPixelWidth = preview.pixelWidth
             meta.previewPixelHeight = preview.pixelHeight
             meta.fallbackFile = fallbackName
+            meta.fallbackVersion = WorkMeta.currentFallbackVersion
             meta.fingerprint = WorkFingerprint.of(layout)   // 当前口径（#17）；原来写的是 v1 口径
             meta.photoCount = layout.uniqueAssetIDs.count
             meta.droppedPhotoCount += result.droppedPhotos

@@ -1,5 +1,30 @@
 # CHANGES
 
+## feat/works-hidden（追加 5）：架构师 11-17 最终方案（#11 P0）
+
+- **merge origin/feat/app-layer 57eff11**（含 #19 的 5cd6eb4 和 #21），没有 rebase；CHANGES.md、linux-core.yml 两边都保留。A-21 测试保持与 app-layer 一致，不单独再改。
+- **分类接口**：`enum MissingReason { hidden, deleted, unknown }`；App 侧 `PhotoFetch.classifyMissing(_ ids: Set<String>) -> [String: MissingReason]`
+  （原 `missingPhotoMetadata` 改名、改返回值）：一次 `fetchAssets(withLocalIdentifiers:)` + `includeHiddenAssets`，只读查不查得到和 `isHidden`，
+  不请求图像；注释标明是唯一的 metadata-only 例外。规则：查到且 isHidden → hidden；受限访问且查不到 → unknown；完整权限且查不到 → deleted；其他 → unknown
+  （纯逻辑 `MissingPhotoClassifier.classify(_:access:lookup:)`，`LibraryAccess { full, limited, none }`）。
+- **`PhotoExistenceChecking.availability(among:) -> PhotoAvailability { present, missing: [ID: MissingReason] }`**：原「只回在的 ID」扩成「在的 ID + 缺失原因」，
+  `missingReasons` 去掉；`WorksController` 的缺图处理、导出临时补格都从这里拿原因，统一走 `MissingCellFill.decide`。
+- **去掉清晰度探测**：补格只做一次匹配（`rematch(_:missing:target:)`，没有逐张探测、没有 sharpness 参数）；删 `MissingCellRematching.invalidateLocalResolution`、
+  `LocalResolutionCache.remove`、`coordinator.worksRematcher`。测试：计数缩略图假实现断言补格取图 0 次、分类取图 0 次；源码守护 Works/ 下不出现
+  `LocalResolutionChecker` / `PhotoKitResolutionProbe` / `invalidateLocalResolution`。生成链路的 `GenerationRunner.invalidateLocalResolution` 不属于 Works，未动。
+- **旧作品兜底迁移（`WorkMeta.fallbackVersion = 2`）**：版本 < 2 且存过兜底格的作品，打开 / 导出时旧兜底图整体作废并删文件（不逐格判断），这些格子重新走
+  匹配 → 分类 → decide，旧作品里的删除格也一律填目标色（旧预览可能带隐藏像素）；只经 `FileWorksStore` 串行入口（`applyRematch(..., migrateFallbacks:)`）
+  重画预览 / 缩略图、写版本 2。受限访问也迁移（缺失照片的格子不动）；索引没好时也迁移（不补，只作废旧兜底）。新写的作品都带版本 2。
+  迁移完成前 `WorkSummary.showsPlaceholder`（= `needsFallbackMigration`）为真：列表显示灰底占位、查看页显示转圈，不解码旧预览；迁移前取兜底（`fallbackTiles`）也不用旧兜底图 / 旧预览。
+- **P3**：同一作品重找留白格没找到后记下布局指纹，相册没变化前再打开不重找；`WorksController.libraryDidChange()`（App 的相册变化回调里调）清记录。
+- **`check-photo-fetch.sh`**：规则 2 / 2b 改认 `classifyMissing`；新规则 5（TestAlbumWriter 等 InternalTools 豁免的前提）：InternalTools 下每个文件首尾是
+  `#if INTERNAL_TOOLS` / `#endif`，其类型在别处只能在 `#if INTERNAL_TOOLS` 内引用、AppTests 不引用，project.yml 只在 Debug / Internal 配置定义 INTERNAL_TOOLS、
+  不把 InternalTools 收进别的 target，xcconfig 不定义它。自测 `scripts/tests/check-photo-fetch-internal-test.sh`（16 例），linux-core 加一步。
+- 测试：新增 `WorksFallbackMigrationTests`（7 个：占位规则、打开迁移且哨兵色不出现在预览 / 兜底 / 导出 / 重开导出、迁移前取兜底不用旧图、受限访问迁移、
+  迁移时补格、P3 不重找直到相册变化、Works 源码守护）；`MissingCellFillTests` +1（分类一次元数据查询、取图 0 次）；AppTests 改为 `testClassifyMissingReturnsReasonsOnly`。
+- 纯色格的颜色存在 layout.json 每格的 `"fc"`（meta 不重复存）；`WorkFallbackImages` 只存删除格的裁切。
+- 不在本次：works_rematch 性能指标（随 feat/works-missing-fill）。
+
 ## feat/works-hidden（追加 4）：被隐藏的格子不用旧预览裁切（需求 4.8 第 5e 条，架构师 11-17 意见二）
 
 - **缺图兜底分两种**：找不到相近照片时，原照片**确认删除** → 照旧按 4b 用旧预览裁切（进 `WorkFallbackImages`）；**被隐藏或拿不准**

@@ -66,7 +66,8 @@ final class WorksRematchTests: XCTestCase {
         let dir = makeTempDir()
         let images: TargetImages
         let existence = FakeExistence()
-        let probe: FakeResolutionProbe
+        /// true = 取索引快照时卡住（模拟补格进行中），直到改回 false 或任务被取消。
+        let hang: Locked<Bool>
         let snap: Locked<IndexSnapshot?>
         let snapshotCalls = Locked(0)
         let store: FileWorksStore
@@ -75,22 +76,23 @@ final class WorksRematchTests: XCTestCase {
         let ids: [String]
         let cols: Int
 
-        @MainActor init(ids: [String], cols: Int, colors: [RGB], index: [(String, RGB)], unusable: Set<String> = [],
+        @MainActor init(ids: [String], cols: Int, colors: [RGB], index: [(String, RGB)],
                         hang: Bool = false, withTargetCopy: Bool = true) {
             self.ids = ids
             self.cols = cols
             let rows = ids.count / cols
             let t = WorksRematchTests.target(cols: cols, rows: rows, colors: colors)
             images = TargetImages(target: withTargetCopy ? t : nil)
-            probe = FakeResolutionProbe(unusable: unusable, hang: hang)
+            self.hang = Locked(hang)
             snap = Locked(WorksRematchTests.snapshot(index))
             store = FileWorksStore(directory: dir, images: images, now: FakeWallClock().provider)
-            let snapBox = snap, calls = snapshotCalls
+            let snapBox = snap, calls = snapshotCalls, hangBox = self.hang
             let rematcher = IndexWorkRematcher(snapshot: {
                 calls.update { $0 += 1 }
+                while hangBox.get() { try await Task.sleep(nanoseconds: 1_000_000) }   // 取消时 sleep 抛 CancellationError
                 guard let s = snapBox.get() else { throw WorkRematchError.indexUnavailable }
                 return s
-            }, existence: existence, sharpness: LocalResolutionChecker(probe: probe))
+            }, existence: existence)
             controller = WorksController(store: store, existence: existence, images: images, rematcher: rematcher)
             controller.exportHandler = exporter
         }
@@ -101,7 +103,7 @@ final class WorksRematchTests: XCTestCase {
             let rematcher = IndexWorkRematcher(snapshot: {
                 guard let s = snapBox.get() else { throw WorkRematchError.indexUnavailable }
                 return s
-            }, existence: existence, sharpness: LocalResolutionChecker(probe: probe))
+            }, existence: existence)
             let c = WorksController(store: FileWorksStore(directory: dir, images: images), existence: existence,
                                     images: images, rematcher: rematcher)
             c.exportHandler = exporter
@@ -121,23 +123,21 @@ final class WorksRematchTests: XCTestCase {
     static let workPhotos: [(String, RGB)] = [("a", (30, 30, 200)), ("b", (200, 30, 30)), ("c", (30, 200, 30)),
                                               ("d", (200, 200, 30)), ("e", (30, 200, 200)), ("f", (200, 30, 200))]
 
-    /// 缺图格换成「可见 + 通过清晰度探测」的最相近照片：更近的隐藏照片、更近的糊照片都被跳过；
-    /// 隐藏照片根本不送去探测；写回布局 + 重画预览，`works.replaced` 计格数，`works.missing` 不出现；重导出用替换后的布局。
-    func testMissingCellReplacedByNearestSharpVisiblePhoto() async throws {
-        let index = Self.workPhotos + [("hiddenRed", (200, 30, 30)), ("blurryRed", (204, 30, 30)), ("red2", (212, 34, 30)),
+    /// 缺图格换成「可见」的最相近照片（一次匹配，不做逐张清晰度探测，架构师 11-17）：更近的隐藏照片被跳过；
+    /// 写回布局 + 重画预览，`works.replaced` 计格数，`works.missing` 不出现；重导出用替换后的布局。
+    func testMissingCellReplacedByNearestVisiblePhoto() async throws {
+        let index = Self.workPhotos + [("hiddenRed", (200, 30, 30)), ("red1", (204, 30, 30)), ("red2", (212, 34, 30)),
                                        ("red3", (235, 60, 60)), ("gray", (128, 128, 128))]
-        let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors, index: index, unusable: ["blurryRed"])
+        let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors, index: index)
         let id = try await h.save()
         await h.controller.start()
         let before = try XCTUnwrap(h.controller.state.summaries.first)
 
         h.existence.hide("b", "hiddenRed")   // b 在作品里，后来被隐藏；hiddenRed 本来就是隐藏的（索引里还留着）
         await h.controller.open(id)
-        let expected = sampleLayout(["a", "red2", "c", "d", "e", "f"], cols: 3)
-        XCTAssertEqual(h.controller.openedWork?.layout, expected)
-        XCTAssertFalse(h.probe.calls.contains("hiddenRed"), "隐藏照片不送去探测，更不会被选上")
-        XCTAssertTrue(h.probe.calls.contains("blurryRed"), "更近的那张被探测出来不够清楚")
-        XCTAssertTrue(h.probe.calls.contains("red2"))
+        let expected = sampleLayout(["a", "red1", "c", "d", "e", "f"], cols: 3)
+        XCTAssertEqual(h.controller.openedWork?.layout, expected, "最近的 hiddenRed 被隐藏，选下一张可见的 red1")
+        XCTAssertFalse(h.controller.openedWork!.layout.cellAssignments.contains { $0.localIdentifier == "hiddenRed" })
         XCTAssertEqual(h.images.inner.state.get().previews, 2, "预览重新生成")
         XCTAssertNotEqual(h.controller.state.opened?.summary.previewURL, before.previewURL)
         XCTAssertEqual(try FakeWorkImages.previewHeader(XCTUnwrap(h.controller.state.opened?.summary.previewURL)),
@@ -191,15 +191,14 @@ final class WorksRematchTests: XCTestCase {
         h.controller.stop()
     }
 
-    /// 找不到替代（候选只有隐藏的和糊的）才兜底（旧预览裁切），按格计入 fallbackCellCount（droppedPhotoCount 照旧）；`works.missing` 显示。
+    /// 找不到替代（候选只有隐藏的）才兜底，按格计入 fallbackCellCount（droppedPhotoCount 照旧）；`works.missing` 显示。
     func testNoAcceptableCandidateLeavesBlankAndCounts() async throws {
-        let index = Self.workPhotos.filter { $0.0 != "a" && $0.0 != "c" } + [("hiddenRed", (200, 30, 30)), ("blurryRed", (204, 30, 30))]
-        // 索引里能选的只有：隐藏的 hiddenRed、糊的 blurryRed，以及作品里的 d e f（也设成糊的）→ 没有一张合格。
-        let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors, index: index,
-                        unusable: ["blurryRed", "d", "e", "f"])
+        // 索引里除了缺失的 b，只有隐藏的 hiddenRed、hiddenRed2 → 没有一张可见的候选。
+        let index: [(String, RGB)] = [("b", (200, 30, 30)), ("hiddenRed", (200, 30, 30)), ("hiddenRed2", (190, 40, 30))]
+        let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors, index: index)
         let id = try await h.save()
         await h.controller.start()
-        h.existence.hide("b", "hiddenRed")
+        h.existence.hide("b", "hiddenRed", "hiddenRed2")
         await h.controller.open(id)
         XCTAssertEqual(h.controller.openedWork?.layout,
                        sampleColorLayout(["a", "", "c", "d", "e", "f"], color: CellColor(r: 200, g: 30, b: 30), cols: 3),
@@ -268,7 +267,6 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.open(id)
         await h.controller.exportOpenedTapped(purpose: .save)
         XCTAssertEqual(h.snapshotCalls.get(), 0)
-        XCTAssertEqual(h.probe.calls, [])
         XCTAssertEqual(h.images.inner.state.get().previews, 1)
         XCTAssertEqual(try Data(contentsOf: metaURL), metaBefore)
         XCTAssertNil(h.controller.state.replacedLine)
@@ -305,7 +303,7 @@ final class WorksRematchTests: XCTestCase {
 
         let c = h.controller
         let task = Task { @MainActor in await c.open(id) }
-        while h.probe.calls.isEmpty { await Task.yield(); try await Task.sleep(nanoseconds: 1_000_000) }
+        while h.snapshotCalls.get() == 0 { await Task.yield(); try await Task.sleep(nanoseconds: 1_000_000) }
         task.cancel()
         await task.value
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted(), filesBefore)
@@ -315,7 +313,7 @@ final class WorksRematchTests: XCTestCase {
         XCTAssertEqual(disk.layout, sampleLayout(["a", "b", "c", "d", "e", "f"], cols: 3))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: h.dir.path).filter { $0.hasPrefix(".") }, [])
 
-        h.probe.state.update { $0.hang = false }
+        h.hang.set(false)
         await h.controller.open(id)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "red2", "c", "d", "e", "f"], cols: 3))
         h.controller.stop()
@@ -375,11 +373,10 @@ final class WorksRematchTests: XCTestCase {
     /// 留白（兜底）的 `works.missing` 同样只出一次：第二次打开、再导出、重开都不出（索引里一直没有可用的替代）。
     func testBlankNoticeShownOnlyOnce() async throws {
         let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)),
-                        index: [("a", (30, 30, 200)), ("c", (30, 200, 30)), ("blurryRed", (204, 30, 30))],
-                        unusable: ["blurryRed", "a", "c"])
+                        index: [("b", (200, 30, 30)), ("hiddenRed", (204, 30, 30))])   // 能选的只有隐藏的
         let id = try await h.save()
         await h.controller.start()
-        h.existence.hide("b")
+        h.existence.hide("b", "hiddenRed")
         await h.controller.open(id)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]), "第一次：出")
         XCTAssertNil(h.controller.state.replacedLine)
@@ -426,12 +423,11 @@ final class WorksRematchTests: XCTestCase {
     /// 留白提示（`works.missing`）同样自动消失；到点前关掉查看页再打开别的不会误清，重开同一张也不再出。
     func testMissingNoticeAutoDismissesAndCloseCancels() async throws {
         let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)),
-                        index: [("a", (30, 30, 200)), ("c", (30, 200, 30)), ("blurryRed", (204, 30, 30))],
-                        unusable: ["blurryRed", "a", "c"])
+                        index: [("b", (200, 30, 30)), ("hiddenRed", (204, 30, 30))])   // 能选的只有隐藏的
         let id = try await h.save()
         h.controller.cellNoticeDuration = .milliseconds(80)
         await h.controller.start()
-        h.existence.hide("b")
+        h.existence.hide("b", "hiddenRed")
         await h.controller.open(id)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         try await Self.waitUntil { h.controller.state.missingLine == nil }
@@ -454,46 +450,36 @@ final class WorksRematchTests: XCTestCase {
         XCTFail("等待超时")
     }
 
-    /// P3：替换格子之后清晰度缓存失效：被换掉的原照片（隐藏）不再留在「已知合格」里，不合格条目也清掉（可能刚下载回本机）；
-    /// 无关照片的「合格」结论保留。
-    func testReplacingCellsInvalidatesSharpnessCache() async throws {
-        let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors,
-                        index: Self.workPhotos + [("red2", (212, 34, 30))])
+    /// 补格只匹配一次、不请求任何图像：可见性只查一次（所有格子的候选并起来），不探测清晰度；
+    /// 隐藏照片（索引里还留着）永远不进补格结果。
+    func testRematchIsSingleMatchAndNeverPicksHidden() async throws {
+        // 6 格全缺；索引里离每格最近的都是隐藏照片，其次才是可见的
+        var index: [(String, RGB)] = []
+        for (i, c) in Self.cellColors.enumerated() {
+            index.append(("hidden\(i)", c))
+            index.append(("ok\(i)", (min(255, c.0 + 12), min(255, c.1 + 12), min(255, c.2 + 12))))
+        }
+        let ids = ["m0", "m1", "m2", "m3", "m4", "m5"]
+        let h = Harness(ids: ids, cols: 3, colors: Self.cellColors, index: index)
         let id = try await h.save()
-        let cache = try XCTUnwrap((h.controller.rematcher as? IndexWorkRematcher)?.sharpness?.cache)
-        cache.store(.usable, for: "b")
-        cache.store(.usable, for: "c")
-        cache.store(.unusable(.inCloud), for: "zz")
         await h.controller.start()
-        h.existence.hide("b")
+        h.existence.hide("m0", "m1", "m2", "m3", "m4", "m5")
+        for i in 0..<6 { h.existence.hide("hidden\(i)") }
+        let callsBefore = h.existence.calls.get()
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]))
-        XCTAssertNil(cache.verdict(for: "b"), "被换掉的 b 从缓存里去掉")
-        XCTAssertNil(cache.verdict(for: "zz"), "不合格条目清掉")
-        XCTAssertEqual(cache.verdict(for: "c"), .usable, "无关照片保留")
+        let layout = try XCTUnwrap(h.controller.openedWork?.layout)
+        XCTAssertEqual(layout.cellAssignments.map(\.localIdentifier), (0..<6).map { "ok\($0)" })
+        XCTAssertFalse(layout.cellAssignments.contains { $0.localIdentifier.hasPrefix("hidden") }, "隐藏照片永远不进补格结果")
+        XCTAssertEqual(h.existence.calls.get() - callsBefore, 2, "打开时查一次原照片 + 补格查一次候选可见性")
+        XCTAssertEqual(h.snapshotCalls.get(), 1, "只取一次索引、只匹配一次")
+        XCTAssertEqual(h.images.inner.state.get().imageReads, 0, "补格不读任何图像")
         h.controller.stop()
-    }
-
-    /// P3（AppCoordinator.libraryDidChange）：生成链路不再带 sharpness 后，相册变化也要清作品补格那份缓存。
-    func testLibraryDidChangeInvalidatesWorksRematcherCache() async throws {
-        let cache = LocalResolutionCache()
-        cache.store(.unusable(.inCloud), for: "x")
-        cache.store(.usable, for: "y")
-        let rematcher = IndexWorkRematcher(snapshot: { throw WorkRematchError.indexUnavailable }, existence: FakeExistence(),
-                                           sharpness: LocalResolutionChecker(probe: FakeResolutionProbe(unusable: []), cache: cache))
-        let ch = CoordinatorHarness(assets: 10)
-        ch.coordinator.worksRematcher = rematcher
-        ch.coordinator.libraryDidChange()
-        XCTAssertNil(cache.verdict(for: "x"), "相册变化：不合格条目清掉")
-        XCTAssertEqual(cache.verdict(for: "y"), .usable)
-        ch.coordinator.stop()
     }
 
     /// 之前留白的格子，后来有了合格的相近照片（新照片进了索引）：补上，按 `works.replaced` 出一次，之后不再出。
     func testBlankCellUpgradedLaterNotifiesReplacedOnce() async throws {
         let base: [(String, RGB)] = [("a", (30, 30, 200)), ("c", (30, 200, 30))]
-        let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)), index: base,
-                        unusable: ["a", "c"])
+        let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)), index: [])
         let id = try await h.save()
         await h.controller.start()
         h.existence.delete("b")   // 删除 → 旧预览裁切兜底（隐藏的纯色格见 testNoAcceptableCandidateLeavesBlankAndCounts）

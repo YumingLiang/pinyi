@@ -1,8 +1,10 @@
 import Foundation
 import MosaicCore
 
-// 4b「缺图补格」（hd-export-req-v0.2 F2 第 2 条 / F5；quick-start-req-v0.4 §4.8 5a / 5b；photo-picker-v0.1 §5.1）：
-// 作品里原照片取不到（删除或后来被隐藏）的格子，用本机、可见、本机版本 ≥ 256 px 的最相近照片替换。
+// 4b「缺图补格」（hd-export-req-v0.2 F2 第 2 条；quick-start-req-v0.4 §4.8 5a / 5b；photo-picker-v0.1 §5.1）：
+// 作品里原照片取不到（删除或后来被隐藏）的格子，用本机、可见的最相近照片替换。
+// 架构师 11-17：和生成链路（#13）一致，补格**只匹配一次**、不做逐张清晰度探测（PR #5 已取消）；糊不糊交给查看页清晰层（#15）
+// 和导出的 `ExportFillStats`。
 
 /// 一次补格的结果。
 public struct WorkRematchResult: Sendable, Equatable {
@@ -25,7 +27,7 @@ public struct WorkRematchResult: Sendable, Equatable {
         self.note = note
     }
 
-    /// 没有补格器 / 补格出错：全部清成空格子（写回时用旧预览兜底）。
+    /// 没有补格器 / 补格出错：全部清成空格子（写回时按 `MissingCellFill.decide` 补：删除 → 旧预览裁切，隐藏 / 拿不准 → 目标色）。
     public static func allBlank(_ layout: MosaicLayout, missing: Set<String>) -> WorkRematchResult {
         let cells = layout.cellAssignments.reduce(0) { $0 + (missing.contains($1.localIdentifier) ? 1 : 0) }
         let (out, dropped) = layout.clearingAssets(missing)
@@ -39,64 +41,46 @@ public enum WorkRematchError: Error, Sendable, Equatable {
 }
 
 /// 按索引补格（实现见 `IndexWorkRematcher`；测试可换假实现）。
+/// 输入只有布局、缺失 ID、目标图副本（架构师 11-17 意见三-1）：不认识 `WorkID`、不碰作品库，写回由调用方经
+/// `FileWorksStore` 的按作品串行入口做。5d 结果页 / 5e 后台队列也直接用它。
 /// 约定：Task 被取消时抛 `CancellationError`，调用方不写回任何东西。
 public protocol MissingCellRematching: Sendable {
     /// - Parameters:
-    ///   - layout: 作品当前布局。
+    ///   - layout: 当前布局。
     ///   - missing: 取不到的原照片 ID（删除或后来被隐藏）；含空串时之前留白的格子也一起重新找。
-    ///   - target: 作品里存的目标图副本（只读，算格子的目标特征）；没有时用相邻格子照片的特征估。
+    ///   - target: 目标图副本（只读，算格子的目标特征）；没有时用相邻格子照片的特征估。
     func rematch(_ layout: MosaicLayout, missing: Set<String>, target: PixelBuffer?) async throws -> WorkRematchResult
-    /// 清晰度缓存失效（P3）：相册变化时、以及替换格子之后调用。清掉不合格条目（可能刚下载回本机），
-    /// 并去掉 `dropping` 里的照片（刚被删 / 被隐藏、已经被换掉的原照片，不能再当「已知合格」兜底）。
-    func invalidateLocalResolution(dropping assetIDs: Set<String>)
 }
 
-public extension MissingCellRematching {
-    func invalidateLocalResolution(dropping assetIDs: Set<String>) {}
-}
-
-/// 用索引快照 + MosaicCore 距离内核补格。
+/// 用索引快照 + MosaicCore 距离内核补格（一次匹配，无逐张探测）。
 ///
 /// 数据来源：
 /// - **作品里存了什么**：`layout.json`（每格 localIdentifier + 裁剪、列 / 行、生成时目标图尺寸 `targetSize`、网格区域 `targetCrop`），
-///   `target.jpg`（目标图副本，长边 ≤ 4096；生成用的目标图本来就 ≤ 2048，所以通常与 `targetSize` 同尺寸），`preview.jpg`。
-///   **没有**存每格的目标特征，也没有存生成时的索引行号。
+///   `target.jpg`（目标图副本），`preview.jpg`。**没有**存每格的目标特征，也没有存生成时的索引行号。
 /// - **格子的目标特征**：有目标图副本时，把 `targetCrop` 按副本 / `targetSize` 比例换算，取该格的像素区域，用与生成**同一个**
-///   `FeatureExtractor` 提特征（同尺寸时与生成时逐位一致）。没有副本（例如从作品再导出时自动存的那份）时，用相邻 8 格里
-///   仍在索引中的照片的特征取平均；邻居都不在就留白。
-/// - **候选**：`snapshot()`（App 里是 `PhotoIndex.snapshot(for: .allPhotos)`），去掉缺失的照片和清晰度缓存里已知不合格的。
+///   `FeatureExtractor` 提特征。没有副本时，用相邻 8 格里仍在索引中的照片的特征取平均；邻居都不在就留白。
+/// - **候选** = 索引快照 ∩ `PhotoFetch.visibleImages`（`existence`，不含隐藏 / 删除）− 缺失的照片。
 ///
-/// 算法（沿用生成时「不能略糊」的做法，PR #5）：
-/// 1. 每个缺图格在候选里取 top‑k（`candidateCount`）近邻；按「不在作品里也不在相邻格」→「不在相邻格」→「最近」的顺序选一个
-///    （逐格选，前面补上的格子也算邻居）。
-/// 2. 只探测**选中的**照片：先查可见（`PhotoExistenceChecking`，不含隐藏照片——索引里可能还留着后来被隐藏的照片），
-///    再用 `LocalResolutionChecker` 查本机版本 ≥ 256 px；不合格的从候选掩码里去掉，只为这些格子重选，最多 `maxRematchRounds` 轮。
-/// 3. 轮数用完仍有格子没合格的：最后兜底只在「本次已确认可见且清晰」的照片里取最近的（忽略单张上限，与 `MosaicPipeline.refill` 一致）。
-/// 4. 仍然没有（索引里没有可用照片、特征口径对不上、候选全不合格、算不出目标特征）才清成空格子；
-///    写回时由存储层按 `MissingCellFill.decide` 补：原照片确认删除 → 旧预览裁切（`WorkFallbackImages`，没有旧预览才留白）；
-///    隐藏 / 拿不准 → 目标图这一格的平均色（`CellAssignment.fill`）。
+/// 算法（与 `MosaicPipeline.refill` 同一内核、同一 `refillCandidateCount`、同一邻居规则；忽略单张上限）：
+/// 1. 每个缺图格在「快照 − 缺失」里取 top‑k 近邻；
+/// 2. 把所有格子的 top‑k 候选并起来**一次**查可见（`existingIdentifiers`，批量、只查元数据），不可见的（索引里还留着、后来被隐藏 / 删除的）剔掉；
+/// 3. 逐格在可见候选里按「不在作品里也不在相邻格」→「不在相邻格」→「最近」选一张（前面补上的格子也算邻居）。
+/// 4. top‑k 里一张可见的都没有（索引为空、全不可见、算不出目标特征）才清成空格子；写回时按 `MissingCellFill.decide` 补。
 ///    索引暂时取不到（`snapshot()` 抛错）不算：抛 `WorkRematchError.indexUnavailable`，作品不动。
+/// 不请求任何图像（没有清晰度探测）。
 public struct IndexWorkRematcher: MissingCellRematching {
     public var snapshot: @Sendable () async throws -> IndexSnapshot
     public var existence: any PhotoExistenceChecking
-    public var sharpness: LocalResolutionChecker?
     public var pipeline: MosaicPipeline
     public var candidateCount: Int
 
     public init(snapshot: @escaping @Sendable () async throws -> IndexSnapshot, existence: any PhotoExistenceChecking,
-                sharpness: LocalResolutionChecker?, pipeline: MosaicPipeline = MosaicPipeline(),
+                pipeline: MosaicPipeline = MosaicPipeline(),
                 candidateCount: Int = MosaicPipeline.refillCandidateCount) {
         self.snapshot = snapshot
         self.existence = existence
-        self.sharpness = sharpness
         self.pipeline = pipeline
         self.candidateCount = max(1, candidateCount)
-    }
-
-    public func invalidateLocalResolution(dropping assetIDs: Set<String>) {
-        guard let cache = sharpness?.cache else { return }
-        cache.removeUnusable()
-        cache.remove(assetIDs)
     }
 
     public func rematch(_ layout: MosaicLayout, missing: Set<String>, target: PixelBuffer?) async throws -> WorkRematchResult {
@@ -114,17 +98,15 @@ public struct IndexWorkRematcher: MissingCellRematching {
             return .allBlank(layout, missing: missing)
         }
 
-        // 行 ↔ ID
+        // 行 ↔ ID；候选掩码：快照 ∧ 有 ID ∧ 不是缺失的照片
         var rowOf: [String: Int] = [:]
         var idOf: [Int: String] = [:]
         let rowCount = min(snap.assetIDsByRow.count, table.count)
         for row in 0..<rowCount where snap.library.mask[row] {
             if let id = snap.assetIDsByRow[row] { rowOf[id] = row; idOf[row] = id }
         }
-        // 候选掩码：快照 ∧ 有 ID ∧ 不是缺失的照片 ∧ 不是已知不合格的
-        let knownBad = sharpness?.cache.knownUnusable() ?? []
         var mask = BitMask(count: table.count)
-        for (row, id) in idOf where !missing.contains(id) && !knownBad.contains(id) { mask[row] = true }
+        for (row, id) in idOf where !missing.contains(id) { mask[row] = true }
 
         // 目标特征
         var queries: [Int: FeatureRecord] = [:]
@@ -137,70 +119,32 @@ public struct IndexWorkRematcher: MissingCellRematching {
 
         var ids = layout.cellAssignments.map(\.localIdentifier)
         for cell in todoCells { ids[cell] = "" }
-        let neighborhood = pipeline.assigner.configuration.neighborhood
-        var verifiedGood = Set<String>()
-        var pending = todoCells.filter { queries[$0] != nil }
-        var probed = 0, rounds = 0, fallbackCells = 0
-        let maxRounds = sharpness?.maxRematchRounds ?? LocalResolutionPolicy.maxRematchRounds
-
-        func choose(_ cells: [Int], allowed: BitMask) throws -> [Int: String] {
-            guard allowed.setCount > 0, !cells.isEmpty else { return [:] }
-            let k = min(candidateCount, allowed.setCount)
-            let top = try pipeline.assigner.kernel.topK(queries: FeatureMatrix(records: cells.map { queries[$0]! }),
-                                                        candidates: table.matrix, k: k, mask: allowed)
-            var picks: [Int: String] = [:]
-            var inWork = Set(ids).subtracting([""])
-            for (q, cell) in cells.enumerated() {
-                let cands = top.neighbors(forQuery: q).filter { $0.distance.isFinite }.compactMap { n in idOf[n.index] }
-                guard !cands.isEmpty else { continue }
-                let near = Set(grid.neighbors(of: cell, in: neighborhood).map { ids[$0] }).subtracting([""])
-                let pick = cands.first { !inWork.contains($0) && !near.contains($0) }
-                    ?? cands.first { !near.contains($0) } ?? cands[0]
-                ids[cell] = pick   // 后面的格子把它当邻居
-                inWork.insert(pick)
-                picks[cell] = pick
+        let pending = todoCells.filter { queries[$0] != nil }
+        var candidates: [Int: [String]] = [:]
+        if !pending.isEmpty, mask.setCount > 0 {
+            let k = min(candidateCount, mask.setCount)
+            let top = try pipeline.assigner.kernel.topK(queries: FeatureMatrix(records: pending.map { queries[$0]! }),
+                                                        candidates: table.matrix, k: k, mask: mask)
+            for (q, cell) in pending.enumerated() {
+                candidates[cell] = top.neighbors(forQuery: q).filter { $0.distance.isFinite }.compactMap { idOf[$0.index] }
             }
-            return picks
         }
-
-        while !pending.isEmpty {
-            try Task.checkCancellation()
-            let picks = try choose(pending, allowed: mask)
-            let chosen = Array(Set(picks.values).subtracting(verifiedGood))
-            var bad = Set<String>()
-            if !chosen.isEmpty {
-                // 可见（不含隐藏照片）
-                let visible = await existence.existingIdentifiers(among: chosen)
-                try Task.checkCancellation()
-                bad.formUnion(chosen.filter { !visible.contains($0) })
-                // 本机版本 ≥ 256 px
-                let toProbe = chosen.filter { visible.contains($0) }
-                if let checker = sharpness, !toProbe.isEmpty {
-                    let pass = try await checker.check(toProbe)
-                    probed += pass.probed
-                    bad.formUnion(pass.unusable)
-                }
-                verifiedGood.formUnion(chosen.filter { !bad.contains($0) })
-            }
-            for id in bad { if let r = rowOf[id] { mask[r] = false } }
-            let failed = pending.filter { picks[$0].map { bad.contains($0) } ?? true }
-            for cell in failed { ids[cell] = "" }
-            pending = failed
-            if pending.isEmpty { break }
-            if rounds < maxRounds, mask.setCount > 0, pending.contains(where: { picks[$0] != nil }) {
-                rounds += 1
-                continue
-            }
-            // 最后兜底：只在本次已确认可见且清晰的照片里取最近的
-            var allowed = BitMask(count: table.count)
-            for id in verifiedGood { if let r = rowOf[id] { allowed[r] = true } }
-            let last = try choose(pending, allowed: allowed)
-            fallbackCells = last.count
-            pending = pending.filter { last[$0] == nil }
-            for cell in pending { ids[cell] = "" }
-            break
-        }
+        // 候选只取可见的：所有格子的候选并起来查一次（索引里可能还留着后来被隐藏 / 删除的照片）
+        let union = Array(Set(candidates.values.joined())).sorted()
+        let visible = union.isEmpty ? Set<String>() : await existence.existingIdentifiers(among: union)
         try Task.checkCancellation()
+
+        let neighborhood = pipeline.assigner.configuration.neighborhood
+        var inWork = Set(ids).subtracting([""])
+        for cell in pending {
+            let cands = (candidates[cell] ?? []).filter { visible.contains($0) }
+            guard !cands.isEmpty else { continue }
+            let near = Set(grid.neighbors(of: cell, in: neighborhood).map { ids[$0] }).subtracting([""])
+            let pick = cands.first { !inWork.contains($0) && !near.contains($0) }
+                ?? cands.first { !near.contains($0) } ?? cands[0]
+            ids[cell] = pick   // 后面的格子把它当邻居
+            inWork.insert(pick)
+        }
 
         var out = layout
         var replaced = 0, blank = 0
@@ -216,7 +160,7 @@ public struct IndexWorkRematcher: MissingCellRematching {
                 out.cellAssignments[cell] = .init(localIdentifier: ids[cell])   // 新照片用整张居中正方形
             }
         }
-        let note = "补格 \(replaced) · 留白 \(blank) · 探测 \(probed) · 重选 \(rounds) 轮 · 兜底 \(fallbackCells) 格 · 素材 \(snap.availableCount)"
+        let note = "补格 \(replaced) · 留白 \(blank) · 候选 \(union.count) · 可见 \(visible.count) · 素材 \(snap.availableCount)"
         return WorkRematchResult(layout: out, replacedCells: replaced, blankCells: blank, droppedPhotos: droppedIDs.count, note: note)
     }
 
