@@ -23,6 +23,7 @@ public enum PresetShapes {
         Entry(id: .birthdayCake, path: birthdayCake()),
         Entry(id: .flower, path: flower()),
         Entry(id: .moon, path: moon()),
+        Entry(id: .fourLeafClover, path: fourLeafClover()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -181,6 +182,47 @@ extension PresetShapes {
         // 内弧：从上交点（内圆角度 360 − a2）逆向回到下交点（a2），走内圆左侧。
         b.arc(cx2, 0, r2, from: 360 - a2, to: a2)
         b.close()
+        return b.build()
+    }
+}
+
+// MARK: - 四叶草
+
+extension ShapePresetID {
+    /// 四叶草
+    public static let fourLeafClover = ShapePresetID(rawValue: "fourLeafClover")
+}
+
+extension PresetShapes {
+    /// 四叶草：4 片窄心形叶子（叶尖朝中心，上 / 右 / 下 / 左，各占一个 90° 扇区、彼此不重叠）
+    /// + 中心圆把叶子连起来 + 向右下的叶柄（宽 8）。
+    static func fourLeafClover() -> ShapePath {
+        // 叶子：爱心路径，叶尖 (50, 95) 平移到原点，横向缩 0.34、纵向缩 0.47（窄叶，叶片朝上）。
+        var leaf = ShapePathBuilder()
+        leaf.move(50, 26)
+        leaf.cubic(50, 10, 62, 0, 75, 0)
+        leaf.cubic(90, 0, 100, 12, 100, 28)
+        leaf.cubic(100, 55, 70, 72, 50, 95)
+        leaf.cubic(30, 72, 0, 55, 0, 28)
+        leaf.cubic(0, 12, 10, 0, 25, 0)
+        leaf.cubic(38, 0, 50, 10, 50, 26)
+        leaf.close()
+        var b = ShapePathBuilder()
+        let sx = 0.34, sy = 0.47
+        for k in 0..<4 {
+            let angle = Double(k) * Double.pi / 2
+            let c = cos(angle), sn = sin(angle)
+            b.append(leaf.elements) { p in
+                let x = (p.x - 50) * sx, y = (p.y - 95) * sy
+                return ShapePoint(x * c - y * sn, x * sn + y * c)
+            }
+        }
+        b.circle(0, 0, 13)
+        // 叶柄：从中心斜向右下（朝右下两片叶子之间）。
+        let end = ShapePoint(30, 52), half = 4.0
+        let len = (end.x * end.x + end.y * end.y).squareRoot()
+        let nx = -end.y / len * half, ny = end.x / len * half
+        b.polygon([ShapePoint(nx, ny), ShapePoint(-nx, -ny), ShapePoint(end.x - nx, end.y - ny), ShapePoint(end.x + nx, end.y + ny)])
         return b.build()
     }
 }
