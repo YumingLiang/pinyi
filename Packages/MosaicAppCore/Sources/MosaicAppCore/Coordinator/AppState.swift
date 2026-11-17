@@ -118,6 +118,8 @@ public struct AppState: Sendable, Hashable {
     public var isSavingBeforeLeaving = false
     /// 系统选择器选的照片用不了（`picker.unavailable`，copy v1.6）：弹着提示。不记原因。
     public var showsPickerUnavailable = false
+    /// 平台层：重新打开这张作品的查看页（「再拼一张」从作品查看页发起、在选图页取消时，回到发起页）。token 每次 +1。
+    public var reopenWorkRequest: WorkReopenRequest?
     /// 「换一张」时 +1：平台层看到变化就重新打开系统选择器。
     public var targetPickerReopenRequest = 0
     /// 提示里是否显示「增加可用照片」：只看整个 App 的授权是不是受限访问，不看这张照片。
@@ -225,4 +227,31 @@ public struct LowResExclusion: Sendable, Hashable {
     public func pruned(to sourceAssetIDs: Set<String>) -> LowResExclusion {
         LowResExclusion(selection: selection, assetIDs: assetIDs.intersection(sourceAssetIDs))
     }
+}
+
+/// 「再拼一张」从哪一页发起（选图提示「取消」时回到这一页，copy v1.6）。
+public enum QuickStartOrigin: Sendable, Hashable {
+    /// 预览页（结果页）的「再拼一张」。
+    case preview
+    /// 作品查看页的「再拼一张」。
+    case work(id: WorkID)
+    /// 「再调一调」设置页（没有作品 ID 的旧调用；从作品查看页发起的一律记 `.work(id:)`，产品 03:16 口径）。
+    case adjust
+}
+
+/// 平台层重新打开作品查看页的请求。
+public struct WorkReopenRequest: Sendable, Hashable {
+    public var workID: WorkID
+    public var token: Int
+    public init(workID: WorkID, token: Int) { self.workID = workID; self.token = token }
+
+    /// 压在主流程上的页（自下而上）：和平时一样「作品列表 → 查看页」（产品 03:25 第 3 条）。
+    /// 从查看页返回到作品列表，再返回才回主流程（主流程停在发起前那一页，例如「再调一调」设置页，原目标图和「完成」都在）。
+    public var routes: [WorksRoute] { [.list, .detail(workID)] }
+}
+
+/// 我的作品的导航页。
+public enum WorksRoute: Sendable, Hashable {
+    case list
+    case detail(WorkID)
 }
