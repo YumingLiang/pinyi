@@ -337,6 +337,25 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 
 不提供「连接网络重试」。本 App 零网络，失败不归因为网络。
 
+### 5.5 我的作品（⚠️ 待文案确认：取自 product/hd-export-req-v0.2 B 节，全栈先行补齐，正式文案以文案表更新为准）
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `works.entry` | 首页右上角入口 | 我的作品 |
+| `works.nav_title` | 作品列表页标题 | 我的作品 |
+| `works.empty` | 作品列表空状态 | 还没有作品，拼好的图可以存在这里 |
+| `works.keep_hint` | 作品列表底部常驻提示 | 删除 App 后作品会一起删除，想长期保留请导出到相册 |
+| `preview.save_to_works` | 结果页次按钮 | 存到我的作品 |
+| `preview.saved_to_works` | 结果页次按钮（已存过，不可再点） | 已存到我的作品 |
+| `works.save_failed` | 存作品失败（结果页） | 没能存到我的作品，请再试一次 |
+| `works.export` | 作品查看页按钮 | 导出 |
+| `works.delete` | 作品查看页按钮 | 删除 |
+| `works.delete.confirm` | 删除二次确认 | 删除这张作品？相册里的照片不会受影响。 |
+| `works.delete.confirm.ok` | 删除确认按钮 | 删除 |
+| `works.missing` | 查看页 / 导出前：原照片已删除的张数 | 有 {count} 张原照片已经删掉了，导出时这些小块会缺少原照片 |
+| `works.open_failed` | 作品读不出来 | 这张作品打不开了 |
+| `works.delete_failed` | 删除失败 | 没能删除，请再试一次 |
+
 ---
 
 ## 6. 其他通用界面文案

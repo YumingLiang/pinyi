@@ -201,7 +201,8 @@ struct CoordinatorHarness {
 
     init(assets: Int, thumbnails: GatedThumbnails = GatedThumbnails(), generator: GatedGenerator = GatedGenerator(),
          exporter: FakeExporter = FakeExporter(), config: PhotoIndex.Configuration = smallConfig(batch: 100, concurrency: 4),
-         preferences: FakePreferences = FakePreferences(), auth: PhotoAuthorization = .authorized) {
+         preferences: FakePreferences = FakePreferences(), auth: PhotoAuthorization = .authorized,
+         onExportSucceeded: @escaping @Sendable (MosaicLayout, URL) async -> Void = { _, _ in }) {
         library = FakePhotoLibrary(assetCount: assets)
         library.setAuth(auth)
         self.thumbnails = thumbnails
@@ -211,7 +212,8 @@ struct CoordinatorHarness {
         self.exporter = exporter
         let deps = AppDependencies(library: library, thumbnails: thumbnails, indexStore: store, clock: clock,
                                    lifecycle: lifecycle, preferences: preferences, generator: generator, exporter: exporter,
-                                   memory: memory, perf: PerfRecorder(), indexConfiguration: config, initialSeed: 42)
+                                   memory: memory, perf: PerfRecorder(), indexConfiguration: config, initialSeed: 42,
+                                   onExportSucceeded: onExportSucceeded)
         coordinator = AppCoordinator(dependencies: deps)
     }
 
