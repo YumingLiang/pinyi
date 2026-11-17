@@ -202,10 +202,22 @@ final class AppModel: ObservableObject {
 
     // MARK: 平台专属：目标图 / 预览
 
-    func loadTarget(data: Data?) {
+    // MARK: 系统选择器选的照片用不了（copy v1.6，判断在 AppCoordinator+PickerUnavailable）
+
+    var showsPickerUnavailable: Bool { state.showsPickerUnavailable }
+    var pickerUnavailableShowsAddAccess: Bool { state.pickerUnavailableShowsAddAccess }
+    var targetPickerReopenRequest: Int { state.targetPickerReopenRequest }
+    func pickedTargetUnavailable() { coordinator.pickedTargetUnavailable() }
+    func pickerUnavailableChange() { coordinator.pickerUnavailableChangeTapped() }
+    func pickerUnavailableCancel() { coordinator.pickerUnavailableCancelTapped() }
+    func pickerUnavailableAddAccess() { coordinator.pickerUnavailableAddAccessTapped() }
+    func pickerUnavailableDismissed() { coordinator.pickerUnavailableDismissed() }
+
+    /// 系统选择器选好、已过 PickedTargetGate：解码失败同样弹 picker.unavailable（不区分原因）。
+    func loadPickedTarget(data: Data?) {
         let t0 = perf.clock.now()
         guard let data, let pb = ImagePixels.downsampledTarget(from: data) else {
-            coordinator.setTarget(nil)
+            coordinator.pickedTargetUnavailable()
             return
         }
         perf.record(.targetDecode, seconds: perf.clock.now() - t0, items: pb.width * pb.height)

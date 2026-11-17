@@ -110,6 +110,12 @@ public struct AppState: Sendable, Hashable {
     public var unsavedPromptTitle: L10nKey { unsavedPromptIsUpdate ? .quickUnsavedUpdateTitle : .quickUnsavedTitle }
     /// 未保存提示里点了「保存」，正在存。
     public var isSavingBeforeLeaving = false
+    /// 系统选择器选的照片用不了（`picker.unavailable`，copy v1.6）：弹着提示。不记原因。
+    public var showsPickerUnavailable = false
+    /// 「换一张」时 +1：平台层看到变化就重新打开系统选择器。
+    public var targetPickerReopenRequest = 0
+    /// 提示里是否显示「增加可用照片」：只看整个 App 的授权是不是受限访问，不看这张照片。
+    public var pickerUnavailableShowsAddAccess: Bool { authorization == .limited }
 
     public init(initialSeed: UInt64) { flow = MainFlow(initialSeed: initialSeed) }
 
