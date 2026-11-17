@@ -13,7 +13,7 @@ ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --f
   1. CI 在结果文件第一行写 `{"runner_cpu": "...", "nproc": 4}`。
   2. 基线里有该机型（`by_cpu`，≥ 2 份结果才建）→ `比值 = 本次中位数 ÷ 同机型基线`，
      **比值 > 1.20 且 绝对差 > 10 ms → 失败**（`threshold.same_cpu.ratio`）。
-     依据：同一 job 内 5 次样本极差 ≤ 3%；同机型跨 run 的中位数偏差 ≤ ×1.03。
+     依据：同一 job 内 5 次样本极差多数 ≤ 4%、个别到 10%（取中位数后吸收）；同机型跨 run 的中位数偏差 ≤ ×1.03。
   3. 没有该机型 → 对照全局基线（所有结果的中位数），用标定归一化：
      `calib_cpu_scalar` 是固定单线程 CPU 负载（不判定），`speed = 本次 calib ÷ 基线 calib`，
      `归一化比值 = (本次中位数 ÷ 全局基线) ÷ speed`，**归一化比值 > 1.25 且 绝对差 > 10 ms → 失败**（`gate_on = normalized`）。
