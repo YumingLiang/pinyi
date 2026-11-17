@@ -1,0 +1,420 @@
+{
+  "schema": 1,
+  "platform": "GitHub ubuntu-latest + swift:6.3.3-noble（同 linux-core.yml 钉的 digest），swift test -c release",
+  "note": "2026-11-16 新增 QA App 层 8 个 runner_* 指标（#12 a976303 + #13 3021d32 + QA gen-perf 测试，head 1b3fbba）：run 44028766958 attempt 1–6。已有 6 个 MosaicCore 指标保留旧值：MosaicCore 代码自 2af277d 未变，新数据同机型（EPYC 7763 ×3）与旧基线差 ≤ +0.8%；全局中位数因本批机型偏慢上升 10–41%，不是代码变慢，不写入。",
+  "calibration_metric": "calib_cpu_scalar",
+  "threshold": {
+    "same_cpu": {
+      "ratio": 1.2,
+      "gate_on": "normalized"
+    },
+    "gate_on": "normalized",
+    "default": {
+      "ratio": 1.25,
+      "min_delta_ms": 10.0
+    },
+    "per_metric": {
+      "runner_slowpath_icloud_medium_1536x1152_2k": {
+        "min_delta_ms": 50.0
+      },
+      "runner_gen_coarse_1536x1152_2k": {
+        "min_delta_ms": 4.0
+      },
+      "runner_reshuffle_coarse_1536x1152_2k": {
+        "min_delta_ms": 4.0
+      },
+      "runner_gen_medium_1536x1152_2k": {
+        "min_delta_ms": 4.0
+      },
+      "runner_reshuffle_medium_1536x1152_2k": {
+        "min_delta_ms": 4.0
+      },
+      "runner_gen_fine_1536x1152_2k": {
+        "min_delta_ms": 4.0
+      },
+      "runner_reshuffle_fine_1536x1152_2k": {
+        "min_delta_ms": 4.0
+      }
+    },
+    "why": "15 次 runner 实测（5 种 CPU）：同一 job 内 5 次样本极差多数 ≤ 4%、个别到 10%（中位数吸收）；同机型跨 run 中位数偏差 ≤ ×1.03 → 同机型限 ×1.20；跨机型原始中位数相差到 ×2.2，按 calib_cpu_scalar 归一化后最慢机型 ≤ ×1.06、快机型被低估（×0.75–0.93）→ 无同机型基线时退回归一化 ×1.25。",
+    "why_per_metric": "runner_slowpath_*：耗时主要是 fake PhotoKit 的 sleep（5/60 ms），对调度抖动敏感（box 争用下单次 ×1.40、+27 ms 误报过一次）；真回归是 ×32 / +2 s，min_delta 50 ms 不影响检出。 runner_gen_* / runner_reshuffle_*：runner 上 6 次（44028766958），同机型（EPYC 7763 ×3）中位数偏差 ≤ 4.5%、按 calib 归一化后全部 ≤ ×1.045（≤ 5%）→ 按 QA 方案 V2.4 把 min_delta_ms 降到 4。",
+    "why_same_cpu_normalized": "同型号 CPU 的实例也会整体变慢：run 44028766958 attempt 6（EPYC 9V74）calib ×1.27、所有指标 ×1.27–1.29（代码未变）→ 同机型 ×1.20 误报。同机型比值也除以同机型 calib 系数后再判。"
+  },
+  "metrics": {
+    "calib_cpu_scalar": {
+      "median_ms": 49.885,
+      "runs": 15,
+      "run_medians_ms": [
+        63.089,
+        56.075,
+        55.996,
+        49.885,
+        56.068,
+        50.846,
+        49.077,
+        55.984,
+        49.723,
+        39.933,
+        39.848,
+        49.641,
+        56.006,
+        49.666,
+        49.86
+      ]
+    },
+    "gen_fine_2048x1536_50k": {
+      "median_ms": 3266.425,
+      "runs": 15,
+      "run_medians_ms": [
+        4254.167,
+        4024.413,
+        4037.927,
+        3225.417,
+        4025.116,
+        3266.425,
+        3271.402,
+        4122.54,
+        3218.251,
+        2508.57,
+        2524.632,
+        3203.694,
+        4061.244,
+        3214.962,
+        3242.949
+      ]
+    },
+    "gen_medium_2048x1536_50k": {
+      "median_ms": 1046.285,
+      "runs": 15,
+      "run_medians_ms": [
+        1420.202,
+        1320.352,
+        1316.29,
+        1026.25,
+        1314.047,
+        1047.094,
+        1046.285,
+        1344.613,
+        1023.649,
+        789.506,
+        790.119,
+        1018.771,
+        1324.09,
+        1023.52,
+        1031.232
+      ]
+    },
+    "overlay_blend_2048x1536": {
+      "median_ms": 70.596,
+      "runs": 15,
+      "run_medians_ms": [
+        89.801,
+        77.554,
+        77.614,
+        70.467,
+        77.593,
+        67.745,
+        67.895,
+        77.667,
+        70.57,
+        50.781,
+        50.581,
+        69.869,
+        77.885,
+        70.596,
+        71.09
+      ]
+    },
+    "sample_fine_2048x1536": {
+      "median_ms": 85.864,
+      "runs": 15,
+      "run_medians_ms": [
+        123.92,
+        130.686,
+        129.92,
+        71.966,
+        131.93,
+        85.864,
+        87.081,
+        132.289,
+        71.249,
+        60.332,
+        59.574,
+        70.79,
+        129.872,
+        72.038,
+        73.116
+      ]
+    },
+    "worst_uniform_medium_80x60_cap1_50k": {
+      "median_ms": 1326.233,
+      "runs": 15,
+      "run_medians_ms": [
+        1919.271,
+        1754.199,
+        1752.608,
+        1319.994,
+        1748.745,
+        1230.081,
+        1232.141,
+        1753.474,
+        1326.233,
+        862.783,
+        865.16,
+        1314.559,
+        1763.174,
+        1322.018,
+        1340.192
+      ]
+    },
+    "runner_gen_coarse_1536x1152_2k": {
+      "median_ms": 61.7,
+      "runs": 6,
+      "scaled_to_global_calib": true,
+      "run_medians_ms": [
+        78.768,
+        44.324,
+        78.768,
+        82.28,
+        63.409,
+        67.903
+      ]
+    },
+    "runner_gen_fine_1536x1152_2k": {
+      "median_ms": 122.182,
+      "runs": 6,
+      "scaled_to_global_calib": true,
+      "run_medians_ms": [
+        150.837,
+        98.13,
+        150.582,
+        149.718,
+        135.686,
+        140.977
+      ]
+    },
+    "runner_gen_medium_1536x1152_2k": {
+      "median_ms": 93.614,
+      "runs": 6,
+      "scaled_to_global_calib": true,
+      "run_medians_ms": [
+        106.446,
+        64.46,
+        105.199,
+        105.144,
+        91.848,
+        123.75
+      ]
+    },
+    "runner_preview_fetch_medium_1536x1152_2k": {
+      "median_ms": 27.575,
+      "runs": 6,
+      "scaled_to_global_calib": true,
+      "run_medians_ms": [
+        32.109,
+        26.67,
+        30.923,
+        31.466,
+        34.27,
+        33.242
+      ]
+    },
+    "runner_reshuffle_coarse_1536x1152_2k": {
+      "median_ms": 62.919,
+      "runs": 6,
+      "scaled_to_global_calib": true,
+      "run_medians_ms": [
+        78.864,
+        43.574,
+        78.951,
+        78.694,
+        64.167,
+        70.888
+      ]
+    },
+    "runner_reshuffle_fine_1536x1152_2k": {
+      "median_ms": 121.944,
+      "runs": 6,
+      "scaled_to_global_calib": true,
+      "run_medians_ms": [
+        151.319,
+        98.639,
+        148.057,
+        150.148,
+        136.077,
+        142.167
+      ]
+    },
+    "runner_reshuffle_medium_1536x1152_2k": {
+      "median_ms": 84.163,
+      "runs": 6,
+      "scaled_to_global_calib": true,
+      "run_medians_ms": [
+        106.221,
+        64.338,
+        104.88,
+        104.694,
+        92.729,
+        95.345
+      ]
+    },
+    "runner_slowpath_icloud_medium_1536x1152_2k": {
+      "median_ms": 168.689,
+      "runs": 6,
+      "scaled_to_global_calib": true,
+      "run_medians_ms": [
+        211.835,
+        129.225,
+        209.896,
+        209.792,
+        181.586,
+        191.156
+      ]
+    }
+  },
+  "by_cpu": {
+    "AMD EPYC 7763 64-Core Processor / 4c": {
+      "runs": 3,
+      "metrics": {
+        "calib_cpu_scalar": {
+          "median_ms": 56.006,
+          "runs": 5,
+          "run_medians_ms": [
+            56.075,
+            55.996,
+            56.068,
+            55.984,
+            56.006
+          ]
+        },
+        "gen_fine_2048x1536_50k": {
+          "median_ms": 4037.927,
+          "runs": 5,
+          "run_medians_ms": [
+            4024.413,
+            4037.927,
+            4025.116,
+            4122.54,
+            4061.244
+          ]
+        },
+        "gen_medium_2048x1536_50k": {
+          "median_ms": 1320.352,
+          "runs": 5,
+          "run_medians_ms": [
+            1320.352,
+            1316.29,
+            1314.047,
+            1344.613,
+            1324.09
+          ]
+        },
+        "overlay_blend_2048x1536": {
+          "median_ms": 77.614,
+          "runs": 5,
+          "run_medians_ms": [
+            77.554,
+            77.614,
+            77.593,
+            77.667,
+            77.885
+          ]
+        },
+        "runner_gen_coarse_1536x1152_2k": {
+          "median_ms": 78.768,
+          "runs": 3,
+          "run_medians_ms": [
+            78.768,
+            78.768,
+            82.28
+          ]
+        },
+        "runner_gen_fine_1536x1152_2k": {
+          "median_ms": 150.582,
+          "runs": 3,
+          "run_medians_ms": [
+            150.837,
+            150.582,
+            149.718
+          ]
+        },
+        "runner_gen_medium_1536x1152_2k": {
+          "median_ms": 105.199,
+          "runs": 3,
+          "run_medians_ms": [
+            106.446,
+            105.199,
+            105.144
+          ]
+        },
+        "runner_preview_fetch_medium_1536x1152_2k": {
+          "median_ms": 31.466,
+          "runs": 3,
+          "run_medians_ms": [
+            32.109,
+            30.923,
+            31.466
+          ]
+        },
+        "runner_reshuffle_coarse_1536x1152_2k": {
+          "median_ms": 78.864,
+          "runs": 3,
+          "run_medians_ms": [
+            78.864,
+            78.951,
+            78.694
+          ]
+        },
+        "runner_reshuffle_fine_1536x1152_2k": {
+          "median_ms": 150.148,
+          "runs": 3,
+          "run_medians_ms": [
+            151.319,
+            148.057,
+            150.148
+          ]
+        },
+        "runner_reshuffle_medium_1536x1152_2k": {
+          "median_ms": 104.88,
+          "runs": 3,
+          "run_medians_ms": [
+            106.221,
+            104.88,
+            104.694
+          ]
+        },
+        "runner_slowpath_icloud_medium_1536x1152_2k": {
+          "median_ms": 209.896,
+          "runs": 3,
+          "run_medians_ms": [
+            211.835,
+            209.896,
+            209.792
+          ]
+        },
+        "sample_fine_2048x1536": {
+          "median_ms": 130.686,
+          "runs": 5,
+          "run_medians_ms": [
+            130.686,
+            129.92,
+            131.93,
+            132.289,
+            129.872
+          ]
+        },
+        "worst_uniform_medium_80x60_cap1_50k": {
+          "median_ms": 1753.474,
+          "runs": 5,
+          "run_medians_ms": [
+            1754.199,
+            1752.608,
+            1748.745,
+            1753.474,
+            1763.174
+          ]
+        }
+      }
+    }
+  }
+}
