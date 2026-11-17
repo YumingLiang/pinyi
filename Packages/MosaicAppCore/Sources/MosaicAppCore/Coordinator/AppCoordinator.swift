@@ -519,13 +519,28 @@ public final class AppCoordinator {
         }
         generationTask = Task { [weak self] in
             defer { continuation.finish(); stageContinuation.finish() }
+            var selection = selection
+            var inputs = inputs
             do {
                 let p: GenerationProduct
                 if let previous {
                     p = try await generator.reshuffle(previous, target: target, settings: settings, seed: seed,
                                                       progress: progress, stage: stage)
                 } else {
-                    let snap = try await index.snapshot(for: selection)
+                    let snap: IndexSnapshot
+                    do {
+                        snap = try await index.snapshot(for: selection)
+                    } catch PhotoIndexError.albumUnreadable where !selection.isAllPhotos {
+                        // 所选相簿在「照片比较少」确认框弹着时 / 生成途中全被删了（产品 03:16、§2f 补充 8）：
+                        // 静默改用「全部照片」在同一次运行里继续，不提示、不算失败；全部照片不到 200 张也不再弹第二次「照片比较少」。
+                        guard let self, self.state.flow.generation.currentRunID == id else { throw CancellationError() }
+                        let old = self.state.flow.source.selection
+                        self.state.flow.source.albumsBecameUnreadable()
+                        self.silentSelectionPruned(from: old)
+                        selection = self.state.flow.source.selection
+                        inputs = self.currentInputs
+                        snap = try await index.snapshot(for: selection)
+                    }
                     p = try await generator.run(target: target, snapshot: snap, settings: settings, seed: seed,
                                                 progress: progress, stage: stage)
                 }

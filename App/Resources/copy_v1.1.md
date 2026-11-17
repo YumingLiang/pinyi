@@ -377,6 +377,8 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.counting` | 素材标签里的张数位置，相簿列表加载完之前（00:35） | 正在统计… |
 | `quick.source.summary_two` | 确认页，2 个相簿 | 素材：{name1}、{name2} · {count} 张 |
 | `quick.source.summary_many` | 确认页，3 个及以上 | 素材：{name1} 等 {n} 个相簿 · {count} 张 |
+| `quick.source.summary_counting` | 确认页，1 个相簿、没有相簿名且相簿列表没加载完（产品 03:16）；{count} 位置显示 `source.counting` | 素材：{count} |
+| `quick.source.summary_albums_counting` | 确认页，多个相簿、其中有相簿还没有名字且相簿列表没加载完（产品 03:25，§2f 补充 9）；{count} 位置显示 `source.counting` | 素材：{n} 个相簿 · {count} |
 
 ### 5.7 「再拼一张」（v1.4，21:20 定稿；quick-start-req-v1.0.md 22:58 定稿沿用，同步自产品文案表）
 

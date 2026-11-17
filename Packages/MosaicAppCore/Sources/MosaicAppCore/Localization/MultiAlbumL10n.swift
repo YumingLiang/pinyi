@@ -11,6 +11,10 @@ public extension L10nKey {
     static let quickSourceSummaryTwo = L10nKey(rawValue: "quick.source.summary_two")
     /// 参数：name1、相簿个数、count。
     static let quickSourceSummaryMany = L10nKey(rawValue: "quick.source.summary_many")
+    /// 1 个相簿、没有名字、还在统计：「素材：正在统计…」。参数：count（= `MultiAlbumText.countingArgument`）。
+    static let quickSourceSummaryCounting = L10nKey(rawValue: "quick.source.summary_counting")
+    /// 多个相簿、有相簿还没有名字、还在统计：「素材：N 个相簿 · 正在统计…」。参数：相簿个数、count（= 占位）。
+    static let quickSourceSummaryAlbumsCounting = L10nKey(rawValue: "quick.source.summary_albums_counting")
 
     /// 相簿列表顶部小字，只在受限访问（.limited）时显示（quick-start v1.0 §2f 补充 2）。
     static let albumsLimitedNote = L10nKey(rawValue: "albums.limited_note")
@@ -20,5 +24,6 @@ public extension L10nKey {
     static let allMultiAlbum: [L10nKey] = [
         sourceSelectionSummary, sourceSelectionNone, sourceSelectionDedupNote, sourceSelectionSummaryPending,
         sourceAlbumDone, quickSourceSummaryTwo, quickSourceSummaryMany, albumsLimitedNote, sourceCounting,
+        quickSourceSummaryCounting, quickSourceSummaryAlbumsCounting,
     ]
 }
