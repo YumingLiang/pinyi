@@ -24,6 +24,22 @@ ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --f
      局限：快机型归一化后偏低（×0.75–0.92），在没有同机型基线的快机型上灵敏度下降——碰到新机型就按下面步骤补基线。
 - 可在 `threshold.per_metric` 按指标覆盖 `ratio` / `min_delta_ms` / `same_cpu_ratio`。
 - 基线里有、本次没跑出来的指标 → 失败（防止门禁被悄悄删掉）；本次有、基线没有 → 🆕 只显示不判定。
+- **同一 job 内自动重测（11-17 起）**：第 1 次测量里超限的指标，只对它们所在的包（按结果文件推出 指标 → 包）
+  在同一个 job 里再跑一次 `--filter PerfGateTests`，得到第 2 份结果；**两次样本合并（5 + 5 = 10 个）取中位数，按同一套阈值再判一次**，
+  合并后仍超限才失败（第 2 次没跑出来也失败）。第 1 次全部通过就不重测；**缺失的指标直接失败、不重测**。
+  calib：第 2 次没有 calib（只重测了 MosaicAppCore）时沿用第 1 次的 calib（同一台 VM）；第 2 次自带 calib 时两次 calib 也合并。
+  job summary 里列出 基线 / 第 1 次中位数与比值 / 第 2 次中位数与比值 / 合并中位数与比值 / 结论（失败与否只看合并列）。
+  - 依据：PR #18 run 44038111294 attempt 1 里 `runner_gen_coarse` ×1.32、`runner_preview_fetch` ×1.36，是约 1 秒的集中突发
+    （preview 后两个样本 + 紧接着的 gen_coarse 整个用例，下一个用例就恢复），calib 在 40 秒后的另一个进程里测、看不到；
+    attempt 2 同一 commit gen_coarse ×0.99。min-of-samples 救不了（5 个样本都在突发里）。
+  - 为什么合并而不是「两次都超限才失败」：后者在通过/失败上等于取较好的一次，阈值附近的真回归检出率从 q 掉到 q²（QA PR #21 审查 P2-1）；
+    合并中位数只判一次，检出率仍约为 q。PR #18 形态（第 1 次 gen_coarse 整段 ×1.32、第 2 次 ×0.99）合并后 ×1.16 → 通过。
+  - 代价：第 1 次整段突发特别大（约 ×1.45 以上）时，即使第 2 次干净，合并中位数（≈ 两段的中点）也可能超限 → 失败，需要人工看 summary 或 rerun。
+  - 真回归（slowpath +2 s、稳定 ×1.3 以上）两次都在，合并后照样超限；只在第 1 次失败时多花约 10 秒到 1 分钟（只重测相关包、不重编）。
+  - 退出码：0 通过 / 1 失败（合并后仍超限、第 2 次缺失或第 1 次缺失）/ 其他 = 脚本或环境错误。脚本：`scripts/perf-gate-run.sh`（测量）+ `scripts/perf-gate.py check --retry-results`（判定）。
+  - 每次测量前后打印 `nproc`、`/proc/loadavg`、`/proc/stat` 的 steal（`[perf-diag]` 行，并附在 summary 末尾），**只作诊断，不参与判定**。
+- 判定逻辑的自测：`python3 scripts/test_perf_gate.py`（合成数据：只在第 1 次突发 → 过；两次都慢 → 挂；阈值附近、只第 1 次超限但合并后仍超限 → 挂；缺失 → 挂；preview +12 ms → 过、+16 ms → 挂；
+  另含 QA 边界用例 `QAPerfGateBoundaries`：刚好等于比值 / min_delta、只第 2 次超限、两个超限一个复现、缺失 + 超限、空重测文件、calib 沿用 / 自带、留痕等）。CI 在测量前先跑。
 - job summary 里有表：指标 / 基线 / 本次中位数 / 比值 / 归一化比值 / 本次极差 / 结果。
 
 ## 当前门禁指标（`Packages/MosaicCore/Tests/MosaicCoreTests/GenerationPerfGateTests.swift`）
@@ -79,7 +95,17 @@ python3 scripts/perf-gate.py check --results /tmp/p1/perf-results.jsonl
 新指标按全局 calib 缩放后写入全局，同机型只补新指标；新数据没覆盖到的同机型条目会被删掉。
 这样新一批 runner 偏慢（或偏快）不会把已有基线带偏。
 
-`threshold.per_metric`：`runner_slowpath_*` 的 `min_delta_ms` 为 50（QA，fake PhotoKit sleep 对调度敏感）；
+`threshold.per_metric`：`runner_slowpath_*` 的 `min_delta_ms` 为 50（QA，fake PhotoKit sleep 对调度敏感）；`runner_preview_fetch_*` 为 15（11-17）。PR #18 的 0838ac9 在 EPYC 7763 上比基线多约 9 ms。结论：**不是 preview 代码变慢**，而是与测试二进制（布局）有关、
+且有运行期成分的机器相关效应；具体机制（静态对齐）**没有证实**。证据（同一 runner 交错 A/B，run 44047313570 / 44049180048，原始数据见各 job 日志 / artifact）：
+- 最强的一条：同一份源码只删掉无关测试文件就换档。7763 上 230002d 完整测试 target 31.2 ms、只留 `GenPerf/` 测试 40.1 ms；0838ac9 反过来 38.1 / 31.0（1 台 7763，每个变体 first + 3 轮，取 3 轮共 15 个样本的中位数）。0838ac9 能跑到基线速度，说明 preview 路径没有 ≥ 1 ms 量级的真变慢。
+- preview 路径源码（ThumbnailPreviewPlan、GenPerf 夹具、MosaicCore）在 230002d..0838ac9 间未变；编译参数（-O -wmo -g -enable-testing）命令行哈希在各提交间一致；三个包的 Package.swift 相同、零第三方依赖；没有 actions/cache。
+- 5 台 7763（run 44047313570，每台 first + 5 轮 + 3 次单跑）：230002d 各轮中位数基本在 30.7–33.0、78ce569 在 36.7–37.8、0838ac9 在 37.3–41.7。Intel 8573C 上（25 个样本中位数）230002d 34.2 / 78ce569 35.4 / 0838ac9 35.2；box（Intel Xeon 8c）三者一样。
+- **同一二进制、不重编、交错重跑也会换档**：230002d 在一台上有一轮 40.1；78ce569 有两轮 46.4 / 48.8；0838ac9 有 48.3 / 50.6，且同一台上在 37.3–41.7 之间来回。所以不只是静态布局，还有运行期因素（地址随机化 / 堆对齐 / 缓存别名之类，未定位），同一 job 内重测也不一定能把 preview 拉回基线档。
+- 强制对齐（`-Xllvm -align-all-functions=6 -align-loops=64`）后 230002d / 0838ac9 都是 37.2：**只有 1 台 7763 × 3 轮**，不足以证明对齐就是机制。72d6109 / 9d35937 / a8b8641 的 37.4 / 37.3 / 37.1 是**未对齐**的完整构建，和对齐无关。
+- 其他机型：Intel 6973P 上同一 230002d 25.0、72d6109 / a8b8641 29.8、0838ac9 25.6，也有两档但与 7763 的快慢不对应；6975P、9V45 平。
+min_delta 15 ms 的依据：7763 上同一机器的稳定档位差到约 +9.8 ms（25 个样本的中位数 40.8 vs 31.0）；单轮偶发换档到 46–51 ms 时 15 ms 也盖不住，靠重测或人工 rerun。
+重复取图类真回归是 ≥ ×2（+30 ms 以上）仍能检出；代价是 preview 持续变慢 ≤ 15 ms（31 档时约 ×1.48）不报，40 档时余量只剩约 6 ms。
+根治建议（QA，后续）：计时里不含 fake 缩略图合成（setup 里预生成），或门禁构建固定对齐后在 7763 上多台 × 多轮验证再重定基线；之后 min_delta 改回 10；
 `runner_gen_*` / `runner_reshuffle_*` 为 4（runner 上 6 次：同机型偏差 ≤ 4.5%、归一化后 ≤ ×1.045）。
 
 不要用 box / 本机的结果更新基线（核数和 CPU 与 runner 不同）。
