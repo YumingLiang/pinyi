@@ -87,7 +87,7 @@
 - 导出照旧按 ID 经过 PhotoFetch 重新取图，不依赖 GoneLog
 
 ### 工作量（含单测）
-共用 GoneLog、assets.ids 和显示规则 1.5 天；5d 0.5 天；5e 检查和标记 0.5 天；后台替换队列、只重画变化格子、完成后换图和并发保护 1.5 天。合计约 4 天，另加 QA 真机 0.5 天。依赖：feat/works-hidden 的 5a 先合入
+共用 GoneLog、assets.ids 和显示规则 1.5 天；5d 0.5 天；5e 检查和标记 0.5 天；后台替换队列、只重画变化格子、完成后换图和并发保护 1.5 天。合计约 4 天，另加 QA 真机 0.5 天。依赖：#11（feat/works-hidden，含 5a 替换）先合进 feat/app-layer（开发都合进 feat/app-layer，不进 main；合不合由 AndyL 定）。注：5d 结果页的"保存时清掉标记"依赖 #17 的作品指纹，口径为格子分配 + cols/rows + targetCrop + seed，不含叠加强度，本方案不另定指纹
 
 ### QA 补充口径
 - 杀掉 App，到「照片」里隐藏一张已存作品用到的照片，再冷启动打开列表：这一张从头到尾都不出现旧缩略图
