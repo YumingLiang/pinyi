@@ -9,6 +9,11 @@ public struct SourceRow: Sendable, Hashable, Identifiable {
     public var countLine: LocalizedLine
     /// 当前张数（排序 / 测试用）。
     public var count: Int
+    /// 相簿还在列表里但打不开（§2f）：置灰、不能勾，显示 `source.album.unreadable`。
+    public var isUnreadable: Bool = false
+
+    /// 相簿 ID（全部照片为 nil）。
+    public var albumID: String? { if case .album(let id) = selection { return id }; return nil }
 }
 
 /// 来源页逻辑（决定 3 / 8、补充 Q2）。
@@ -23,10 +28,17 @@ public enum SourceListLogic {
     }
 
     /// 相簿行。隐藏资产数为 0 的相簿；扫描完成后也隐藏可用为 0 的相簿（选了也只能进空状态）。
+    /// 打不开的相簿（`unreadable`）照样列出，但置灰（§2f 21:20：打不开 ≠ 失效）。
     /// 顺序保持数据源顺序（PhotoKit 的相簿列表顺序）。
-    public static func albumRows(_ albums: [AlbumInfo], availableByAlbum: [String: Int], scanComplete: Bool) -> [SourceRow] {
+    public static func albumRows(_ albums: [AlbumInfo], availableByAlbum: [String: Int], scanComplete: Bool,
+                                 unreadable: Set<String> = []) -> [SourceRow] {
         albums.compactMap { a in
             guard a.assetCount > 0 else { return nil }
+            if unreadable.contains(a.id) {
+                let (line, n) = countLine(scanComplete: false, assetTotal: a.assetCount, available: 0)
+                return SourceRow(selection: .album(id: a.id), titleKey: nil, albumTitle: a.title, countLine: line, count: n,
+                                 isUnreadable: true)
+            }
             let avail = availableByAlbum[a.id] ?? 0
             if scanComplete && avail == 0 { return nil }
             let (line, n) = countLine(scanComplete: scanComplete, assetTotal: a.assetCount, available: avail,
@@ -61,11 +73,17 @@ public enum SourceListLogic {
     }
 }
 
-/// 来源选择状态（UI 单选）。
+/// 来源选择状态（§2f：「全部照片」和「相簿（可多选）」二选一）。
 public struct SourcePickerState: Sendable, Hashable {
     public var selection: SourceSelection = .allPhotos
     /// 相簿打不开（`source.album.unreadable`）时显示的提示。
     public var notice: L10nKey?
+    /// 相簿列表开着时正在勾的那组；nil = 列表没开。
+    public var draft: AlbumSelectionDraft?
+    /// 底部栏的去重合计（列表开着时）。
+    public var draftUnion: AlbumUnionCount?
+    /// 当前来源（相簿）的去重合计，确认页摘要用。全部照片时为 nil（用首项的张数）。
+    public var selectionUnion: AlbumUnionCount?
 
     public init(selection: SourceSelection = .allPhotos) { self.selection = selection }
 
@@ -74,14 +92,32 @@ public struct SourcePickerState: Sendable, Hashable {
         notice = nil
     }
 
+    /// 底部栏文案（列表开着时）。
+    public var draftBarLine: LocalizedLine? {
+        guard let d = draft else { return nil }
+        return MultiAlbumText.bar(selected: d.ids.count, union: draftUnion)
+    }
+
     /// 生成前取快照发现相簿已不存在：回到「全部照片」并提示。
     public mutating func albumBecameUnreadable() {
         selection = .allPhotos
         notice = .sourceAlbumUnreadable
     }
 
-    /// 相簿列表刷新后，若当前选中的相簿已消失，回退到全部照片并提示。
-    public mutating func reconcile(with rows: [SourceRow]) {
-        if case .album = selection, !rows.contains(where: { $0.selection == selection }) { albumBecameUnreadable() }
+    /// 相簿列表刷新后核对当前来源。
+    /// - 单个相簿（本次运行里选的）：消失或打不开 → 回到全部照片并提示（T4 原行为）。
+    /// - 多个相簿、或启动时从偏好恢复的（`silent`）：静默去掉不能选的，全去掉了回全部照片（§1a 验收 2、§2f）。
+    /// 列表开着时，勾选里不能选的也静默去掉。
+    public mutating func reconcile(with rows: [SourceRow], silent: Bool = false) {
+        let selectable = Set(rows.filter { !$0.isUnreadable }.compactMap(\.albumID))
+        switch selection {
+        case .allPhotos: break
+        case .album:
+            if silent { selection = selection.keepingSelectable(selectable) }
+            else if !selectable.contains(selection.albumIDs[0]) { albumBecameUnreadable() }
+        case .albums:
+            selection = selection.keepingSelectable(selectable)
+        }
+        draft?.keep(selectable)
     }
 }

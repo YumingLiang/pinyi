@@ -1,5 +1,19 @@
 # CHANGES
 
+## feat/album-multiselect：相簿多选 + 记住来源（quick-start-req v1.0 §1a、§2f，验收 12；photo-picker-v0.1 §6.4）
+
+**依赖 #18（feat/start-new）和 #17（已在 app-layer 78ce569）**：本分支已 merge `origin/feat/app-layer` 和 `origin/feat/start-new`（都是 merge，没有 rebase）。
+
+- 来源页：「全部照片」/「选择相簿（可多选）」二选一。点「选择相簿」弹出相簿列表，每行右侧圆形勾选框；底部固定栏「已选 {n} 个相簿 · 共 {count} 张（去重后）」（统计中显示 `summary_pending`，没勾显示 `source.selection.none`）+「完成」（没勾不可点）。点「全部照片」清空相簿勾选；关掉列表不改来源。
+- 选择模型：`SourceSelection.albums(ids:)`（按勾选顺序、去重；只勾 1 个存成 `.album`，含全部照片 → `.allPhotos`，0 个不允许保存）。素材 = 各相簿照片按 localIdentifier 去重后的并集（`MaterialUnion`，`PhotoIndex.snapshot(for: .albums)`），200 张门槛按去重合计算。
+- 记住来源（§1a）：整组相簿 ID 以 JSON 存在 `PreferenceDataStore` 的 `source.selection`（`SourceSelectionStore`，兼容旧单选格式）；启动即恢复。相簿被删 / 打不开：静默去掉，只少这一个；全部失效回到全部照片，不提示。
+- 打不开的相簿：列表里置灰、不能勾，显示 `source.album.unreadable`。共享相簿不显示（`albumCloudShared` / `albumMyPhotoStream` 不列；`AlbumCatalog.sections(includeCloudShared:)` 默认 false）。
+- 确认页素材摘要按 1 / 2 / 3+ 个相簿三种格式（`quick.source.summary` / `summary_two` / `summary_many`）。
+- **隐藏照片 / 隐藏相簿处处排除（合并条件）**：第一层 `includeHiddenAssets = false`；第二层 isHidden 后置过滤——按集合取图（`allImages` / `images(in:)`）、相簿封面（`keyAssets`）、按 ID 取图都改走 `PhotoFetch.visible*`（`VisibleAssetFilter`，与 #15 同一份实现，原样拷贝以便无冲突合并）；网格用 `VisibleIndexMap` 跳过隐藏项。`check-photo-fetch.sh` 规则 4 卡住直接用原始结果。
+- 文案：copy_v1.1.md（onboarding.3.body、source.album.option_desc、source.album.list_title）→ gen-localizable（181 key），`L10nKey.allMultiAlbum` 进 allUsed。
+- 测试：`MultiAlbumSourceTests` +14（规范化、恢复静默去掉 / 回退、并集去重、持久化往返 + 旧格式、勾选草稿、三种摘要 / 底栏文案、VisibleAssetFilter、VisibleIndexMap、协调器：重叠并集计数与持久化、打不开不能勾、全部照片清空、删掉一个只少一个、200 门槛按并集、snapshot 跳过打不开的相簿）；`AlbumCatalogTests` 共享相关用例显式 `includeCloudShared: true` + 新增默认不列共享。
+- 不在本次：结果页缓存失效（5d/5e）；网格（§4）还没接入本轮流程。
+
 ## feat/start-new：「再拼一张」+ 未保存提示（quick-start-req v1.0 §2a / §2b / §2e；hd-export-req B10 第 4、11 条）
 
 **依赖 #17（fix/works-delete，48b0569），需先合 #17。** 本分支已 merge `origin/feat/app-layer`（ed58064）和 `origin/fix/works-delete`（48b0569），都是 merge，没有 rebase。未保存提示要用 #17 的 `WorksController.unsavedPrompt` / `.needsUpdate` /「更新原作品」。

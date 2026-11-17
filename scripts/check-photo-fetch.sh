@@ -45,5 +45,21 @@ if [ -n "$matches" ]; then
   fail=1
 fi
 
+# 4) 按集合取图 / 封面要走 isHidden 后置过滤（相簿多选 PR 合并条件）：直接用 PhotoFetch.allImages( / images(in: /
+#    keyAssets( 的只允许 PhotoFetch.swift 自身、PhotoKitAssetGrid.swift（网格用 VisibleIndexMap 跳过隐藏项）和
+#    PhotoKitLibrary.swift（素材扫描缓存 fetch result 分批取，每批经 PhotoFetch.visibleObjects 过滤）；
+#    其余地方用 visibleImages(in:) / visibleObjects / visibleAllImagesCount / visibleKeyAssets。
+matches=$(grep -rEn --include='*.swift' 'PhotoFetch\.(allImages|images\(in:|keyAssets)[[:space:]]*\(?' App 2>/dev/null \
+  | grep -v '^App/InternalTools/' \
+  | grep -v '^App/Adapters/PhotoFetch.swift:' \
+  | grep -v '^App/Adapters/PhotoKitAssetGrid.swift:' \
+  | grep -v '^App/Adapters/PhotoKitLibrary.swift:' \
+  | code_only || true)
+if [ -n "$matches" ]; then
+  echo "::error::collection fetches must use PhotoFetch.visible* (isHidden post-filter):"
+  echo "$matches"
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then exit 1; fi
 echo "OK: all photo fetches go through PhotoFetch; no hidden assets / hidden album."

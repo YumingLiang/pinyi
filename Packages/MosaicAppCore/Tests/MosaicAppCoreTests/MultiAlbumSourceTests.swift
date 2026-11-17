@@ -1,0 +1,276 @@
+import XCTest
+@testable import MosaicAppCore
+
+/// 相簿多选 + 记住来源（quick-start v1.0 §1a、§2f、验收 9–12；design/photo-picker-v0.1 §6.4）
+/// + 按集合取图的 isHidden 后置过滤（多选 PR 合并条件）。
+final class MultiAlbumSourceTests: XCTestCase {
+
+    // MARK: 规范化 / 恢复（纯函数）
+
+    func testNormalizing() {
+        XCTAssertNil(SourceSelection.albums(normalizing: []), "0 个不允许保存")
+        XCTAssertNil(SourceSelection.albums(normalizing: ["", ""]))
+        XCTAssertEqual(SourceSelection.albums(normalizing: ["A"]), .album(id: "A"), "只勾 1 个存成单个相簿")
+        XCTAssertEqual(SourceSelection.albums(normalizing: ["B", "A", "B"]), .albums(ids: ["B", "A"]), "按勾选顺序、去重")
+        XCTAssertEqual(SourceSelection.albums(normalizing: ["A", AlbumEntry.allPhotosID]), .allPhotos, "含全部照片 → 全部照片")
+    }
+
+    func testKeepingSelectableDropsSilentlyAndFallsBack() {
+        let s = SourceSelection.albums(ids: ["A", "gone", "B"])
+        XCTAssertEqual(s.keepingSelectable(["A", "B"]), .albums(ids: ["A", "B"]), "删掉其中一个只少这一个（验收 6）")
+        XCTAssertEqual(s.keepingSelectable(["B"]), .album(id: "B"))
+        XCTAssertEqual(s.keepingSelectable([]), .allPhotos, "全部失效回到全部照片")
+        XCTAssertEqual(SourceSelection.album(id: "X").keepingSelectable([]), .allPhotos)
+        XCTAssertEqual(SourceSelection.allPhotos.keepingSelectable([]), .allPhotos)
+        XCTAssertEqual(s.albumIDs, ["A", "gone", "B"])
+        XCTAssertTrue(SourceSelection.allPhotos.isAllPhotos)
+        XCTAssertFalse(s.isAllPhotos)
+    }
+
+    func testUnionDedupKeepsFirstOrder() {
+        XCTAssertEqual(MaterialUnion.union([["a", "b", "c"], ["b", "c", "d"], []]), ["a", "b", "c", "d"], "并集，不是相加")
+        XCTAssertEqual(MaterialUnion.union([]), [])
+        XCTAssertEqual(MaterialUnion.union([["x", "x"]]), ["x"])
+    }
+
+    // MARK: 记住来源（§1a）
+
+    func testStoreRoundTripAndLegacyFormat() throws {
+        let data = InMemoryPreferenceData()
+        let store = SourceSelectionStore(backend: data)
+        XCTAssertNil(store.load())
+        store.save(.albums(ids: ["A", "B"]))
+        XCTAssertEqual(store.load(), .albums(ids: ["A", "B"]))
+        store.save(.album(id: "A"))
+        XCTAssertEqual(store.load(), .album(id: "A"))
+        // 旧版本写的单选格式（Swift 合成 Codable）直接能解
+        data.setData(Data(#"{"album":{"id":"T"}}"#.utf8), forKey: SourceSelectionStore.key)
+        XCTAssertEqual(store.load(), .album(id: "T"))
+        data.setData(Data(#"{"allPhotos":{}}"#.utf8), forKey: SourceSelectionStore.key)
+        XCTAssertEqual(store.load(), .allPhotos)
+        data.setData(Data("garbage".utf8), forKey: SourceSelectionStore.key)
+        XCTAssertNil(store.load(), "解不出来按全部照片处理")
+        // 只存相簿 ID：JSON 里没有照片 ID
+        store.save(.albums(ids: ["A", "B"]))
+        let json = String(decoding: data.data(forKey: SourceSelectionStore.key) ?? Data(), as: UTF8.self)
+        XCTAssertTrue(json.contains("\"A\"") && json.contains("\"B\""), json)
+    }
+
+    // MARK: 勾选（§2f）
+
+    func testDraft() {
+        var d = AlbumSelectionDraft(from: .allPhotos)
+        XCTAssertEqual(d.ids, [], "从全部照片进列表：一个都不预先勾")
+        XCTAssertFalse(d.canFinish)
+        XCTAssertNil(d.selection)
+        d.toggle("A", selectable: true); d.toggle("B", selectable: true); d.toggle("U", selectable: false)
+        XCTAssertEqual(d.ids, ["A", "B"], "打不开的不能勾")
+        XCTAssertTrue(d.canFinish)
+        XCTAssertEqual(d.selection, .albums(ids: ["A", "B"]))
+        d.toggle("A", selectable: true)
+        XCTAssertEqual(d.selection, .album(id: "B"))
+        d.keep([])
+        XCTAssertFalse(d.canFinish)
+        XCTAssertEqual(AlbumSelectionDraft(from: .albums(ids: ["X", "Y"])).ids, ["X", "Y"], "从相簿来源进来保留上次的勾选")
+    }
+
+    func testTextFormats() {
+        XCTAssertEqual(MultiAlbumText.bar(selected: 0, union: nil), LocalizedLine(.sourceSelectionNone, []))
+        XCTAssertEqual(MultiAlbumText.bar(selected: 2, union: AlbumUnionCount(count: 1234, pending: false)),
+                       LocalizedLine(.sourceSelectionSummary, ["2", "1,234"]))
+        XCTAssertEqual(MultiAlbumText.bar(selected: 3, union: AlbumUnionCount(count: 50, pending: true)),
+                       LocalizedLine(.sourceSelectionSummaryPending, ["3", "50"]))
+        // 验收 7 / 12：1、2、3 个相簿三种格式，名字按勾选顺序
+        XCTAssertEqual(MultiAlbumText.materialSummary(names: ["旅行"], count: 300),
+                       LocalizedLine(.quickSourceSummary, ["旅行", "300"]))
+        XCTAssertEqual(MultiAlbumText.materialSummary(names: ["宝宝", "旅行"], count: 1500),
+                       LocalizedLine(.quickSourceSummaryTwo, ["宝宝", "旅行", "1,500"]))
+        XCTAssertEqual(MultiAlbumText.materialSummary(names: ["宝宝", "旅行", "猫"], count: 9),
+                       LocalizedLine(.quickSourceSummaryMany, ["宝宝", "3", "9"]))
+        for k in L10nKey.allMultiAlbum { XCTAssertTrue(L10nKey.allUsed.contains(k), k.rawValue) }
+    }
+
+    // MARK: isHidden 后置过滤（合并条件）
+
+    func testVisibleAssetFilterDropsHiddenKeepsOrder() {
+        struct A { let id: String; let hidden: Bool }
+        let items = [A(id: "1", hidden: false), A(id: "2", hidden: true), A(id: "3", hidden: false), A(id: "4", hidden: true)]
+        XCTAssertEqual(VisibleAssetFilter.accepting(items, isHidden: \.hidden).map(\.id), ["1", "3"])
+        XCTAssertEqual(VisibleAssetFilter.accepting([A](), isHidden: \.hidden).count, 0)
+        XCTAssertEqual(VisibleAssetFilter.accepting([A(id: "h", hidden: true)], isHidden: \.hidden).count, 0)
+    }
+
+    func testVisibleIndexMapIdentityWhenNothingHidden() {
+        let m = VisibleIndexMap(rawCount: 5, isHidden: { _ in false })
+        XCTAssertTrue(m.isIdentity)
+        XCTAssertEqual(m.count, 5)
+        XCTAssertEqual(m.rawIndex(forVisible: 4), 4)
+        XCTAssertNil(m.rawIndex(forVisible: 5))
+        XCTAssertEqual(m.visibleIndex(forRaw: 2), 2)
+        XCTAssertNil(m.visibleIndex(forRaw: -1))
+    }
+
+    func testVisibleIndexMapSkipsHidden() {
+        let hidden: Set<Int> = [0, 3, 4, 7]
+        let m = VisibleIndexMap(rawCount: 8, isHidden: { hidden.contains($0) })
+        XCTAssertFalse(m.isIdentity)
+        XCTAssertEqual(m.count, 4)
+        XCTAssertEqual((0..<m.count).compactMap { m.rawIndex(forVisible: $0) }, [1, 2, 5, 6])
+        XCTAssertEqual(m.visibleIndex(forRaw: 5), 2)
+        XCTAssertNil(m.visibleIndex(forRaw: 3), "隐藏项在网格里没有下标")
+        XCTAssertNil(m.visibleIndex(forRaw: 8))
+        let all = VisibleIndexMap(rawCount: 3, isHidden: { _ in true })
+        XCTAssertEqual(all.count, 0)
+        XCTAssertNil(all.rawIndex(forVisible: 0))
+        XCTAssertEqual(VisibleIndexMap(rawCount: 0, isHidden: { _ in true }).count, 0)
+    }
+
+    // MARK: 协调器（真索引、假相册）
+
+    /// 300 张：A = a0..a149，B = a100..a249（重叠 50），C = a0..a29，U 打不开（在列表里但取不到）。
+    @MainActor
+    private func harness(prefs: InMemoryPreferenceData = InMemoryPreferenceData(), assets: Int = 300) -> CoordinatorHarness {
+        CoordinatorHarness(assets: assets, preferenceData: prefs, configureLibrary: { lib in
+            lib.state.update { s in
+                s.albums = [AlbumInfo(id: "A", title: "宝宝", assetCount: 150), AlbumInfo(id: "B", title: "旅行", assetCount: 150),
+                            AlbumInfo(id: "C", title: "猫", assetCount: 30), AlbumInfo(id: "U", title: "坏的", assetCount: 5)]
+                s.albumMembers = ["A": (0..<150).map { "a\($0)" }, "B": (100..<250).map { "a\($0)" },
+                                  "C": (0..<30).map { "a\($0)" }]
+            }
+        })
+    }
+
+    @MainActor
+    private func ready(_ h: CoordinatorHarness) async {
+        let c = h.coordinator
+        c.start(); await c.settle()
+        await waitFor(c, "扫描完成") { SourceListLogic.isScanComplete($0.indexStatus) }
+        await c.refreshAlbums()
+    }
+
+    @MainActor
+    func testPickTwoOverlappingAlbumsCountsUnionAndPersists() async throws {
+        let prefs = InMemoryPreferenceData()
+        let h = harness(prefs: prefs)
+        let c = h.coordinator
+        await ready(h)
+        XCTAssertEqual(c.state.albumRows.map(\.albumID), ["A", "B", "C", "U"])
+        XCTAssertEqual(c.state.albumRows.last?.isUnreadable, true, "打不开的相簿还在列表里，置灰")
+
+        c.openAlbumList()
+        XCTAssertEqual(c.state.flow.source.draft?.ids, [])
+        XCTAssertEqual(c.state.flow.source.draftBarLine, LocalizedLine(.sourceSelectionNone, []))
+        XCTAssertFalse(c.finishAlbumSelection(), "没勾选「完成」不可点")
+        c.toggleAlbum("U")
+        XCTAssertEqual(c.state.flow.source.draft?.ids, [], "打不开的不能勾")
+        c.toggleAlbum("A"); c.toggleAlbum("B")
+        await waitFor(c, "合计") { $0.flow.source.draftUnion?.count == 250 }
+        XCTAssertEqual(c.state.flow.source.draftBarLine, LocalizedLine(.sourceSelectionSummary, ["2", "250"]),
+                       "去重合计 = 并集 250，不是 300")
+        XCTAssertTrue(c.finishAlbumSelection())
+        XCTAssertNil(c.state.flow.source.draft)
+        XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "B"]))
+        XCTAssertEqual(SourceSelectionStore(backend: prefs).load(), .albums(ids: ["A", "B"]), "记住整组")
+        XCTAssertEqual(c.state.materialSummary(allPhotosTitle: "全部照片"),
+                       LocalizedLine(.quickSourceSummaryTwo, ["宝宝", "旅行", "250"]))
+
+        c.openAlbumList()
+        XCTAssertEqual(c.state.flow.source.draft?.ids, ["A", "B"], "再进列表保留上次的勾选")
+        c.toggleAlbum("C")
+        XCTAssertTrue(c.finishAlbumSelection())
+        await waitFor(c, "三个的合计") { $0.flow.source.selectionUnion?.count == 250 }
+        XCTAssertEqual(c.state.materialSummary(allPhotosTitle: "全部照片"),
+                       LocalizedLine(.quickSourceSummaryMany, ["宝宝", "3", "250"]))
+
+        c.selectSource(.allPhotos)
+        XCTAssertEqual(c.state.flow.source.selection, .allPhotos, "点全部照片清空相簿勾选")
+        XCTAssertEqual(SourceSelectionStore(backend: prefs).load(), .allPhotos)
+        c.openAlbumList()
+        XCTAssertEqual(c.state.flow.source.draft?.ids, [], "从全部照片进来不预先勾")
+        c.closeAlbumList()
+        XCTAssertEqual(c.state.flow.source.selection, .allPhotos, "关掉列表不改来源")
+        c.stop()
+    }
+
+    @MainActor
+    func testRestoreDropsMissingSilentlyAndFallsBack() async throws {
+        let prefs = InMemoryPreferenceData()
+        SourceSelectionStore(backend: prefs).save(.albums(ids: ["A", "gone", "U", "B"]))
+        let h = harness(prefs: prefs)
+        let c = h.coordinator
+        XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "gone", "U", "B"]), "启动即恢复")
+        await ready(h)
+        XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "B"]), "删掉的、打不开的静默去掉")
+        XCTAssertNil(c.state.flow.source.notice, "不提示")
+        c.stop()
+
+        let prefs2 = InMemoryPreferenceData()
+        SourceSelectionStore(backend: prefs2).save(.albums(ids: ["gone1", "gone2"]))
+        let h2 = harness(prefs: prefs2)
+        await ready(h2)
+        XCTAssertEqual(h2.coordinator.state.flow.source.selection, .allPhotos, "全部失效回到全部照片")
+        XCTAssertNil(h2.coordinator.state.flow.source.notice)
+        XCTAssertEqual(SourceSelectionStore(backend: prefs2).load(), .allPhotos)
+        h2.coordinator.stop()
+
+        let prefs3 = InMemoryPreferenceData()
+        SourceSelectionStore(backend: prefs3).save(.album(id: "gone"))
+        let h3 = harness(prefs: prefs3)
+        await ready(h3)
+        XCTAssertEqual(h3.coordinator.state.flow.source.selection, .allPhotos, "单个记住的相簿没了：静默回全部照片（§1a 验收 2）")
+        XCTAssertNil(h3.coordinator.state.flow.source.notice)
+        h3.coordinator.stop()
+    }
+
+    @MainActor
+    func testAlbumRemovedLaterOnlyDropsThatOne() async throws {
+        let h = harness()
+        let c = h.coordinator
+        await ready(h)
+        c.openAlbumList(); c.toggleAlbum("A"); c.toggleAlbum("B"); c.toggleAlbum("C")
+        XCTAssertTrue(c.finishAlbumSelection())
+        h.library.state.update { s in s.albums.removeAll { $0.id == "B" }; s.albumMembers["B"] = nil }
+        await c.refreshAlbums()
+        XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "C"]), "删掉其中一个，只少这一个（验收 6）")
+        XCTAssertNil(c.state.flow.source.notice)
+        c.stop()
+    }
+
+    /// 200 张门槛按去重合计算（验收 4）；生成用的素材是并集（验收 2）。
+    @MainActor
+    func testShortageUsesDedupedUnion() async throws {
+        let h = harness()
+        let c = h.coordinator
+        await ready(h)
+        c.setTarget(try CoordinatorHarness.target())
+        c.openAlbumList(); c.toggleAlbum("A"); c.toggleAlbum("C")   // 并集 150 < 200
+        XCTAssertTrue(c.finishAlbumSelection())
+        await c.generateTapped()
+        XCTAssertTrue(c.state.flow.generation.shortagePrompt, "并集 150 张，弹 shortage")
+        c.send(.shortageBack); await c.settle()
+
+        c.openAlbumList(); c.toggleAlbum("C"); c.toggleAlbum("B")    // A ∪ B = 250
+        XCTAssertTrue(c.finishAlbumSelection())
+        XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "B"]))
+        await c.generateTapped(); await c.settle()
+        XCTAssertFalse(c.state.flow.generation.shortagePrompt, "并集 250 张，不弹")
+        await waitFor(c, "结果") { if case .result = $0.flow.generation.phase { return true }; return false }
+        c.stop()
+    }
+
+    @MainActor
+    func testSnapshotIsDedupedUnionAndSkipsUnreadable() async throws {
+        let h = harness()
+        await ready(h)
+        let index = h.coordinator.index
+        let two = try await index.snapshot(for: .albums(ids: ["A", "B"]))
+        XCTAssertEqual(two.library.availableCount, 250, "并集，重叠的那批只算一次")
+        let withBad = try await index.snapshot(for: .albums(ids: ["U", "C"]))
+        XCTAssertEqual(withBad.library.availableCount, 30, "打不开的相簿跳过")
+        do {
+            _ = try await index.snapshot(for: .albums(ids: ["U", "gone"]))
+            XCTFail("全部打不开要抛 albumUnreadable")
+        } catch { XCTAssertEqual(error as? PhotoIndexError, .albumUnreadable) }
+        h.coordinator.stop()
+    }
+}

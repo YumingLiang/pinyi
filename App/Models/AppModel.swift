@@ -153,6 +153,11 @@ final class AppModel: ObservableObject {
     func refreshAlbums() async { await coordinator.refreshAlbums() }
     func flowSend(_ e: MainFlow.Event) { coordinator.flowSend(e) }
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
+    // 相簿多选（§2f，判断在 AppCoordinator+MultiAlbum）
+    func openAlbumList() { coordinator.openAlbumList() }
+    func toggleAlbum(_ id: String) { coordinator.toggleAlbum(id) }
+    func finishAlbumSelection() { coordinator.finishAlbumSelection() }
+    func closeAlbumList() { coordinator.closeAlbumList() }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
     /// 设置页主按钮（B10.14）：只改了叠加强度 →「完成」回原结果；否则「开始拼图」。

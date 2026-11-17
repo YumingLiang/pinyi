@@ -161,6 +161,10 @@ public struct AppState: Sendable, Hashable {
         case .album:
             let row = displayedAlbumRows.first { $0.selection == flow.source.selection }
             return LocalizedLine(.quickSourceSummary, [row?.albumTitle ?? "", CountFormat.grouped(row?.count ?? 0)])
+        case .albums(let ids):
+            // §2f / 验收 12：相簿名按勾选顺序；张数是去重合计。
+            let names = ids.map { id in albumRows.first { $0.albumID == id }?.albumTitle ?? "" }
+            return MultiAlbumText.materialSummary(names: names, count: flow.source.selectionUnion?.count ?? 0)
         }
     }
 

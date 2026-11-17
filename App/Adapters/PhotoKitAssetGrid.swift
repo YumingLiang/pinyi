@@ -29,6 +29,8 @@ final class PhotoKitAssetGridSourceProvider: AssetGridSourceProviding {
         switch album {
         case .allPhotos:
             return PhotoFetch.allImages(order: .newestFirst)
+        case .albums:
+            return nil   // 多选只用于素材来源，选图页一次只浏览一个相簿
         case .album(let id):
             let cols = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil)
             guard let c = cols.firstObject, isBrowsable(c) else { return nil }
@@ -48,6 +50,8 @@ final class PhotoKitAssetGridSourceProvider: AssetGridSourceProviding {
 }
 
 /// 一个相簿的网格数据源：包一个 `PHFetchResult`（懒加载，不转数组）。
+/// isHidden 后置过滤（相簿多选 PR 合并条件）：建 / 换 fetch result 时用 `VisibleIndexMap` 记下隐藏项，网格下标跳过它们；
+/// 没有隐藏项（正常情况）是恒等映射。有隐藏项时相册变化按整体重载处理（增量下标对不上）。
 ///
 /// 收到相册变化时先换成 `fetchResultAfterChanges`，再把 `GridChangePlanner.plan` 的结果交给网格，
 /// 保证网格收到通知时 `count` / `assetID(at:)` 已经是新的（`AssetGridDataSource` 的约定）。
@@ -57,26 +61,35 @@ final class PhotoKitAssetGridDataSource: AssetGridDataSource, PhotoLibraryChange
     private(set) var fetchResult: PHFetchResult<PHAsset>
     private var changeHandler: (@MainActor (AssetGridChange) -> Void)?
 
+    private(set) var visibleMap: VisibleIndexMap
+
     init(album: SourceSelection, fetchResult: PHFetchResult<PHAsset>) {
         self.album = album
         self.fetchResult = fetchResult
+        self.visibleMap = Self.map(fetchResult)
     }
 
-    var count: Int { fetchResult.count }
+    private static func map(_ r: PHFetchResult<PHAsset>) -> VisibleIndexMap {
+        VisibleIndexMap(rawCount: r.count, isHidden: { r.object(at: $0).isHidden })
+    }
 
-    func assetID(at index: Int) -> String { fetchResult.object(at: index).localIdentifier }
+    var count: Int { visibleMap.count }
 
-    func isLivePhoto(at index: Int) -> Bool { fetchResult.object(at: index).mediaSubtypes.contains(.photoLive) }
+    private func raw(_ index: Int) -> Int { visibleMap.rawIndex(forVisible: index) ?? index }
 
-    /// 先按 ID 取回这张照片（走 PhotoFetch，隐藏 / 删除的取不到），再在本 fetch result 里找下标。
+    func assetID(at index: Int) -> String { fetchResult.object(at: raw(index)).localIdentifier }
+
+    func isLivePhoto(at index: Int) -> Bool { fetchResult.object(at: raw(index)).mediaSubtypes.contains(.photoLive) }
+
+    /// 先按 ID 取回这张照片（走 PhotoFetch + isHidden 后置过滤，隐藏 / 删除的取不到），再在本 fetch result 里找下标。
     func index(ofAssetID assetID: String) -> Int? {
-        guard let asset = PhotoFetch.images(withLocalIdentifiers: [assetID]).firstObject else { return nil }
+        guard let asset = PhotoFetch.visibleImages(withLocalIdentifiers: [assetID]).first else { return nil }
         let i = fetchResult.index(of: asset)
-        return i == NSNotFound ? nil : i
+        return i == NSNotFound ? nil : visibleMap.visibleIndex(forRaw: i)
     }
 
     /// 按下标取 `PHAsset`（缩略图加载器 / 大图预览用，省一次按 ID 查询）。
-    func asset(at index: Int) -> PHAsset { fetchResult.object(at: index) }
+    func asset(at index: Int) -> PHAsset { fetchResult.object(at: raw(index)) }
 
     func setChangeHandler(_ handler: (@MainActor (AssetGridChange) -> Void)?) {
         changeHandler = handler
@@ -84,8 +97,17 @@ final class PhotoKitAssetGridDataSource: AssetGridDataSource, PhotoLibraryChange
 
     func photoLibraryDidChange(_ change: PHChange) {
         guard let details = change.changeDetails(for: fetchResult) else { return }
-        let before = fetchResult.count
+        let before = visibleMap.count
+        let wasIdentity = visibleMap.isIdentity
         fetchResult = details.fetchResultAfterChanges
+        visibleMap = Self.map(fetchResult)
+        guard wasIdentity, visibleMap.isIdentity else {
+            // 前后有隐藏项：增量下标是原结果的，对不上网格下标，整体重载。
+            changeHandler?(GridChangePlanner.plan(GridChangeDetails(countBefore: before, countAfter: visibleMap.count,
+                                                                    hasIncrementalChanges: false, removed: IndexSet(),
+                                                                    inserted: IndexSet(), changed: IndexSet(), moves: [])))
+            return
+        }
         // 用 LockedState 收集：不管 SDK 把这个 block 标成 escaping / @Sendable 与否都能编译（同步调用，锁无竞争）。
         let moves = LockedState<[AssetGridMove]>([])
         if details.hasIncrementalChanges && details.hasMoves {

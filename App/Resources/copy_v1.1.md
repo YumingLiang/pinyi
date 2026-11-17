@@ -58,7 +58,7 @@
 | key | 用途 | 文案 |
 |---|---|---|
 | `onboarding.3.title` | 标题 | 选一张目标图，再选用哪些照片来拼 |
-| `onboarding.3.body` | 正文 | 可以用全部照片，也可以只选一个相簿。宝宝相簿、旅行相簿都很适合。拼好后能放大，看清每一块都是哪张照片。 |
+| `onboarding.3.body` | 正文 | 可以用全部照片，也可以选几个相簿。宝宝相簿、旅行相簿都很适合。拼好后能放大，看清每一块都是哪张照片。 |
 | `onboarding.3.start` | 按钮 | 开始使用 |
 | `onboarding.3.allow` | 按钮（若即将弹出系统权限） | 允许访问照片 |
 
@@ -143,8 +143,8 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.list.count_pending` | 张数（扫描未完成时显示资产总数，不随扫描跳动） | 约 {count} 张 |
 | `source.list.title_format` | 组合格式（标题与张数同一行） | {title}  {count} 张 |
 | `source.album.option` | 选项 | 选择相簿 |
-| `source.album.option_desc` | 说明 | 只用一个相簿，比如宝宝相册。 |
-| `source.album.list_title` | 相簿列表标题 | 选择相簿 |
+| `source.album.option_desc` | 说明 | 可以选一个或几个相簿，比如宝宝和旅行。 |
+| `source.album.list_title` | 相簿列表标题 | 选择相簿（可多选） |
 | `source.album.item_count` | 相簿项副文案（规则同 `source.list.count` / `count_pending`） | {count} 张 |
 | `source.album.unreadable` | 无法读取 | 打不开这个相簿，请换一个，或改用全部照片。 |
 | `source.add_photos` | 受限状态下常驻入口（同样调用系统选择器） | 增加可用照片 |

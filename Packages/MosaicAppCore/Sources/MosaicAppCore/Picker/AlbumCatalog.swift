@@ -155,7 +155,9 @@ public enum AlbumCatalog {
     public static let smartAlbumWhitelist: [SmartAlbumKind] = SmartAlbumKind.allCases
 
     /// 原始快照 → 要显示的节（规则见上）。**T1**
-    public static func sections(from snapshot: AlbumCatalogSnapshot) -> [AlbumSection] {
+    /// - Parameter includeCloudShared: 是否列出 iCloud 共享相簿。quick-start v1.0 §0 硬规则 2：素材索引支持共享相簿以前，
+    ///   来源页（含多选）一律不显示（不是置灰），§4 自做选图页默认也不显示（design/photo-picker-v0.1 §6.4）。
+    public static func sections(from snapshot: AlbumCatalogSnapshot, includeCloudShared: Bool = false) -> [AlbumSection] {
         var out: [AlbumSection] = [
             AlbumSection(kind: .allPhotos, entries: [.allPhotos(imageCount: max(0, snapshot.allPhotosCount))]),
         ]
@@ -163,7 +165,7 @@ public enum AlbumCatalog {
         if !mine.isEmpty { out.append(AlbumSection(kind: .myAlbums, entries: mine)) }
         let smart = visibleSmartAlbums(snapshot.smartAlbums)
         if !smart.isEmpty { out.append(AlbumSection(kind: .mediaTypes, entries: smart)) }
-        let shared = visibleSharedAlbums(snapshot.sharedAlbums)
+        let shared = includeCloudShared ? visibleSharedAlbums(snapshot.sharedAlbums) : []
         if !shared.isEmpty { out.append(AlbumSection(kind: .shared, entries: shared)) }
         return out
     }
@@ -179,6 +181,9 @@ public enum AlbumCatalog {
             // （正常情况下 `sections(from:)` 已经去掉了，这里再兜一次，防止调用方传未过滤的节）。
             guard id != AlbumEntry.allPhotosID, let e = entry(id: id, in: sections) else { return false }
             return !e.isFolder && e.imageCount > 0 && e.selection == selection
+        case .albums(let ids):
+            // 多选（§2f）：每个都可选才算。
+            return !ids.isEmpty && ids.allSatisfy { isSelectable(.album(id: $0), in: sections) }
         }
     }
 

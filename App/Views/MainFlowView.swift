@@ -108,25 +108,31 @@ struct TargetStepView: View {
     }
 }
 
+/// 来源页（quick-start v1.0 §2f）：「全部照片」和「选择相簿（可多选）」二选一。点「选择相簿」弹出相簿列表（可多选），
+/// 点「完成」才生效；点「全部照片」清空已勾选的相簿。判断都在协调器（AppCoordinator+MultiAlbum），视图只调方法。
 struct SourceStepView: View {
     @EnvironmentObject var model: AppModel
-    @State private var showAlbums = false
 
     var body: some View {
         List {
             Section {
                 sourceRow(model.allPhotosRow)
-                Button { showAlbums.toggle() } label: {
-                    VStack(alignment: .leading) {
-                        Text(L10nKey.sourceAlbumOption)
-                        Text(L10nKey.sourceAlbumOptionDesc).font(.footnote).foregroundStyle(.secondary)
+                Button { model.openAlbumList() } label: {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(L10nKey.sourceAlbumOption)
+                            if model.flow.source.selection.isAllPhotos {
+                                Text(L10nKey.sourceAlbumOptionDesc).font(.footnote).foregroundStyle(.secondary)
+                            } else {
+                                // 已选相簿：和确认页同一套摘要（1 / 2 / 3 个及以上三种格式）
+                                Text(model.materialSummary).font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        if !model.flow.source.selection.isAllPhotos { Image(systemName: "checkmark").foregroundStyle(.tint) }
                     }
                 }
-            }
-            if showAlbums {
-                Section(header: Text(L10nKey.sourceAlbumListTitle)) {
-                    ForEach(model.albumRows) { sourceRow($0) }
-                }
+                .foregroundStyle(.primary)
             }
             if SourceListLogic.showsAddPhotos(access: model.access) {
                 Section { Button { SystemActions.presentLimitedLibraryPicker() } label: { Text(L10nKey.sourceAddPhotos) } }
@@ -144,6 +150,10 @@ struct SourceStepView: View {
         }
         .navigationTitle(Text(L10nKey.sourceNavTitle))
         .task { await model.refreshAlbums() }
+        .sheet(isPresented: Binding(get: { model.flow.source.draft != nil },
+                                    set: { if !$0 { model.closeAlbumList() } })) {
+            AlbumMultiSelectView()
+        }
     }
 
     @ViewBuilder func sourceRow(_ row: SourceRow) -> some View {
@@ -158,6 +168,64 @@ struct SourceStepView: View {
             }
         }
         .foregroundStyle(.primary)
+    }
+}
+
+/// 相簿列表（可多选，§2f）：每行右侧圆形勾选框，点整行切换；打不开的相簿置灰、不能勾，显示 `source.album.unreadable`。
+/// 共享相簿不在列表里（`PhotoKitLibrary.albums()` 不列）。底部固定栏：已选个数 · 去重合计 +「完成」（没勾不可点）。
+struct AlbumMultiSelectView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(model.albumRows) { row in
+                    Button { if let id = row.albumID { model.toggleAlbum(id) } } label: {
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(verbatim: row.albumTitle ?? "")
+                                if row.isUnreadable {
+                                    Text(L10nKey.sourceAlbumUnreadable).font(.footnote).foregroundStyle(.secondary)
+                                } else {
+                                    Text(row.countLine).font(.footnote).foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            let checked = row.albumID.map { model.flow.source.draft?.isChecked($0) ?? false } ?? false
+                            Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(checked ? Color.accentColor : Color.secondary)
+                                .imageScale(.large)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .foregroundStyle(.primary)
+                    .disabled(row.isUnreadable)
+                    .opacity(row.isUnreadable ? 0.4 : 1)
+                }
+            }
+            .navigationTitle(Text(L10nKey.sourceAlbumListTitle))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { model.closeAlbumList() } label: { Text(L10nKey.commonCancel) }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 6) {
+                    if let line = model.flow.source.draftBarLine { Text(line).font(.subheadline) }
+                    if model.flow.source.draft?.canFinish == true {
+                        Text(L10nKey.sourceSelectionDedupNote).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button { model.finishAlbumSelection() } label: {
+                        Text(L10nKey.sourceAlbumDone).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .disabled(model.flow.source.draft?.canFinish != true)
+                }
+                .padding()
+                .background(.bar)
+            }
+        }
     }
 }
 

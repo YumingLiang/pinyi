@@ -22,7 +22,7 @@
 "onboarding.3.title" = "选一张目标图，再选用哪些照片来拼";
 
 /* 正文（copy_v1.1.md:61） */
-"onboarding.3.body" = "可以用全部照片，也可以只选一个相簿。宝宝相簿、旅行相簿都很适合。拼好后能放大，看清每一块都是哪张照片。";
+"onboarding.3.body" = "可以用全部照片，也可以选几个相簿。宝宝相簿、旅行相簿都很适合。拼好后能放大，看清每一块都是哪张照片。";
 
 /* 按钮（copy_v1.1.md:62） */
 "onboarding.3.start" = "开始使用";
@@ -109,10 +109,10 @@
 "source.album.option" = "选择相簿";
 
 /* 说明（copy_v1.1.md:146） */
-"source.album.option_desc" = "只用一个相簿，比如宝宝相册。";
+"source.album.option_desc" = "可以选一个或几个相簿，比如宝宝和旅行。";
 
 /* 相簿列表标题（copy_v1.1.md:147） */
-"source.album.list_title" = "选择相簿";
+"source.album.list_title" = "选择相簿（可多选）";
 
 /* 相簿项副文案（规则同 `source.list.count` / `count_pending`）（copy_v1.1.md:148） 参数: %1$@=count */
 "source.album.item_count" = "%1$@ 张";

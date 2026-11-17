@@ -77,7 +77,8 @@ actor PhotoKitLibrary: PhotoLibraryClient {
         let r = current()
         let lo = max(0, range.lowerBound), hi = min(r.count, range.upperBound)
         guard lo < hi else { return [] }
-        let assets = r.objects(at: IndexSet(integersIn: lo..<hi))
+        // isHidden 后置过滤：万一混进隐藏照片，这一批里直接丢掉（索引按 ID 记，少几张没关系）。
+        let assets = PhotoFetch.visibleObjects(r, in: lo..<hi)
         return assets.map {
             AssetMetadata(id: $0.localIdentifier, modificationDate: $0.modificationDate,
                           pixelWidth: $0.pixelWidth, pixelHeight: $0.pixelHeight)
@@ -89,7 +90,9 @@ actor PhotoKitLibrary: PhotoLibraryClient {
         // PHFetchResult 先转数组再 for-in，可变状态只在本函数内。
         // 计数走 PhotoFetch（只数图片、不含隐藏照片）。来源用 `Sources.library`：和素材索引（`fetchAllImages`）一致，
         // 共享相簿里的照片不在索引里，这里也照旧数不到（行为与改动前相同；选图页的相簿列表另用 `PhotoKitAlbumCatalog`）。
-        var collections = Self.array(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))  // 用户相簿
+        // 用户相簿。iCloud 共享相簿（和「我的照片流」）不列出（quick-start v1.0 §0 硬规则 2：素材索引支持以前不显示，不是置灰）。
+        var collections = Self.array(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))
+            .filter { $0.assetCollectionSubtype != .albumCloudShared && $0.assetCollectionSubtype != .albumMyPhotoStream }
         // 少量智能相簿（技术方案 §2.7）：个人收藏、自拍、人像
         for sub in [PHAssetCollectionSubtype.smartAlbumFavorites, .smartAlbumSelfPortraits, .smartAlbumDepthEffect] {
             collections += Self.array(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: sub, options: nil))
@@ -97,7 +100,7 @@ actor PhotoKitLibrary: PhotoLibraryClient {
         var out: [AlbumInfo] = []
         out.reserveCapacity(collections.count)
         for c in collections {
-            let n = PhotoFetch.images(in: c, sources: PhotoFetch.Sources.library, order: .unspecified).count
+            let n = PhotoFetch.visibleImages(in: c, sources: PhotoFetch.Sources.library).count
             out.append(AlbumInfo(id: c.localIdentifier, title: c.localizedTitle ?? "", assetCount: n))
         }
         return out
@@ -111,9 +114,21 @@ actor PhotoKitLibrary: PhotoLibraryClient {
 
     func assetIDs(inAlbum albumID: String) async throws -> [String] {
         let cols = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumID], options: nil)
-        guard let c = cols.firstObject else { throw PhotoIndexError.albumUnreadable }
-        // 走 PhotoFetch：只取图片、不含隐藏照片；来源与 `albums()` 计数一致。
-        return Self.array(PhotoFetch.images(in: c, sources: PhotoFetch.Sources.library, order: .unspecified))
-            .map(\.localIdentifier)
+        // 共享相簿 / 白名单外的智能相簿（含「已隐藏」）一律当打不开（记住的选择里如果有，静默去掉，验收 10）。
+        guard let c = cols.firstObject, Self.isMaterialAlbum(c) else { throw PhotoIndexError.albumUnreadable }
+        // 走 PhotoFetch + isHidden 后置过滤：只取图片、不含隐藏照片；来源与 `albums()` 计数一致。
+        return PhotoFetch.visibleImages(in: c, sources: PhotoFetch.Sources.library).map(\.localIdentifier)
+    }
+
+    /// 能当素材来源的集合：普通相簿（不含共享相簿、我的照片流）和 `albums()` 列出的那几个智能相簿。
+    nonisolated static func isMaterialAlbum(_ c: PHAssetCollection) -> Bool {
+        switch c.assetCollectionType {
+        case .album:
+            return c.assetCollectionSubtype != .albumCloudShared && c.assetCollectionSubtype != .albumMyPhotoStream
+        case .smartAlbum:
+            return [.smartAlbumFavorites, .smartAlbumSelfPortraits, .smartAlbumDepthEffect].contains(c.assetCollectionSubtype)
+        default:
+            return false
+        }
     }
 }
