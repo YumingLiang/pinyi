@@ -396,6 +396,93 @@ final class WorksRematchTests: XCTestCase {
         c2.stop()
     }
 
+    /// H8（copy v1.3）：缺图轻提示几秒后自动消失，不打断操作；消失后不会再出（只出一次的规则不变）。
+    func testCellNoticeAutoDismissesAfterAFewSeconds() async throws {
+        let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors,
+                        index: Self.workPhotos + [("red2", (212, 34, 30))])
+        let id = try await h.save()
+        XCTAssertEqual(h.controller.cellNoticeDuration, .seconds(4), "默认几秒")
+        h.controller.cellNoticeDuration = .milliseconds(80)
+        await h.controller.start()
+        h.existence.hide("b")
+        await h.controller.open(id)
+        XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]), "出现")
+        try await Self.waitUntil { h.controller.state.replacedLine == nil }
+        XCTAssertNil(h.controller.state.missingLine)
+        XCTAssertEqual(h.controller.state.opened?.id, id, "查看页不受影响")
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "red2", "c", "d", "e", "f"], cols: 3), "作品不回退")
+        // 再导出：不再出
+        await h.controller.exportOpenedTapped(purpose: .save)
+        XCTAssertNil(h.controller.state.replacedLine)
+        h.controller.stop()
+    }
+
+    /// 留白提示（`works.missing`）同样自动消失；到点前关掉查看页再打开别的不会误清，重开同一张也不再出。
+    func testMissingNoticeAutoDismissesAndCloseCancels() async throws {
+        let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)),
+                        index: [("a", (30, 30, 200)), ("c", (30, 200, 30)), ("blurryRed", (204, 30, 30))],
+                        unusable: ["blurryRed", "a", "c"])
+        let id = try await h.save()
+        h.controller.cellNoticeDuration = .milliseconds(80)
+        await h.controller.start()
+        h.existence.hide("b")
+        await h.controller.open(id)
+        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
+        try await Self.waitUntil { h.controller.state.missingLine == nil }
+        XCTAssertEqual(h.controller.state.opened?.id, id)
+        // 手动收起：没有提示时什么都不变
+        let before = h.controller.state.opened
+        h.controller.dismissCellNotice()
+        XCTAssertEqual(h.controller.state.opened, before)
+        h.controller.close()
+        XCTAssertNil(h.controller.state.opened)
+        h.controller.stop()
+    }
+
+    private static func waitUntil(timeout: Duration = .seconds(3), _ cond: @MainActor () -> Bool) async throws {
+        let clock = ContinuousClock(), deadline = clock.now + timeout
+        while clock.now < deadline {
+            if cond() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("等待超时")
+    }
+
+    /// P3：替换格子之后清晰度缓存失效：被换掉的原照片（隐藏）不再留在「已知合格」里，不合格条目也清掉（可能刚下载回本机）；
+    /// 无关照片的「合格」结论保留。
+    func testReplacingCellsInvalidatesSharpnessCache() async throws {
+        let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors,
+                        index: Self.workPhotos + [("red2", (212, 34, 30))])
+        let id = try await h.save()
+        let cache = try XCTUnwrap((h.controller.rematcher as? IndexWorkRematcher)?.sharpness?.cache)
+        cache.store(.usable, for: "b")
+        cache.store(.usable, for: "c")
+        cache.store(.unusable(.inCloud), for: "zz")
+        await h.controller.start()
+        h.existence.hide("b")
+        await h.controller.open(id)
+        XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]))
+        XCTAssertNil(cache.verdict(for: "b"), "被换掉的 b 从缓存里去掉")
+        XCTAssertNil(cache.verdict(for: "zz"), "不合格条目清掉")
+        XCTAssertEqual(cache.verdict(for: "c"), .usable, "无关照片保留")
+        h.controller.stop()
+    }
+
+    /// P3（AppCoordinator.libraryDidChange）：生成链路不再带 sharpness 后，相册变化也要清作品补格那份缓存。
+    func testLibraryDidChangeInvalidatesWorksRematcherCache() async throws {
+        let cache = LocalResolutionCache()
+        cache.store(.unusable(.inCloud), for: "x")
+        cache.store(.usable, for: "y")
+        let rematcher = IndexWorkRematcher(snapshot: { throw WorkRematchError.indexUnavailable }, existence: FakeExistence(),
+                                           sharpness: LocalResolutionChecker(probe: FakeResolutionProbe(unusable: []), cache: cache))
+        let ch = CoordinatorHarness(assets: 10)
+        ch.coordinator.worksRematcher = rematcher
+        ch.coordinator.libraryDidChange()
+        XCTAssertNil(cache.verdict(for: "x"), "相册变化：不合格条目清掉")
+        XCTAssertEqual(cache.verdict(for: "y"), .usable)
+        ch.coordinator.stop()
+    }
+
     /// 之前留白的格子，后来有了合格的相近照片（新照片进了索引）：补上，按 `works.replaced` 出一次，之后不再出。
     func testBlankCellUpgradedLaterNotifiesReplacedOnce() async throws {
         let base: [(String, RGB)] = [("a", (30, 30, 200)), ("c", (30, 200, 30))]

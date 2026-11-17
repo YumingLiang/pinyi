@@ -72,6 +72,7 @@ final class AppModel: ObservableObject {
             return c.workResultContext
         }, relay: relay)
         worksController.exportHandler = CoordinatorWorkExporter(coordinator: coordinator)
+        coordinator.worksRematcher = rematcher   // 相册变化时补格的清晰度缓存一起失效（P3）
         coordinator.resultSaver = worksController   // 「再拼一张」未保存提示：问存没存过 / 去存（弱引用）
         self.works = WorksModel(controller: worksController)
         self.state = coordinator.state

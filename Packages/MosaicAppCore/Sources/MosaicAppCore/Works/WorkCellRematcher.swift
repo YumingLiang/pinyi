@@ -46,6 +46,13 @@ public protocol MissingCellRematching: Sendable {
     ///   - missing: 取不到的原照片 ID（删除或后来被隐藏）；含空串时之前留白的格子也一起重新找。
     ///   - target: 作品里存的目标图副本（只读，算格子的目标特征）；没有时用相邻格子照片的特征估。
     func rematch(_ layout: MosaicLayout, missing: Set<String>, target: PixelBuffer?) async throws -> WorkRematchResult
+    /// 清晰度缓存失效（P3）：相册变化时、以及替换格子之后调用。清掉不合格条目（可能刚下载回本机），
+    /// 并去掉 `dropping` 里的照片（刚被删 / 被隐藏、已经被换掉的原照片，不能再当「已知合格」兜底）。
+    func invalidateLocalResolution(dropping assetIDs: Set<String>)
+}
+
+public extension MissingCellRematching {
+    func invalidateLocalResolution(dropping assetIDs: Set<String>) {}
 }
 
 /// 用索引快照 + MosaicCore 距离内核补格。
@@ -83,6 +90,12 @@ public struct IndexWorkRematcher: MissingCellRematching {
         self.sharpness = sharpness
         self.pipeline = pipeline
         self.candidateCount = max(1, candidateCount)
+    }
+
+    public func invalidateLocalResolution(dropping assetIDs: Set<String>) {
+        guard let cache = sharpness?.cache else { return }
+        cache.removeUnusable()
+        cache.remove(assetIDs)
     }
 
     public func rematch(_ layout: MosaicLayout, missing: Set<String>, target: PixelBuffer?) async throws -> WorkRematchResult {

@@ -84,30 +84,35 @@ struct TestAlbumWriter: Sendable {
             guard let a = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else { return }
             PHAssetChangeRequest(for: a).isHidden = true
         }
+        Self.rememberHidden(id)
         return pick
     }
 
-    /// 取消隐藏「马赛克测试」相簿里所有被隐藏的照片（验收 5b「取消隐藏后作品不改回去」用）。返回取消的张数。
-    /// 内部工具里唯一一处 includeHiddenAssets = true，且只限测试相簿。
+    /// 本工具隐藏过的照片 ID（只存在本机 UserDefaults，不显示）。取消隐藏按这里的 ID 取，不需要能看到隐藏照片的查询
+    /// （守护规则 2：`includeHiddenAssets = true` 连内部工具也禁止，QA #11 第 3 条）。
+    private static let hiddenIDsKey = "internal.testAlbum.hiddenIDs"
+    private static func rememberHidden(_ id: String) {
+        var ids = UserDefaults.standard.stringArray(forKey: hiddenIDsKey) ?? []
+        if !ids.contains(id) { ids.append(id) }
+        UserDefaults.standard.set(ids, forKey: hiddenIDsKey)
+    }
+
+    /// 取消隐藏本工具隐藏过的照片（验收 5b「取消隐藏后作品不改回去」用）。返回取消的张数。
+    /// 只按 `hideOne` 记下的 ID 取（只会是测试相簿里的），不用 `includeHiddenAssets = true`；在「照片」App 里手动隐藏的不管。
     func unhideAll() async throws -> Int {
         guard PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized else { throw WriterError.notAuthorized }
-        guard let album = Self.fetchAlbum() else { return 0 }
-        let albumID = album.localIdentifier
-        let opts = PHFetchOptions()
-        opts.includeHiddenAssets = true
-        opts.predicate = NSPredicate(format: "isHidden == YES")
-        let n = PHAsset.fetchAssets(in: album, options: opts).count
-        guard n > 0 else { return 0 }
+        let ids = UserDefaults.standard.stringArray(forKey: Self.hiddenIDsKey) ?? []
+        guard !ids.isEmpty else { return 0 }
+        let n = LockedState(0)
         try await PHPhotoLibrary.shared().performChanges {
-            guard let a = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumID], options: nil).firstObject
-            else { return }
-            let o = PHFetchOptions()
-            o.includeHiddenAssets = true
-            o.predicate = NSPredicate(format: "isHidden == YES")
-            let hidden = PHAsset.fetchAssets(in: a, options: o)
-            for i in 0..<hidden.count { PHAssetChangeRequest(for: hidden.object(at: i)).isHidden = false }
+            let assets = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+            for i in 0..<assets.count where assets.object(at: i).isHidden {
+                PHAssetChangeRequest(for: assets.object(at: i)).isHidden = false
+                n.withLock { $0 += 1 }
+            }
         }
-        return n
+        UserDefaults.standard.removeObject(forKey: Self.hiddenIDsKey)
+        return n.withLock { $0 }
     }
 
     private func findOrCreateAlbumID() async throws -> String {

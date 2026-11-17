@@ -199,6 +199,9 @@ public final class WorksController {
     /// 轻提示自动消失的时长（测试可调短）。
     public var toastDuration: Duration = .seconds(2)
     private var toastTask: Task<Void, Never>?
+    /// 缺图提示（`works.replaced` / `works.missing`）显示多久后自动消失（copy v1.3「几秒后自动消失，不打断操作」；测试可调短）。
+    public var cellNoticeDuration: Duration = .seconds(4)
+    private var cellNoticeTask: Task<Void, Never>?
     /// 结果页记住的「当前结果对应的作品」（B10-13）：存 / 更新成功后记下，和结果版本号绑定。
     /// 「再调一调」只改叠加强度再回来不重新生成、版本号不变 → 一直记得；换拼法 / 重新生成（版本号变了）才清掉。
     private var remembered: (revision: Int, id: WorkID)?
@@ -401,6 +404,30 @@ public final class WorksController {
         openToken += 1
         openedWork = nil
         state.opened = nil
+        cellNoticeTask?.cancel()
+        cellNoticeTask = nil
+    }
+
+    /// 缺图提示（H8）出现后 `cellNoticeDuration` 自动消失：只清本次的格数，不改作品（只出一次的规则不变，之后打开本来就是 0）。
+    /// 期间又出一条（如导出前又换了几格）就重新计时；关掉查看页 / 换了作品就作废。
+    private func scheduleCellNoticeDismiss(for id: WorkID) {
+        cellNoticeTask?.cancel()
+        let duration = cellNoticeDuration
+        cellNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled, let self, self.state.opened?.id == id else { return }
+            self.dismissCellNotice()
+        }
+    }
+
+    /// 立即收起缺图提示（自动消失到点，或用户手动点掉）。
+    public func dismissCellNotice() {
+        cellNoticeTask?.cancel()
+        cellNoticeTask = nil
+        guard var opened = state.opened else { return }
+        if (opened.missingCount ?? 0) > 0 { opened.missingCount = 0 }
+        opened.replacedCount = 0
+        if opened != state.opened { state.opened = opened }
     }
 
     public func dismissNotice() { state.notice = nil }
@@ -499,6 +526,8 @@ public final class WorksController {
                 // 没有改动（之前兜底的这次仍没补上）/ 已被别处处理
                 return missing.isEmpty ? nothingToDo : unchanged
             }
+            // P3：格子换掉之后清晰度缓存失效，被换掉的原照片（删除 / 隐藏）不再留在缓存里
+            rematcher?.invalidateLocalResolution(dropping: missing)
             let base = work.layout.cellAssignments, now = updated.layout.cellAssignments
             let newlyUnfilled = base.indices.filter { !base[$0].localIdentifier.isEmpty && now[$0].localIdentifier.isEmpty }.count
             return ReconcileOutcome(work: updated, replaced: result.replacedCells, missingShown: newlyUnfilled, pending: 0)
@@ -521,6 +550,7 @@ public final class WorksController {
         updated.summary = summary
         openedWork = updated
         state.opened = OpenedWork(summary: summary, missingCount: outcome.missingShown, replacedCount: outcome.replaced)
+        if outcome.missingShown > 0 || outcome.replaced > 0 { scheduleCellNoticeDismiss(for: work.id) }
     }
 
     // MARK: 再导出
@@ -576,6 +606,8 @@ public final class WorksController {
         relayTask = nil
         toastTask?.cancel()
         toastTask = nil
+        cellNoticeTask?.cancel()
+        cellNoticeTask = nil
     }
 }
 

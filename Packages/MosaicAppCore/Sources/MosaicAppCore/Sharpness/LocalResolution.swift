@@ -75,6 +75,11 @@ public final class LocalResolutionCache: Sendable {
     /// 相册变化时调用：清掉不合格条目。
     public func removeUnusable() { state.withLock { s in s = s.filter { $0.value.isUsable } } }
     public func removeAll() { state.withLock { $0.removeAll() } }
+    /// 去掉指定照片的条目（作品替换格子后：被删 / 被隐藏的原照片不能再留在「已知合格」里当兜底候选）。
+    public func remove(_ assetIDs: Set<String>) {
+        guard !assetIDs.isEmpty else { return }
+        state.withLock { s in for id in assetIDs { s[id] = nil } }
+    }
 }
 
 /// 一轮探测的结果。

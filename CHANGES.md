@@ -1,5 +1,20 @@
 # CHANGES
 
+## feat/works-hidden（追加 3）：QA 复核 qa/pr11-works-hidden-report.md
+
+- **H8 提示几秒后自动消失**（copy v1.3「一次性轻提示，几秒后自动消失，不打断操作」）：`works.replaced` / `works.missing` 出现后
+  `WorksController.cellNoticeDuration`（4 秒）自动收起（`dismissCellNotice()`，只清本次格数，不改作品）；关掉查看页 / 换作品作废计时。只出一次的规则不变。
+- **merge origin/feat/app-layer（2b2fb93，含 #17、#18）**，没有 rebase；CHANGES.md 两边都保留。合并后：作品 meta 同时有 #17 的
+  `updatedAt` / `pendingPreviewFile` 和本分支的兜底字段；`missingCount(_:)` 按格计（#18 口径）；只改叠加强度更新原作品时重画预览带上兜底格。
+- **按 ID 取图统一走 PhotoFetch**：`WorksAdapters`（原照片还在不在）、`PhotoKitThumbnails` 都用 `PhotoFetch.visibleImages(withLocalIdentifiers:)` +
+  `VisibleAssetFilter`，代码与 #15（feat/preview-detail-layer）逐字一致（`PhotoFetch.swift` 那段补丁、`VisibleAssetFilter.swift` 原样拷贝），#15 合入时不冲突。
+- **内部工具不再用 `includeHiddenAssets = true`**（守护规则 2，QA 第 3 条）：`TestAlbumWriter.hideOne` 把隐藏的 ID 记在本机 UserDefaults，`unhideAll` 按这些 ID 取。
+- **P3 清晰度缓存**：生成链路不再带 sharpness 后，`AppCoordinator.libraryDidChange` 原来那行只清生成器的缓存（已是空操作）。
+  现在作品补格器自己的缓存也清（`coordinator.worksRematcher`）；补格写回后再清一次，被换掉的原照片（删除 / 隐藏）从「已知合格」里去掉，不会再被当兜底候选
+  （`MissingCellRematching.invalidateLocalResolution(dropping:)`，`LocalResolutionCache.remove(_:)`）。
+- 测试：`WorksRematchTests` +4（替换 / 留白提示自动消失、替换后清缓存、相册变化清补格缓存）；合并后 3 个旧测试按 #11 的假预览格式（第一行是布局摘要）和 #17 的指纹口径改断言。
+- #5 逐张清晰度检查的替代方案只出方案，见 /workspace/pr11-sharpness-plan.md（不在本次实现）。
+
 ## feat/works-hidden（追加 2）：找不到替代的格子用旧预览兜底；文案定稿、按格计；受限访问不再反复提示
 
 依据：hd-export-req-v0.2 F 节（`works.missing`「这几格会稍模糊」）；AndyL 17:23 要求。
