@@ -28,6 +28,28 @@
 - **新增的 `@unchecked Sendable` / `assumeIsolated`**：`PhotoLibraryObserver.ChangeBox`（`PHChange` 后台 → 主线程转交一次）、`DeliveredThumbnail`、`TargetImageDelivery`、`TargetImageFetchResult`（`UIImage` 不可变，SDK 若已标 Sendable 也无害）；PhotoKit 回调里 `Thread.isMainThread ? assumeIsolated : DispatchQueue.main.async { assumeIsolated }`。
 - **⚠️ App 层盲写**：5 个新文件和 3 个改动文件 Linux 上 `swiftc -parse` 通过；另用手写的 Photos / UIKit 桩模块按 Swift 6 + 严格并发 + warnings-as-errors 做了类型检查（两套桩：SDK 回调标 / 不标 `@Sendable`、`UIImage` / `PHChange` 是否 Sendable，都通过），由此修掉一处 `@MainActor` 类的 static 常量在 nonisolated 函数里引用的错误。真 SDK 签名以 CI 的 Xcode job 为准。
 
+## feat/gen-perf-fix：生成不再逐张检查清晰度，速度回到 14ac550
+
+AndyL 反馈 d31925f 生成比 14ac550 慢很多。原因是 #5「不能略糊」（35a9f75 / e3e68ec）把逐张 PhotoKit 探测（单张 `fetchAssets` + 256 px `requestImage`，8 并发）和「剔除后整张重新匹配（最多 3 轮）+ 兜底补格」接进了生成链路。AndyL 11-16 决定取消生成前的逐张检查。
+
+- **改动**：
+  - 新增 `GenerationRunner.production(pipeline:perf:)`，固定 `sharpness: nil`。
+  - `App/Adapters/LiveDependencies.swift` 改用它，不再注入 `LocalResolutionChecker(probe: PhotoKitResolutionProbe())`。
+  - 结果：生成只跑一次 `generateOnce`：没有逐张请求、没有重配、没有 refill，`lowRes.enabled == false`。
+- **保留**：
+  - 类型都保留，不删、不改名：`LocalResolutionChecker` / `LocalResolutionPolicy` / `LocalResolutionCache` / `PhotoKitResolutionProbe`。`GenerationRunner` 的可选 `sharpness` 路径和 `SharpnessFilterTests` 也保留。PR #11 作品换照片的 ≥256 检查还要用。
+  - 文案保留：`source.excluded_low_res`、`generate.progress.checking`、结果页筛选后的「照片比较少」。不注入时自然不会显示。
+- **行为**：
+  - 结果与 14ac550 的生成路径逐格相同（测试断言 production 与无探测器的 `GenerationRunner()` 同种子输出一致）。
+  - iCloud-only / 本机只有小图的照片照旧参与匹配。导出时取不到每格像素就退回 128 px 缩略图（blurryFallback，糊格子），再取不到才是白格子。导出端兜底不变，不新增白格子。
+  - 我的作品、导出三档、格子居中裁方（dd61da7）都不动。
+- **测试**：
+  - 新增 `GenerationProductionPathTests` 2 个：production 无探测器；一次生成只有 1 条「生成·总计」，没有「清晰度探测」，没有「重配」，每格都有照片，结果与旧路径一致，换一种拼法也只跑一次。
+  - 新增基准 `GenerationSpeedBenchTests`，默认跳过，用 `PINYI_GEN_BENCH=1 swift test -c release --filter GenerationSpeedBenchTests` 运行。
+- **耗时**（3000 张素材、中密度 4800 格）：
+  - 修复后一次匹配 0.036 s [实测]，与 14ac550 的 0.036 s 相同。
+  - d31925f 探测 + 重配，按每次请求 10 ms 模拟要 3.2–3.7 s，25 ms 时 8.7 s。完整表格见 PR 描述。
+
 ## feat/picker-t4：选图页 P0 T4「共用照片网格」（photo-picker-v0.1 §2、§3）
 
 基于 feat/picker-t0 `9cfd07e`。只依赖 T0 的 `AssetGridDataSource` / `GridThumbnailLoading` 协议，不碰 `App/Adapters`（T3）和 AlbumCatalog / BrowsePosition 的实现（T1 / T2）。没有新增文案，T0 公开接口签名没改。
