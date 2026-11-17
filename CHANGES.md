@@ -1,5 +1,27 @@
 # CHANGES
 
+## feat/gen-perf-fix：生成不再逐张检查清晰度，速度回到 14ac550
+
+AndyL 反馈 d31925f 生成比 14ac550 慢很多。原因是 #5「不能略糊」（35a9f75 / e3e68ec）把逐张 PhotoKit 探测（单张 `fetchAssets` + 256 px `requestImage`，8 并发）和「剔除后整张重新匹配（最多 3 轮）+ 兜底补格」接进了生成链路。AndyL 11-16 决定取消生成前的逐张检查。
+
+- **改动**：
+  - 新增 `GenerationRunner.production(pipeline:perf:)`，固定 `sharpness: nil`。
+  - `App/Adapters/LiveDependencies.swift` 改用它，不再注入 `LocalResolutionChecker(probe: PhotoKitResolutionProbe())`。
+  - 结果：生成只跑一次 `generateOnce`：没有逐张请求、没有重配、没有 refill，`lowRes.enabled == false`。
+- **保留**：
+  - 类型都保留，不删、不改名：`LocalResolutionChecker` / `LocalResolutionPolicy` / `LocalResolutionCache` / `PhotoKitResolutionProbe`。`GenerationRunner` 的可选 `sharpness` 路径和 `SharpnessFilterTests` 也保留。PR #11 作品换照片的 ≥256 检查还要用。
+  - 文案保留：`source.excluded_low_res`、`generate.progress.checking`、结果页筛选后的「照片比较少」。不注入时自然不会显示。
+- **行为**：
+  - 结果与 14ac550 的生成路径逐格相同（测试断言 production 与无探测器的 `GenerationRunner()` 同种子输出一致）。
+  - iCloud-only / 本机只有小图的照片照旧参与匹配。导出时取不到每格像素就退回 128 px 缩略图（blurryFallback，糊格子），再取不到才是白格子。导出端兜底不变，不新增白格子。
+  - 我的作品、导出三档、格子居中裁方（dd61da7）都不动。
+- **测试**：
+  - 新增 `GenerationProductionPathTests` 2 个：production 无探测器；一次生成只有 1 条「生成·总计」，没有「清晰度探测」，没有「重配」，每格都有照片，结果与旧路径一致，换一种拼法也只跑一次。
+  - 新增基准 `GenerationSpeedBenchTests`，默认跳过，用 `PINYI_GEN_BENCH=1 swift test -c release --filter GenerationSpeedBenchTests` 运行。
+- **耗时**（3000 张素材、中密度 4800 格）：
+  - 修复后一次匹配 0.036 s [实测]，与 14ac550 的 0.036 s 相同。
+  - d31925f 探测 + 重配，按每次请求 10 ms 模拟要 3.2–3.7 s，25 ms 时 8.7 s。完整表格见 PR 描述。
+
 ## feat/picker-t1t2：收进 QA 的 PickerSupplementTests（QA #8 补丁）
 
 把 QA 写的 `qa/tests/QAPickerSupplementTests.swift` 收进正式测试 `Packages/MosaicAppCore/Tests/MosaicAppCoreTests/PickerSupplementTests.swift`。按项目约定把类名从 `QAPickerSupplementTests` 改为 `PickerSupplementTests`，用例正文未改；`qa/` 原文件不动。8 个用例全部通过，无需改代码或修正测试。
