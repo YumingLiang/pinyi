@@ -20,6 +20,7 @@ public enum PresetShapes {
         Entry(id: .heart, path: heart()),
         Entry(id: .star, path: star()),
         Entry(id: .circle, path: circle()),
+        Entry(id: .birthdayCake, path: birthdayCake()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -100,6 +101,34 @@ extension PresetShapes {
     static func circle() -> ShapePath {
         var b = ShapePathBuilder()
         b.circle(50, 50, 50)
+        return b.build()
+    }
+}
+
+// MARK: - 生日蛋糕
+
+extension ShapePresetID {
+    /// 生日蛋糕
+    public static let birthdayCake = ShapePresetID(rawValue: "birthdayCake")
+}
+
+extension PresetShapes {
+    /// 生日蛋糕：上下两层 + 3 根蜡烛 + 火苗（火苗压在蜡烛顶上，整体连通）。
+    /// 蜡烛宽 7、火苗宽 13、相邻火苗间隙 7（都约为外接框的 7% 以上），粗档也不会断开或粘连。
+    static func birthdayCake() -> ShapePath {
+        var b = ShapePathBuilder()
+        b.roundedRect(x: 4, y: 62, width: 92, height: 34, radius: 5)   // 下层
+        b.roundedRect(x: 16, y: 38, width: 68, height: 26, radius: 5)  // 上层（与下层重叠 2）
+        for cx in [30.0, 50.0, 70.0] {
+            b.polygon([ShapePoint(cx - 3.5, 22), ShapePoint(cx + 3.5, 22), ShapePoint(cx + 3.5, 40), ShapePoint(cx - 3.5, 40)])
+            // 火苗：上尖下圆的水滴，底部压进蜡烛顶 2 个单位。
+            b.move(cx, 0)
+            b.cubic(cx + 3, 6, cx + 6.5, 10, cx + 6.5, 16)
+            b.cubic(cx + 6.5, 21, cx + 3.5, 24, cx, 24)
+            b.cubic(cx - 3.5, 24, cx - 6.5, 21, cx - 6.5, 16)
+            b.cubic(cx - 6.5, 10, cx - 3, 6, cx, 0)
+            b.close()
+        }
         return b.build()
     }
 }
