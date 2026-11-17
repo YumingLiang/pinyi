@@ -14,7 +14,7 @@ import MosaicAppCore
 ///   峰值 ≈ 位图 + 4 张缩略图。PhotoKit 请求 targetSize = 每格像素、highQualityFormat、`isNetworkAccessAllowed = false`。
 /// - 编码：CGImageDestination 写 JPEG（质量 0.9）到 `tmp/export/`；保存 / 分享结束后删除，启动时清空目录（B-27）。
 /// - 实际每格像素、尺寸、上限、可用内存、用时、文件大小，以及退回 128px 缩略图（糊格子）和完全空白（白格子）的数量，写 os_log（subsystem 同 Bundle ID，category "export"）和内测性能页。
-/// - 不做（紧急版范围外）：取消、后台续跑、降档提示、存储预检。作品自动保存由协调器 `onExportSucceeded` 接入。
+/// - 不做（紧急版范围外）：取消、后台续跑、降档提示、存储预检。导出成功经协调器 `onExportSucceeded` 通知「我的作品」（只刷新按钮状态，导出不自动存，需求 B10-1）。
 /// ⚠️ 盲写（Linux 上无法编译 CG / ImageIO / PhotoKit）。
 struct LiveMosaicExporter: MosaicExporting {
     let thumbnails: any ThumbnailProviding

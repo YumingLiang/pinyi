@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     }
 
     private var renderedRevision = 0
+    /// 上次通知 WorksController 时的结果页现状（是否在结果页、revision、叠加强度），变了才重算按钮状态。
+    private var lastWorksContext: (onResult: Bool, revision: Int, overlayAlpha: Double)?
     private var previewTask: Task<Void, Never>?
     private var changeObserver: LibraryChangeObserver?
 
@@ -41,7 +43,8 @@ final class AppModel: ObservableObject {
         self.perf = perf
         self.lifecycle = lifecycle
         self.thumbnails = thumbnails
-        // 导出成功 → 中继 → WorksController 自动存（AppDependencies 先于协调器创建，所以经中继转）
+        // 导出成功 → 中继 → WorksController（只刷新「存到我的作品」按钮，导出不再自动存，需求 B10-1；
+        // AppDependencies 先于协调器创建，所以经中继转）
         let relay = ExportSuccessRelay()
         let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
                                                              onExportSucceeded: relay.handler))
@@ -71,6 +74,12 @@ final class AppModel: ObservableObject {
     private func stateChanged(_ s: AppState) {
         state = s
         works.controller.resultDidChange(revision: s.resultRevision)
+        // 「存到我的作品」按钮按当前结果 vs 作品库算（B10-5）：叠加强度变了 / 进出结果页时重算
+        let worksContext = (onResult: s.flow.step == .result, revision: s.resultRevision, overlayAlpha: s.flow.settings.overlayAlpha)
+        if lastWorksContext.map({ $0 != worksContext }) ?? true {
+            lastWorksContext = worksContext
+            works.controller.resultContextDidChange()
+        }
         if s.flow.step == .result {
             if s.resultRevision != renderedRevision {
                 renderedRevision = s.resultRevision
@@ -138,6 +147,10 @@ final class AppModel: ObservableObject {
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
+    /// 设置页主按钮（B10.14）：只改了叠加强度 →「完成」回原结果；否则「开始拼图」。
+    var settingsPrimaryAction: SettingsPrimaryAction { coordinator.settingsPrimaryAction }
+    /// 设置页「完成」：回到原结果，不重新生成（进结果页时按新强度重画预览）。
+    func adjustDoneTapped() { Task { await coordinator.adjustDoneTapped() } }
     /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
     func retryTapped() { Task { await coordinator.retryTapped() } }
 

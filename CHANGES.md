@@ -1,11 +1,41 @@
 # CHANGES
 
-## fix/works-delete：作品详情页删除不生效（P1）
+## fix/works-delete（续）：「我的作品」保存规则（AndyL 的作品规则 + 产品 hd-export-req B5、B7、B10 第 1–14 条）
 
-- **根因**：确认弹窗收起时 SwiftUI 先调 `isPresented` 的 `set(false)` → `deleteCancelled()` 清掉 `pendingDelete`；按钮里的 `Task { await controller.deleteConfirmed() }` 更晚执行，取不到 id 直接 return，删除被静默吞掉。从 PR #6 上线起就存在，不是 #11 / #15 引入的回归。
-- **修法**：新增 `WorksController.deleteConfirmed(_ id: WorkID)`，不依赖共享的 `pendingDelete`；`WorksModel.deleteConfirmed(_:)` 转发；弹窗「删除」按钮直接传当前作品 id。旧的无参入口保留并转调新入口。
-- **测试**：MosaicAppCoreTests 新增 `QAWorksDeleteRegressionTests`（14 条：删后列表、重启、目录清理、打开中删除、并发保存、连删、删后再存、防重复保存及查重口径现状）和 `QAWorksDeleteFixContractTests`（3 条：UI 时序下带 id 删除、交错删除、取消不删）。MosaicAppCore `swift test` 327 个，0 失败，3 跳过。
-- 未做：列表页长按删除（等 AndyL 决定）；查重口径（overlayAlpha/seed 不同算两份）维持现状，等产品决定。
+删除修复（a9c17b9）已随 #16 合进 feat/app-layer（ed58064）；本节是之后的改动，已 merge（不是 rebase）ed58064，之后又 merge 了 72d6109（#14 perf gate）。
+
+### QA 复核 48b0569 之后（qa/pr17-works-rules-report.md，开发协调人按 AndyL 规则「换拼法后再存就新存一份，只改强度算同一张」定口径）
+
+- **P1 seed 放回指纹**：`WorkFingerprint` = 格子分配 + cols/rows + targetCrop + **seed**；不含叠加强度、导出档位、密度名（QA 复核第 3 节②：三档长边格数固定，改密度必然改 cols/rows）、targetSize。之前「去重只看格子分配」那句是我的建议被转述，不是 AndyL 原话，代码和测试注释里的这个出处都删了。只有 1 张素材时「换一种拼法」格子不变但 seed 变 → 新存一份；之后改强度只更新换拼法后的那张，原作品不动。「完成」不换 seed，所以只改强度仍是同一张。
+  - 指纹加前缀 `s2-`（`WorkFingerprint.prefix` / `isCurrent`），用来认出 #17 早期内测包写的、不带 seed 的 v2 指纹：和 v1 一样在内存里按 layout.json 补算。
+- **P3 v1 只在命中并更新时写成 v2**（QA A3）：`list()` / 打开列表只在内存里补算指纹（`recomputedFingerprints`），不写 meta.json，`formatVersion` 保持磁盘上的值；只有 `updateOverlay` 命中并写新强度时才写 v2。装回旧内测包，没更新过的旧作品还能看到。
+- **P3 更新途中被杀**：meta.json 改成唯一提交点，加提交日志 `WorkMeta.pendingPreviewFile`（平时为 nil，不进 JSON）：① 新预览画在 `.tmp-*`，挪进作品目录叫 `.preview-pending-<uuid>.jpg`；② 原子写 meta（新强度 + 日志）= 提交；③ `rename(2)` 换到 `preview.jpg`；④ 原子写 layout.json；⑤ 清日志。② 之前被杀 → 还是旧强度旧预览，`removeIncomplete` 删没登记的临时预览；② 之后被杀 → 下次读 meta 时前滚（换预览、对齐 layout、清日志）。`load` 对更新过的作品（`updatedAt != nil`）以 meta 的强度为准。文件名、文件集合都不变。
+- **重选同一张目标图仍显示「开始拼图」**：按协调人决定接受，不改。
+- **测试**：
+  - 按 QA 原意恢复：`QAWorksRulesTests.testGuard4_SeedStillDistinguishes`（2 份）；pending `testFingerprintIgnoresAlphaAndTierButNotSeedOrCells`（含 seed；密度名一处按 QA 复核②保留「不含」并注明出处）；delete 回归 `testCharacterize_SameCellsDifferentSeedBecomesTwoWorks`（2 份）。delete 回归里错标的「B4/B5/B6」改成 B10-3 / B10-2 / B9-7。
+  - `WorksSaveRulesTests`：指纹口径改成含 seed（`testFingerprintIncludesSeed`、前缀断言）；`testDifferentSeedSameCellsIsNewWork`（单素材：换拼法新存，改强度不碰原作品）；`testLegacyFingerprintRecomputedInMemoryAndWrittenOnlyOnUpdate`、`testPreSeedV2FingerprintRecomputedInMemory`；`WorksSaveButtonStateTests.testSingleMaterialReshuffleSavesNewAndAlphaNeverTouchesOriginal`（真 controller）；原有用例里依赖「seed 不进指纹」的 seed 参数改成同 seed。
+  - 新增 `WorksAtomicUpdateTests`（5 条）：正常更新不留日志；提交前被杀；提交后预览未换；预览已换 layout 未改；load 以 meta 强度为准。
+
+- **列表长按删除**（B5，D 节 22:45：这一轮做）：`WorksListView` 格子加 `contextMenu`，只有一项，复用 `works.delete`「删除」（`role: .destructive`，不新增 key；`works.menu.delete` 作废）→ 列表自己的 `works.delete.confirm` 确认框。被选中的 id 存在视图本地 `@State deleteCandidate`，确认按钮直接调 `deleteConfirmed(id)`，不依赖共享的 `pendingDelete`。无参 `deleteConfirmed()` 标 deprecated（内部实现 `confirmPendingDelete()`）。
+- **导出不自动存**（B10-1）：`exportSucceeded` 只刷新按钮状态；`AppCoordinator` 里 `onSucceeded` 挪到写相册成功 / 进入分享之后（写相册失败不再通知）。`WorkOrigin.autoSavedOnExport` 只为读旧作品保留。
+- **同一张的口径**（B10-2/3/10）：`WorkFingerprint`（v2）看每格照片 ID + 裁剪、cols/rows、targetCrop、seed（seed 是 QA 复核后放回的，见上）；不含叠加强度、密度名、targetSize、导出档位。规范字节流 FNV-1a 64，浮点按 1e-6 量化。
+- **保存**（`FileWorksStore.save` → `WorkSaveResult{summary, outcome: inserted / updatedOverlay / unchanged}`）：没有同指纹 → 新存；同指纹同强度 → 不写盘；同指纹只差强度 → 原地更新（B10-3/8）：重画预览、更新 layout.json 的 `params.overlayAlpha` 和 meta 的强度 / 预览尺寸 / `updatedAt`；id、createdAt、列表位置、格子、文件名不变，不留历史。文件先写临时名再 `rename(2)` 替换，meta.json 最后写（提交点）；中途失败原作品完整；更新中被删报 notFound、不复活。同指纹保存按 `inFlight` 排队。
+- **命中哪一份**（B10-9/12）：`WorkSummary.saveTarget(in:fingerprint:preferred:)`，存储层和按钮状态共用：结果页记住的作品（还在且同指纹）优先；否则同指纹里 `updatedAt ?? createdAt` 最大的那份。旧数据重复不合并、不删。排序仍按 createdAt 倒序（B10-7）。
+- **旧数据迁移**：`WorkMeta.currentFormatVersion = 2`，新增 `updatedAt`。读到 v1 时按 layout.json 在内存里补算新指纹，命中并更新时才写回 v2（见上）。
+- **按钮状态**（B10-5/6）：`WorkSaveStatus` = `idle / saving / saved(id) / needsUpdate(id) / failed`，`canSave` / `canUpdate` / `isEnabled`。已存且没改 →「已存到我的作品」用已有的 `preview.saved_to_works`，不可点（`works.saved` 作废，没有新增）；只改强度 →「更新这张作品」`works.update`，不弹确认，成功后约 2 秒轻提示 `works.updated`（`WorksState.toast`），新存一张不提示。保存失败时结果不变就一直显示失败。结果页按钮文案 / 可点由 `WorksState.saveButtonKey` / `isSaveButtonEnabled`（QA A12，= `WorkSaveStatus.buttonKey` / `isEnabled`）给出，视图直接用。`unsavedPrompt`（`.none / .unsaved / .alphaChanged(id)`）只给 feat/start-new 用，本分支不接线。
+- **「再调一调」只改强度不重新生成**（B10-13/14，协调人方案①，QA A10）：
+  - `GenerationMachine` 新事件 `.restoreLastResult`：只在 `.idle` 且有 `lastOutcome` 时回到 `.result(lastOutcome)`，没有 effect，不消耗种子；生成中 / 取消确认框上忽略；导出中忽略。
+  - `AppCoordinator` 记下当前 `product` 是用哪组输入生成的（目标图代次（换图 / 重新裁剪都会 +1）、来源、密度；不含叠加强度）。`settingsPrimaryAction: SettingsPrimaryAction { .done, .generate }`（QA A11）：输入没变 → `.done`（`common.done`「完成」），否则 `.generate`（`generate.cta`）。`adjustDoneTapped() async` 回到原结果：格子、种子、`resultRevision` 都不变，AppModel 回结果页时按新强度重画预览。`generateTapped()` 仍是「开始拼图」，总是重新生成。设置页主按钮按 `settingsPrimaryAction` 显示和分派。
+  - 调整期间保留的只有原来就保留的那一份 `product`（`backToSettings` 原本也不释放它），预览位图离开结果页照常释放，所以没有额外内存。改了密度开始生成后取消：旧结果和 product 不变，把密度改回去又能「完成」。
+  - `WorksController` 记住「当前结果对应的作品 id」（和 `resultRevision` 绑定；存 / 更新成功时记下），「再调一调」来回不丢；换拼法 / 重新生成（revision 变了）才清掉。`currentWorkID` 可读。保存时把它作为 `WorkDraft.preferredWorkID` 传给存储层。
+  - 作品查看页这一轮没有强度入口（B10-13）。
+- **缺图计数**（B7）：`works.missing` 用 v1.3「有 {count} 格原来的照片现在用不了，这几格会稍模糊」，`missingCount` 按格计数（`cellAssignments` 里照片不在的格子数，同一张照片占多格算多格）。导出时取不到的格子保持原有兜底，没有新增 128px 逻辑。
+- **文案**：`copy_v1.1.md` §5.5 删 `works.menu.delete`、`works.saved`，加 `works.update`、`works.updated`、`quick.unsaved.update_title`（键先同步，接线在 feat/start-new）；同步 v1.4 相簿多选、`quick.*`；`gen-localizable.py` 重新生成。`common.done` 已在文案表里。
+- **测试**：
+  - 新增 `AdjustRoundTripTests`（12 条）：状态机 restore 的前置条件 / 不消耗种子 / 生成中和取消框上无效；只改强度往返格子、种子、revision 不变且不调生成器；`generateTapped` 总是重新生成；改密度 → `.generate` 重新生成、改回 → `.done`；换目标图 → `.generate`；生成中取消后旧结果仍可「完成」回去；存过 → 往返 → `needsUpdate(id)` → 更新同一张 + 轻提示 → 换拼法清掉 id；没存过的往返仍是未存；改密度后另存；`saveTarget` 命中规则（记住的优先、`updatedAt ?? createdAt` 最大）。
+  - `WorksSaveRulesTests`：指纹口径、原地更新、并发、更新中被删、更新失败、旧数据迁移和重复、按钮状态 / 轻提示。
+  - QA 测试计划 v0.4 的 `QAWorksRulesTests`（34 条）和 `pending/QAWorksRulesPendingInterfaceTests`（19 条，A1–A12 全部按计划里的名字实现）接入，改动都标了「全栈改 / 全栈加」：`setAlpha` 通知 controller；旧数据重复用 `makeLegacyDuplicate` 构造；pending 的 A2 密度名断言改成「不含」。（曾按查不到出处的「AndyL 口径」反转 seed 断言，QA 复核后已恢复，见上。）
+  - 结果：MosaicAppCore `swift test --no-parallel` 409 个，0 失败，3 跳过；`check-photo-fetch.sh`、`check-no-network.sh` 通过；MosaicCore 153 个，0 失败。App 层改动 Linux 上编译不了，未在真机 / Xcode 编过。
 
 
 ## feat/picker-t3：`fetchKeyAssets` 纳入隐藏照片检查（QA #9 补丁）

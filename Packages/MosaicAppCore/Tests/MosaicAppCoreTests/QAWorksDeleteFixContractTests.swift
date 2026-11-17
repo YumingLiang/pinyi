@@ -53,7 +53,7 @@ final class QAWorksDeleteFixContractTests: XCTestCase {
         let a = try await save(store, ["a", "b", "c"])
         await c.start()
         c.deleteTapped(a); c.deleteCancelled()
-        await c.deleteConfirmed()   // 旧入口：无待确认 → 不删
+        await c.confirmPendingDelete()   // 原无参 deleteConfirmed() 已 deprecated（-warnings-as-errors），改调同一实现   // 旧入口：无待确认 → 不删
         XCTAssertEqual(c.state.count, 1)
     }
 }
