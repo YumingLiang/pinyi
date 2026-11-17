@@ -5,8 +5,7 @@ name: linux-core
 on:
   pull_request:
   push:
-    # ⚠️ 临时：ci/perf-regression 只为在该分支上测门禁抖动，集成进 feat/app-layer 前删掉这一项。
-    branches: [main, ci/perf-regression]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:

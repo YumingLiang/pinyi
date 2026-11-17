@@ -8,8 +8,8 @@ ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --f
 ## 判定规则
 
 - 每个指标：预热 1 次，再测 `MOSAIC_PERF_REPEAT` 次（CI = 5），取**中位数**。
-- ubuntu-latest 的机型是混的（11-16 实测 10 次碰到 5 种 CPU：Xeon 8370C、EPYC 7763、EPYC 9V74、Xeon 6975P-C、EPYC 9V45），
-  同一指标跨机型的原始中位数能差到 ×2，所以**先按机型比**：
+- ubuntu-latest 的机型是混的（11-16 实测 15 次碰到 5 种 CPU：Xeon 8370C、EPYC 7763、EPYC 9V74、Xeon 6975P-C、EPYC 9V45），
+  同一指标跨机型的原始中位数能差到 ×2.2，所以**先按机型比**：
   1. CI 在结果文件第一行写 `{"runner_cpu": "...", "nproc": 4}`。
   2. 基线里有该机型（`by_cpu`，≥ 2 份结果才建）→ `比值 = 本次中位数 ÷ 同机型基线`，
      **比值 > 1.20 且 绝对差 > 10 ms → 失败**（`threshold.same_cpu.ratio`）。
