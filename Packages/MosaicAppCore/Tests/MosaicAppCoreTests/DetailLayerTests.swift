@@ -197,11 +197,19 @@ final class DetailLayerTests: XCTestCase {
     }
 
     func testTriggerTooManyCellsAndInvalid() {
-        // 细档 120×90，底图每格 34 px：@4x 每格 39 px … 不够；@6x 58.5 px > 51 但可见 20×30 = 600 格 > 300
+        // 细档 120×90，底图每格 34 px：@4x 每格 39 px 不够；@6x 58.5 px > 51，可见约 600 格，上限 960 下应启用。
         let base = PreviewImageLimits.cellPixels(columns: 120, rows: 90)
         XCTAssertEqual(DetailLayerTrigger.decide(geo(scale: 4, columns: 120, rows: 90), baseCellPixels: base),
                        .baseIsSharpEnough)
-        XCTAssertEqual(DetailLayerTrigger.decide(geo(scale: 6, columns: 120, rows: 90), baseCellPixels: base),
+        guard case .activate(_, _, let tier) = DetailLayerTrigger.decide(geo(scale: 6, columns: 120, rows: 90),
+                                                                          baseCellPixels: base) else {
+            return XCTFail("细档 6x 可见约 600 格，应启用清晰层")
+        }
+        XCTAssertEqual(tier, .p256)
+        // 上限本身仍然生效（自定义 300 时，600 格走 tooManyCells）
+        var tight = DetailLayerPolicy.standard
+        tight.maxVisibleCells = 300
+        XCTAssertEqual(DetailLayerTrigger.decide(geo(scale: 6, columns: 120, rows: 90), baseCellPixels: base, policy: tight),
                        .tooManyCells)
         XCTAssertEqual(DetailLayerTrigger.decide(geo(scale: 16, columns: 0), baseCellPixels: 64), .invalidGeometry)
         XCTAssertEqual(DetailLayerTrigger.decide(geo(scale: 2, offset: V(x: 5000, y: 0)), baseCellPixels: 64),
@@ -249,7 +257,7 @@ final class DetailLayerTests: XCTestCase {
     func testStandardPolicy() {
         let p = DetailLayerPolicy.standard
         XCTAssertEqual(p.minGainOverBase, 1.5)
-        XCTAssertEqual(p.maxVisibleCells, 300)
+        XCTAssertEqual(p.maxVisibleCells, 960)
         XCTAssertEqual(p.ring, 1)
         XCTAssertEqual(p.settleDelay, 0.15)
         XCTAssertEqual(p.maxConcurrentRequests, 6)
@@ -298,6 +306,59 @@ final class DetailLayerTests: XCTestCase {
     }
 
     // MARK: 请求差分（取消旧请求）
+
+    /// QA P2-1：iPhone 17 Pro Max（440×600 pt @3x）上，原先因 maxVisibleCells=300 而不启用的缩放区间现在应启用，
+    /// 且取图计划按 64 MB 截断后字节数不超过预算。分档阈值不改（>64 仍用 256 px）。
+    func testTriggerEnablesFormerGapZoomsAndBudgetCapsBytes() {
+        let viewport = V(x: 440, y: 600)
+        let displayScale: Double = 3
+        let budget: Int = 64 * 1_048_576
+
+        func fitted(columns: Int, rows: Int) -> V {
+            let aspect = Double(columns) / Double(rows)
+            if viewport.x / viewport.y > aspect {
+                return V(x: viewport.y * aspect, y: viewport.y)
+            }
+            return V(x: viewport.x, y: viewport.x / aspect)
+        }
+
+        func geometry(columns: Int, rows: Int, scale: Double) -> DetailGeometry {
+            return DetailGeometry(viewport: viewport, fittedSize: fitted(columns: columns, rows: rows),
+                                  scale: scale, offset: .zero, displayScale: displayScale,
+                                  columns: columns, rows: rows)
+        }
+
+        // (列, 行, 缩放)：细档 4:3 原缺口 4.65–8.55x，中档 4:3 原缺口 4.65–5.70x；
+        // 细档 3:4 原缺口 3.50–6.40x，中档 3:4 原缺口 3.50–4.25x。
+        let columnsList: [Int] = [120, 120, 120, 80, 80, 90, 90, 60, 60]
+        let rowsList: [Int]    = [ 90,  90,  90, 60, 60, 120, 120, 80, 80]
+        let scaleList: [Double] = [4.65, 6.0, 8.55, 4.65, 5.7, 3.50, 6.40, 3.50, 4.25]
+        XCTAssertEqual(columnsList.count, scaleList.count)
+        XCTAssertEqual(rowsList.count, scaleList.count)
+
+        for i in 0..<scaleList.count {
+            let columns = columnsList[i]
+            let rows = rowsList[i]
+            let scale = scaleList[i]
+            let base = PreviewImageLimits.cellPixels(columns: columns, rows: rows)
+            let g = geometry(columns: columns, rows: rows, scale: scale)
+            let decision = DetailLayerTrigger.decide(g, baseCellPixels: base)
+            guard case .activate(_, _, let tier) = decision else {
+                return XCTFail("\(columns)×\(rows) @\(scale)x 应启用，实际 \(decision)，可见格 \(g.visibleCellCount)")
+            }
+            XCTAssertEqual(tier, .p256, "\(columns)×\(rows) @\(scale)x 可见格 \(g.visibleCellCount) > 64，应为 256 档")
+            XCTAssertLessThanOrEqual(g.visibleCellCount, DetailLayerPolicy.standard.maxVisibleCells)
+            let cellCount = columns * rows
+            var ids: [String?] = []
+            ids.reserveCapacity(cellCount)
+            for n in 0..<cellCount { ids.append("a\(n)") }
+            let plan = DetailLoadPlan(geometry: g, cellAssetIDs: ids, tier: tier)
+                .limited(toBytes: budget)
+            let plannedBytes: Int = plan.items.count * tier.byteCost
+            XCTAssertLessThanOrEqual(plannedBytes, budget, "\(columns)×\(rows) @\(scale)x 计划 \(plannedBytes) 字节")
+            XCTAssertGreaterThan(plan.items.count, 0)
+        }
+    }
 
     func testRequestDiff() {
         let d = DetailRequestDiff.diff(inFlight: ["a", "b", "c"], needed: ["c", "d", "e", "d", "f"],

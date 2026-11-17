@@ -205,7 +205,14 @@ final class AppModel: ObservableObject {
         detailOverlay = nil
         if OverlayBlendLimits.clamp(alpha) > 0, let t = ImagePixels.cgImage(target) {
             let crop = product.generation.layout.cropRect
-            detailOverlay = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height))
+            // 长边 > 2048 先缩到 2048 再持有：放大后这一层本来就是糊的，和导出一致，避免结果页一直攥着一份 4096 目标图。
+            var overlay = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height))
+            if let img = overlay, max(img.width, img.height) > 2048,
+               let scaled = ImagePixels.opaqueSRGB(img, maxEdge: 2048),
+               let cg = ImagePixels.cgImage(scaled) {
+                overlay = cg
+            }
+            detailOverlay = overlay
         }
         let thumbs = thumbnails
         let perf = self.perf

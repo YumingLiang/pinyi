@@ -36,8 +36,10 @@ public enum DetailTier: Int, CaseIterable, Comparable, Sendable {
 public struct DetailLayerPolicy: Sendable, Equatable {
     /// 屏幕上每格像素 > 底图每格像素 × 这个倍数才启用。
     public var minGainOverBase: Double = 1.5
-    /// 可见格（不含外扩圈）超过这个数就不启用（每格还小，底图够用）。
-    public var maxVisibleCells: Int = 300
+    /// 可见格（不含外扩圈）超过这个数就不启用。
+    /// 960：盖住 iPhone 17 Pro Max（440×600 pt @3x）细档 4:3 在启用阈值约 4.65x 时的约 930 格
+    ///（768 仍会留下 4.65–5.06x 的缺口）。实际取图再按 64 MB 字节预算截断（256 档最多 256 张，中心优先）。
+    public var maxVisibleCells: Int = 960
     /// 可见范围外扩几圈格子。
     public var ring: Int = 1
     /// 手势结束后多久更新可见集合（秒）。

@@ -2,11 +2,11 @@
 
 ## feat/preview-detail-layer：结果页预览清晰层（正式修复放大发糊；架构师 21:02 方案）
 
-基于 feat/preview-sharp-quick（`39e277a`，含止血改动），已 merge feat/app-layer `a976303`（#12 生成提速，生成走 `GenerationRunner.production`）和 `7557daa`。AndyL：「可能主要是不清晰，先把清晰度的问题修复了」。底图（每格 ≤ 64 px、长边 ≤ 4096）不动；放大到底图不够清楚时，只给可见格子换高清方图。不改生成 / 匹配，不碰 LiveDependencies 的清晰度注入，不碰 target.heic。
+基于 feat/preview-sharp-quick（`39e277a`，含止血改动），已 merge feat/app-layer `a4e4164`（#9 选图 PhotoFetch，含 #12 / #13）。AndyL：「可能主要是不清晰，先把清晰度的问题修复了」。底图（每格 ≤ 64 px、长边 ≤ 4096）不动；放大到底图不够清楚时，只给可见格子换高清方图。不改生成 / 匹配，不碰 LiveDependencies 的清晰度注入，不碰 target.heic。
 
 - **MosaicAppCore `Preview/DetailLayer.swift`（新，纯逻辑）**：
   - `DetailGeometry`：和 `ZoomableContainer` 同一套变换（scaledToFit 居中 → 以视口中心 scaleEffect → offset），算内容 / 格子的屏幕像素矩形、每格屏幕像素、可见格子范围（半开区间，边缘落在格线上不多算一格）、外扩 N 圈、中心优先顺序（先可见格、再外扩圈），以及 scaleEffect 之内摆放用的未缩放格子 frame。
-  - `DetailLayerTrigger`：启用条件 = 屏幕每格像素 > 底图每格像素 × 1.5，且可见格 ≤ 300；返回外扩 1 圈后的范围和档位。
+  - `DetailLayerTrigger`：启用条件 = 屏幕每格像素 > 底图每格像素 × 1.5，且可见格 ≤ 960（QA P2-1：原 300 盖不住细档 4.65–8.55x / 中档 4.65–5.7x；960 盖住 iPhone 17 Pro Max 细档 4:3 在阈值附近的约 930 格）。返回外扩 1 圈后的范围和档位。取图计划仍按 64 MB 字节预算截断（中心优先）。分档阈值不改。
   - `DetailTier`：按可见格数分档，> 64 → 256 px，≤ 64 → 512，≤ 4 → 1024。
   - `DetailLayerState`：防抖 + 代次。缩放 / 平移每次变化代次 +1，150 ms 内没有新变化才更新可见集合；过期定时器作废；集合没变不重复更新；离开结果页 / 换拼法 / 内存警告 `reset()` 清空 + 清缓存。
   - `DetailLoadPlan`（按照片分组，同一照片多格只取一次）、`DetailRequestDiff`（可见集合变化时要取消 / 新发的请求）。
@@ -14,11 +14,12 @@
 - **App `Rendering/PreviewDetailLayer.swift`（新）**：
   - `PreviewDetailLayer`（MainActor）：取图复用导出 hq 请求（`fastFormat = false`、`fastResize = false`、`centerCropToSquare = true`，不联网），取不到退回 `.scanDisplay`，再取不到就保持底图、不提示。最多 6 个请求在飞，可见集合变化时取消不再需要的。`NSCache` 按字节计费、上限 64 MB、键 = assetID；离开结果页、换拼法、内存警告时清空。显示中的图被视图持有、NSCache 淘汰不掉，所以取图计划再按 64 MB 截断（中心优先，外圈先丢），守住峰值 ≤ 现在 + 64 MB。每次更新写 os_log（category `preview-detail`）和性能页。
   - `PreviewDetailTilesView`：放在 `ZoomableContainer` 内容里（和底图同一个 scaleEffect 之内），每格一个 `Image`，frame = 未缩放格子尺寸，`.position` 定位，**不加 drawingGroup 等光栅化修饰符**。手势进行中清晰层随内容一起缩放平移，不隐藏也不会错位；手势停下 150 ms 后才换可见集合。
-  - 叠加 α > 0：清晰层上再叠目标图（同一 cropRect、同一 α，`.opacity`），用已显示格子的形状做遮罩，只盖住有清晰图的格子（其余是底图，底图里已叠过）。
-- **App `Adapters/PhotoKitThumbnails.swift`**：新增 `cancellableThumbnail`（Task 取消 → `cancelImageRequest`），只给清晰层用；扫描 / 导出路径不变。`assets(_:)` 改走 `PhotoFetch.images(withLocalIdentifiers:)`（与 #9 同一行、同一写法，合并时不冲突），隐藏照片取不到。
+  - 叠加 α > 0：清晰层上再叠目标图（同一 cropRect、同一 α，`.opacity`），用已显示格子的形状做遮罩，只盖住有清晰图的格子（其余是底图，底图里已叠过）。目标图长边 > 2048 时先缩到 2048 再持有（架构师建议；放大后这一层本来就是糊的，和导出一致）。
+- **App `Adapters/PhotoKitThumbnails.swift`**：新增 `cancellableThumbnail`（Task 取消 → `cancelImageRequest`），只给清晰层用。`assets(_:)` 改走 `PhotoFetch.images(withLocalIdentifiers:)`（与 #9 同一行、同一写法）。**扫描和导出取图也改走 PhotoFetch**（扫描、底图预览、超清导出、作品重画都经 `assets(_:)`）。隐藏照片取不到：导出时 hq 和 `.scanDisplay` 都会直接 `.failed`，该格是白格子（不是糊格子，因为糊格子兜底也要先取到 PHAsset）；预览清晰层不盖这一格，隐藏前已画好的底图仍在。
 - **App `Models/AppModel.swift`、`Views/MainFlowView.swift`**：结果页内容改成「底图 + 清晰层」ZStack；`onChange(of: resultZoom)` 通知清晰层；换结果时 `configure`，离开结果页时 `reset`。
 - **拉伸检查**：底图缩略图预览用 `.scanDisplay`（`centerCropToSquare = true`，dd61da7 起）按短边居中裁方，没有非等比拉伸；色块占位不涉及照片。清晰层请求同样 `centerCropToSquare = true`。本次不做竖图上三分之一裁切。
-- **测试**：`DetailLayerTests` 19 个（可见格子 / 外扩 / 中心优先、未缩放 frame 与屏幕矩形互相换算、档位、启用条件、防抖代次、平移换集合 / 缩小清除、reset、取图计划去重、64 MB 字节预算截断、请求差分）。`DetailLayerBenchTests` 只在 `MOSAIC_BENCH=1` 时跑。PhotoKit / SwiftUI 部分 Linux 只做 `swiftc -parse`。
+- **测试**：`DetailLayerTests` 20 个（可见格子 / 外扩 / 中心优先、未缩放 frame 与屏幕矩形互相换算、档位、启用条件、防抖代次、平移换集合 / 缩小清除、reset、取图计划去重、64 MB 字节预算截断、原缺口缩放区间启用且计划 ≤ 64 MB、请求差分）。`DetailLayerBenchTests` 只在 `MOSAIC_BENCH=1` 时跑。PhotoKit / SwiftUI 部分 Linux 只做 `swiftc -parse`。
+
 ## feat/picker-t3：`fetchKeyAssets` 纳入隐藏照片检查（QA #9 补丁）
 
 - **iOS 编译修复**：`PHAsset.fetchKeyAssets(in:options:)` 返回可选，`PhotoFetch.keyAssets(in:)` / `keyAssets(in:sources:)` 改为返回 `PHFetchResult<PHAsset>?`（nil 时调用方按无封面处理）。目前没有调用点。
