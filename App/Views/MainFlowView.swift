@@ -330,6 +330,7 @@ struct GenerationProgressView: View {
 
 struct ResultView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.displayScale) private var displayScale
     @State private var showTiers = false
 
     var body: some View {
@@ -345,8 +346,16 @@ struct ResultView: View {
                 let grid = model.previewGrid
                 ZoomableContainer(aspectRatio: Double(img.width) / Double(max(1, img.height)),
                                   columns: grid.columns, rows: grid.rows, zoom: $model.resultZoom) {
-                    Image(decorative: img, scale: 1).resizable().interpolation(.high).scaledToFit()
+                    // 底图 + 清晰层都在 scaleEffect 之内；清晰层不能加 drawingGroup 等光栅化修饰符。
+                    ZStack {
+                        Image(decorative: img, scale: 1).resizable().interpolation(.high).scaledToFit()
+                        PreviewDetailTilesView(layer: model.detailLayer, zoom: model.resultZoom,
+                                               columns: grid.columns, rows: grid.rows,
+                                               overlay: model.detailOverlay,
+                                               overlayAlpha: OverlayBlendLimits.clamp(model.overlayAlpha))
+                    }
                 }
+                .onChange(of: model.resultZoom) { _ in model.resultZoomChanged(displayScale: Double(displayScale)) }
             }
             Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
             HStack {

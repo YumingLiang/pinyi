@@ -36,9 +36,44 @@ public struct ExportFillStats: Sendable, Hashable {
     }
 
     /// 取图结果分类：高清成功优先，否则退回扫描缩略图，都没有则为空白。
+    /// 不区分「资产是否可见」；导出路径请用 `decision(afterHighQuality:)`。
     public static func fill(highQuality: Bool, scanThumbnail: Bool) -> Fill {
         if highQuality { return .highQuality }
         if scanThumbnail { return .blurryFallback }
         return .blank
     }
+
+    /// 高清请求之后的下一步（导出 / 清晰层共用）。
+    ///
+    /// - `.image`：用高清图。
+    /// - `.missing`：隐藏 / 删除 / PhotoFetch 取不到 → 直接空白，**不走** 128px 兜底
+    ///   （QA：即使 `.scanDisplay` 仍能从缓存取到，也不能把隐藏照片画出去）。
+    /// - `.unavailableLocal` / `.failed`：资产仍在，高清失败（例如 iCloud 原图未下载、解码失败）
+    ///   → 再试 `.scanDisplay`；再失败才空白。
+    public static func decision(afterHighQuality result: ThumbnailResult) -> ExportCellDecision {
+        switch result {
+        case .image: return .highQuality
+        case .missing: return .blank
+        case .unavailableLocal, .failed: return .tryScanDisplay
+        }
+    }
+
+    /// 由高清结果 + 128px 是否取到，得到最终填格类别（纯函数，供 Linux 测试）。
+    public static func fill(afterHighQuality result: ThumbnailResult, scanThumbnail: Bool) -> Fill {
+        switch decision(afterHighQuality: result) {
+        case .highQuality: return .highQuality
+        case .blank: return .blank
+        case .tryScanDisplay: return scanThumbnail ? .blurryFallback : .blank
+        }
+    }
+}
+
+/// `ExportFillStats.decision(afterHighQuality:)` 的下一步。
+public enum ExportCellDecision: Sendable, Hashable {
+    /// 使用高清请求拿到的图。
+    case highQuality
+    /// 再试 `.scanDisplay`（128 px）。仅当资产可见、高清失败时。
+    case tryScanDisplay
+    /// 直接白格子，不再取图。
+    case blank
 }

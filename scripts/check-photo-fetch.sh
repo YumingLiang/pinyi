@@ -51,17 +51,10 @@ fi
 #    - 不再整文件放行。确实要拿原始 fetch result 的（网格懒加载、素材扫描分批取），在**同一行**写行级标记
 #      `// photo-fetch: raw-ok <理由>`，理由不能空；该行必须自己保证后续经过 isHidden 过滤（VisibleIndexMap / visibleObjects）。
 #    - 能拦：`PhotoFetch.images( in:` 这类空格变体、`PhotoFetch` 换行后 `.images(in:` 的链式调用、函数引用（不带括号）、按 ID 取图。
-#    - 按 ID 取图的存量（属于 #15 的收口范围，#15 原样改成 visibleImages 后删掉这里的条目）：下面这几个文件各允许 1 处，
-#      多一处或别的文件新增都会报红。
+#    - 按 ID 取图以 #15 的 PhotoFetch 为准：只有 `PhotoFetch.visibleImages(withLocalIdentifiers:)`（及 `isPickedAssetAvailable`）可用，
+#      原始 `images(withLocalIdentifiers:)` 只在 PhotoFetch.swift 内部用；#15 已把全部调用点收口，不再有存量放行。
 #    测试：scripts/tests/check-photo-fetch-test.sh（正反例）。
 ROOT_APP="${PHOTO_FETCH_APP_DIR:-App}"
-legacy_by_id=(
-  "App/Works/WorksAdapters.swift"
-  "App/Adapters/PhotoKitResolutionProbe.swift"
-  "App/Adapters/PhotoKitTargetImageLoader.swift"
-  "App/Adapters/PhotoKitThumbnails.swift"
-  "App/Adapters/PhotoKitThumbnailLoader.swift"
-)
 # awk：去掉整行注释；以 `.` 开头的续行（换行链式调用）、上一行以 `.` 结尾的，拼回上一行；输出 path:起始行号:拼好的内容。
 joined=$(find "$ROOT_APP" -name '*.swift' -not -path "$ROOT_APP/InternalTools/*" -not -name 'PhotoFetch.swift' -print0 2>/dev/null \
   | xargs -0 -r awk '
@@ -77,20 +70,11 @@ joined=$(find "$ROOT_APP" -name '*.swift' -not -path "$ROOT_APP/InternalTools/*"
 raw_re='PhotoFetch[[:space:]]*\.[[:space:]]*(allImages|images|keyAssets)([^A-Za-z0-9_]|$)'
 hits=$(printf '%s\n' "$joined" | grep -E "$raw_re" || true)
 bad=""
-by_id_seen="|"   # 不用关联数组：macOS 自带 bash 3.2 也能跑
 while IFS= read -r h; do
   [ -z "$h" ] && continue
-  file=${h%%:*}
   content=${h#*:*:}
   # 行级标记（理由不能空）
   if printf '%s' "$content" | grep -Eq '//[[:space:]]*photo-fetch:[[:space:]]*raw-ok[[:space:]]+[^[:space:]]'; then continue; fi
-  # 按 ID 取图存量（#15）：只放行名单里的文件、各 1 处，且这一行只能是按 ID 取图
-  if printf '%s' "$content" | grep -Eq 'PhotoFetch[[:space:]]*\.[[:space:]]*images[[:space:]]*\([[:space:]]*withLocalIdentifiers' \
-     && ! printf '%s' "$content" | grep -Eq 'PhotoFetch[[:space:]]*\.[[:space:]]*(allImages|keyAssets)|PhotoFetch[[:space:]]*\.[[:space:]]*images[[:space:]]*\([[:space:]]*in[[:space:]]*:'; then
-    for f in "${legacy_by_id[@]}"; do
-      if [ "$file" = "$f" ] && [[ "$by_id_seen" != *"|$f|"* ]]; then by_id_seen+="$f|"; continue 2; fi
-    done
-  fi
   bad+="$h"$'\n'
 done <<< "$hits"
 if [ -n "$bad" ]; then
