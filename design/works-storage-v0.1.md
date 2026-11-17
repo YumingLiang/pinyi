@@ -104,6 +104,6 @@
   - 完全授权下查不到：deleted
   - 其余情况：unknown
 - `MissingCellFill.decide(reason:hasCandidate:)`：有候选就用候选；deleted 用旧预览裁切（4b）；hidden 或 unknown 填目标图在这一格的平均色，计入 `works.missing`。预览、缩略图、存盘兜底和高清导出都只走这一个函数
-- 填纯色的格子不写进兜底图文件，只在 meta 里记下格子号和颜色
+- 填纯色的格子不写进兜底图文件，颜色存在 layout 的对应格子上（`"fc": [r,g,b]`，#11 a9df567 实现），meta 只记 fallbackVersion 和计数。这些格子不算引用任何照片 ID，不进 assets.ids
 - 迁移：兜底图加 `fallbackVersion = 2`。版本更低的整个作废、删掉文件，这些格子重新匹配；匹配不到的一律填目标色（旧预览可能已经被隐藏像素污染），然后重画 preview 和缩略图。重画完成前不显示旧 preview
 - InternalTools（例如 TestAlbumWriter）按 ID 直接取图，和规则 4 一样豁免，但守护要同时检查这些文件只属于 Internal target
