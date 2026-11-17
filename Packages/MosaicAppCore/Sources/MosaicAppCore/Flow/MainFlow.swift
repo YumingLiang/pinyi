@@ -21,6 +21,9 @@ public struct MainFlow: Sendable, Hashable {
     /// 从作品查看页点「再拼一张」、而主流程当时没有停在结果页（quick-start v1.0 §2a）：同样「选一张 → 确认页（素材沿用）→
     /// 开始拼图」，只是没有可返回的预览页。开始生成时结束（`endFreshQuickStart`）。
     public private(set) var isFreshQuickStart = false
+    /// 进入 fresh quick start 前停在哪页 / 有没有目标图（选图提示「取消」回发起页时恢复，例如「再调一调」设置页）。
+    private var stepBeforeFreshQuickStart: Step = .target
+    private var hasTargetBeforeFreshQuickStart = false
     /// 确认页返回去哪（quick-start v1.0 §2e，23:20 定）。`false`（现在）：目标图用系统 PhotosPicker，选择器不方便重新弹回，
     /// 「再拼一张」确认页按一次返回直接回原预览页。`true`：自做选图页（§4，记住相簿和滚动位置）接入后改成 true，
     /// 确认页返回回到选图页，选图页再返回才回预览页（有意两步）。两种情况原结果都保留，不弹未保存提示。
@@ -98,6 +101,8 @@ public struct MainFlow: Sendable, Hashable {
             guard !isQuickAgain else { return }
             if case .result = generation.phase { return }   // 停在结果页时走 quickAgainStarted
             isFreshQuickStart = true
+            stepBeforeFreshQuickStart = step
+            hasTargetBeforeFreshQuickStart = hasTarget
             hasTarget = false
             targetNotice = nil
             step = .target
@@ -115,6 +120,16 @@ public struct MainFlow: Sendable, Hashable {
     /// 「再拼一张」真正开始生成新图：结束保留旧结果的状态（协调器同时丢弃旧结果和预览位图）。
     public mutating func commitQuickAgain() {
         isQuickAgain = false
+    }
+
+    /// 作品页 /「再调一调」进来的「再拼一张」在选图页就放弃了（`picker.unavailable`「取消」）：回到进来前的那一页，
+    /// 目标图状态恢复（目标图本身没换过：取不到的照片不会进 `setTarget`）。
+    public mutating func cancelFreshQuickStart() {
+        guard isFreshQuickStart else { return }
+        isFreshQuickStart = false
+        hasTarget = hasTargetBeforeFreshQuickStart
+        targetNotice = nil
+        step = stepBeforeFreshQuickStart == .result ? .settings : stepBeforeFreshQuickStart
     }
 
     /// 作品页进来的「再拼一张」开始生成了（之后和普通流程一样）。

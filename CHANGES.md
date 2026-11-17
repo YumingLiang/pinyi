@@ -157,6 +157,31 @@
 - 5c（目标图本身被隐藏 / 删除时去掉叠加层）：已定为不处理。
 - 测试：`WorksHiddenPhotoTests`（11 个），`WorksControllerTests` 缺失用例按新行为更新 + 新增 1 个。
 
+## fix/picker-unavailable-cancel（追加）：QA 复核 pr22-picker-cancel-report.md + 产品 03:16 / 03:25 口径
+
+- **merge origin/feat/app-layer 57eff11**（含 #19、#21），CHANGES.md 两边都保留，没有 rebase。
+- **P1-2 原目标图恢复**：作品页 /「再调一调」进来的「再拼一张」开始时记下 `target` 和代次（`targetBeforeFreshQuickStart`）；选图提示「取消」回发起页时原样放回。
+  中途选过能用的照片、确认页返回、再选用不了的再取消，「再调一调」页仍是原目标图、主按钮仍是「完成」。开始生成新图 / 回首页时清掉。
+- **P1-3 发起页**：从作品查看页点「再拼一张」一律记 `.work(id:)`（含「再调一调」途中）；取消 → 回作品查看页，下面的主流程恢复成「再调一调」设置页（结果、「完成」、「已存」都在）。
+  没有作品 ID 的旧调用在「再调一调」途中仍按 `.adjust`。
+- **P3 / 产品 03:25 第 3 条 重开的层级**：`WorkReopenRequest.routes` = 作品列表 → 查看页；平台层先推 `WorksListView(reopenWorkID:)`，列表再自动推查看页（只推一次）。
+  从查看页返回到作品列表，和平时一样；再返回才回主流程（发起前那一页）。
+- **P3 已删作品不重开**：`CurrentResultSaving.hasWork(_:)`（`WorksController`：本次运行里删掉的作品返回 false）；作品在取消前被删了就不发 `reopenWorkRequest`，停在恢复好的主流程。
+- 测试：`PickerUnavailableCancelOriginTests` 按新口径改 2 个（「再调一调」途中从作品页发起 → `.work(id:)`、回查看页），新增 4 个（没有作品 ID 的旧调用回设置页、P1-2 原目标图和代次恢复、
+  开始生成后清掉快照、已删作品不重开）；新增 `WorkReopenRoutesTests` 2 个（routes、平台层先推列表再推查看页的源码守护）。
+
+## fix/picker-unavailable-cancel：选图提示「取消」回到发起「再拼一张」的那一页（P2，copy v1.6）
+
+- 问题：`picker.unavailable` 弹窗点「取消」，从作品查看页 /「再调一调」设置页发起的「再拼一张」停在选图页。
+- 修法：协调器记下这次「再拼一张」的发起页 `QuickStartOrigin`（`.preview` / `.work(id:)` / `.adjust`），「取消」（含系统收起弹窗）按它回去：
+  - 预览页 → 原预览页（不变，`quickAgainCancelled` 释放新目标图、恢复设置）；
+  - 作品查看页 → 主流程退回进来前那一页（停在结果页的回原预览页；没有结果的回原来那一步，目标图不动），`AppState.reopenWorkRequest`（作品 ID + token）让平台层重新打开那张作品的查看页（`MainFlowView.navigationDestination`）；
+  - 「再调一调」设置页（验收 7a）→ 回那个设置页，结果保留，「完成」照常回原结果。
+  - 原结果、作品、「已存」状态都不动；开始生成新图后发起页记录清掉。
+- `MainFlow.cancelFreshQuickStart()`：fresh quick start 在选图页放弃时恢复进来前的那一步和目标图状态。
+- `startNewFromWorkTapped(workID:)`：作品查看页传入作品 ID（默认 nil 兼容旧调用）。
+- 测试：`PickerUnavailableCancelOriginTests` +8（预览页已存 / 没存不保存、作品查看页（主流程在结果页 / 没有结果）、「再调一调」没存 / 已存、系统收起同取消、开始生成后清掉发起页）。
+
 ## feat/album-multiselect：相簿多选 + 记住来源（quick-start-req v1.0 §1a、§2f，验收 12；photo-picker-v0.1 §6.4）
 
 **依赖 #18（feat/start-new）和 #17（已在 app-layer 78ce569）**：本分支已 merge `origin/feat/app-layer` 和 `origin/feat/start-new`（都是 merge，没有 rebase）。

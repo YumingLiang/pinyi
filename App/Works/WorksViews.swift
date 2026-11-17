@@ -55,6 +55,10 @@ struct SaveToWorksButton: View {
 /// `deleteConfirmed(id)`，不在按钮里现读 `pendingDelete`（弹窗收起时它会先被 `deleteCancelled()` 清掉）。
 struct WorksListView: View {
     @EnvironmentObject var works: WorksModel
+    /// 选图提示「取消」回作品查看页时由主流程带进来：列表出现后自动再推这张作品的查看页（只推一次）。
+    var reopenWorkID: WorkID? = nil
+    @State private var reopenedDetailShown = false
+    @State private var didReopen = false
     /// 长按「删除」选中的作品（列表自己的确认框用）。
     @State private var deleteCandidate: WorkID?
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
@@ -91,6 +95,14 @@ struct WorksListView: View {
         }
         .navigationTitle(Text(L10nKey.worksNavTitle))
         .task { await works.controller.reload() }
+        .navigationDestination(isPresented: $reopenedDetailShown) {
+            if let id = reopenWorkID { WorkDetailView(id: id) }
+        }
+        .onAppear {
+            guard reopenWorkID != nil, !didReopen else { return }
+            didReopen = true
+            reopenedDetailShown = true
+        }
         // 列表自己的确认框只看 deleteCandidate（查看页的确认框看 pendingDelete == 它的 id，两边不互相触发）
         .confirmationDialog(Text(L10nKey.worksDeleteConfirm),
                             isPresented: Binding(get: { deleteCandidate != nil },
@@ -181,7 +193,7 @@ struct WorkDetailView: View {
             .controlSize(.large)
             .disabled(works.state.opened?.id != id || model.exportPhase.isBusy)
             // quick-start v1.0 §2a：查看页也能「再拼一张」（第三级文字按钮）。退回主流程后同预览页的流程和未保存提示。
-            Button { model.startNewFromWork() } label: {
+            Button { model.startNewFromWork(id: id) } label: {
                 Label { Text(L10nKey.quickAgain) } icon: { Image(systemName: "plus") }
             }
             .buttonStyle(.borderless)
