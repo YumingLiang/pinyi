@@ -265,7 +265,7 @@ public enum PenaltyScale {
 
 /// 分配结果统计，供结果页提示与性能页展示。
 public struct AssignmentStatistics: Hashable, Sendable {
-    /// 格子数。
+    /// 参与匹配的格子数（普通拼图 = 全部格子；形状模式 = 形状内格子数，见 `activeCells`）。
     public var cellCount: Int
     /// 可用素材数（掩码后）。
     public var availableCandidates: Int
@@ -381,14 +381,16 @@ public struct GreedyAssigner: Sendable {
 
     /// 以 `FeatureTable` 为素材的便捷入口：自动带上亮度方差，并排除 tombstone 行。
     public func assign(grid: MosaicGrid, cellFeatures: FeatureMatrix, table: FeatureTable, mask: BitMask? = nil,
-                       cancellation: CancellationToken? = nil, progress: MosaicProgressHandler? = nil) throws -> MosaicAssignment {
+                       cancellation: CancellationToken? = nil, progress: MosaicProgressHandler? = nil,
+                       activeCells: CellMask? = nil) throws -> MosaicAssignment {
         if let mask, mask.count != table.count {
             throw MosaicError.countMismatch(expected: table.count, actual: mask.count)
         }
         let live = table.liveMask
         let m = mask.map { $0.intersection(live) } ?? live
         return try assign(grid: grid, cellFeatures: cellFeatures, library: table.matrix, mask: m,
-                          lightnessVariance: table.lightnessVariance, cancellation: cancellation, progress: progress)
+                          lightnessVariance: table.lightnessVariance, cancellation: cancellation, progress: progress,
+                          activeCells: activeCells)
     }
 
     /// 执行分配（完整版：亮度方差打分 + 可取消 + 进度）。
@@ -397,11 +399,14 @@ public struct GreedyAssigner: Sendable {
     ///   - lightnessVariance: 每张素材的亮度方差（长度 = `library.count`）；`nil` 表示不启用纯色惩罚。
     ///   - cancellation: 取消令牌；同时检查调用线程所在 Task 的取消状态。
     ///   - progress: 进度回调（`.matching` 与 `.assigning` 两个阶段）。
+    ///   - activeCells: 格子掩码（形状 / 文字拼图，设计 shape-mosaic-v0.1 §5）。`nil` = 全部格子参与，结果与加参数前逐位一致。
+    ///     非 `nil` 时：尺寸须等于 `grid`；只对掩码内的格子算 top‑k、排顺序、分配；掩码外 `tiles = -1`、距离 0、级别 `.primary`
+    ///     且不计入统计；单张上限按**掩码内**格子数解析；随机顺序先对全格做同种子排列再过滤（同种子稳定）。
     /// - Throws: 除上述错误外，取消时抛 `CancellationError`（不返回部分结果）。
     ///   取消与否不改变随机序列：未取消的运行结果只由（输入、配置、种子）决定。
     public func assign(grid: MosaicGrid, cellFeatures: FeatureMatrix, library: FeatureMatrix, mask: BitMask?,
                        lightnessVariance: [Float]?, cancellation: CancellationToken?,
-                       progress: MosaicProgressHandler?) throws -> MosaicAssignment {
+                       progress: MosaicProgressHandler?, activeCells: CellMask? = nil) throws -> MosaicAssignment {
         let config = configuration
         let check = CancellationCheck(token: cancellation)
         try check.check()
@@ -418,6 +423,9 @@ public struct GreedyAssigner: Sendable {
         if let lightnessVariance, lightnessVariance.count != library.count {
             throw MosaicError.countMismatch(expected: library.count, actual: lightnessVariance.count)
         }
+        if let activeCells, !activeCells.matches(grid) {
+            throw MosaicError.countMismatch(expected: grid.cellCount, actual: activeCells.cellCount)
+        }
 
         let cellCount = grid.cellCount
         let available = mask?.setCount ?? library.count
@@ -433,11 +441,36 @@ public struct GreedyAssigner: Sendable {
                     top1MedianDistance: 0, effectiveUsagePenalty: 0, effectiveLowDetailPenalty: 0),
                 seed: config.seed)
         }
+        // 形状模式：掩码内格子（升序）与 格子 → top‑k 查询行 的映射；nil 时走原路径（查询行 = 格子下标）。
+        let activeList = activeCells?.activeIndices
+        let activeCount = activeList?.count ?? cellCount
+        if let activeCells, activeCount == 0 {
+            return MosaicAssignment(
+                grid: grid, tiles: [Int](repeating: -1, count: cellCount),
+                distances: [Float](repeating: 0, count: cellCount),
+                levels: [FallbackLevel](repeating: .primary, count: cellCount),
+                statistics: AssignmentStatistics(
+                    cellCount: activeCells.activeCount, availableCandidates: available,
+                    resolvedCap: config.cap.resolve(cellCount: 0, availableCount: available),
+                    levelCounts: Array(repeating: 0, count: FallbackLevel.allCases.count),
+                    distinctTilesUsed: 0, maxUses: 0, totalDistance: 0,
+                    top1MedianDistance: 0, effectiveUsagePenalty: 0, effectiveLowDetailPenalty: 0),
+                seed: config.seed)
+        }
         guard available > 0 else { throw MosaicError.noCandidates }
 
-        let cap = config.cap.resolve(cellCount: cellCount, availableCount: available)
-        let order = try makeOrder(cellCount: cellCount, config: config)
-        let topK = try kernel.topK(queries: cellFeatures, candidates: library, k: config.k, mask: mask,
+        let cap = config.cap.resolve(cellCount: activeCount, availableCount: available)
+        var order = try makeOrder(cellCount: cellCount, config: config)
+        var queryRow: [Int]? = nil
+        var queries = cellFeatures
+        if let activeCells, let activeList {
+            order = order.filter { activeCells.isActive($0) }
+            var rows = [Int](repeating: -1, count: cellCount)
+            for (q, cell) in activeList.enumerated() { rows[cell] = q }
+            queryRow = rows
+            queries = cellFeatures.gather(activeList)
+        }
+        let topK = try kernel.topK(queries: queries, candidates: library, k: config.k, mask: mask,
                                    cancellation: cancellation,
                                    progress: progress.map { p in { @Sendable done, total in
                                        p(MosaicProgress(phase: .matching, completed: done, total: total)) } })
@@ -523,15 +556,15 @@ public struct GreedyAssigner: Sendable {
         }
 
         // 第 1 轮：随机顺序，top‑k → 逐格扩到 fallbackK；仍失败者延后。
-        progress?(MosaicProgress(phase: .assigning, completed: 0, total: cellCount))
+        progress?(MosaicProgress(phase: .assigning, completed: 0, total: activeCount))
         var deferred: [Int] = []
         var perCellExpansions = 0
         for (step, cell) in order.enumerated() {
             if step % interval == 0 {
                 try check.check()
-                if step > 0 { progress?(MosaicProgress(phase: .assigning, completed: assignedCount, total: cellCount)) }
+                if step > 0 { progress?(MosaicProgress(phase: .assigning, completed: assignedCount, total: activeCount)) }
             }
-            var list = topK.neighbors(forQuery: cell)
+            var list = topK.neighbors(forQuery: queryRow?[cell] ?? cell)
             if tryStrict(cell, list, .primary) { continue }
             if canExpand, perCellExpansions < config.perCellExpansionLimit || depths.isEmpty {
                 perCellExpansions += 1
@@ -562,7 +595,7 @@ public struct GreedyAssigner: Sendable {
                     if tryStrict(cell, list, .batchDeepened) { continue }
                     if isLast { try finalFailure(cell, list) } else { deferred.append(cell) }
                 }
-                progress?(MosaicProgress(phase: .assigning, completed: assignedCount, total: cellCount))
+                progress?(MosaicProgress(phase: .assigning, completed: assignedCount, total: activeCount))
                 g0 += group.count
             }
         }
@@ -581,11 +614,15 @@ public struct GreedyAssigner: Sendable {
         }
 
         try check.check()
-        progress?(MosaicProgress(phase: .assigning, completed: cellCount, total: cellCount))
+        progress?(MosaicProgress(phase: .assigning, completed: activeCount, total: activeCount))
         var levelCounts = [Int](repeating: 0, count: FallbackLevel.allCases.count)
-        for l in levels { levelCounts[l.rawValue] += 1 }
+        if let activeList {
+            for cell in activeList { levelCounts[levels[cell].rawValue] += 1 }
+        } else {
+            for l in levels { levelCounts[l.rawValue] += 1 }
+        }
         let stats = AssignmentStatistics(
-            cellCount: cellCount,
+            cellCount: activeCount,
             availableCandidates: available,
             resolvedCap: cap,
             levelCounts: levelCounts,
