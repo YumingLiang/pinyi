@@ -235,7 +235,7 @@ public enum QuickStartOrigin: Sendable, Hashable {
     case preview
     /// 作品查看页的「再拼一张」。
     case work(id: WorkID)
-    /// 「再调一调」设置页（经作品查看页入口，验收 7a）。
+    /// 「再调一调」设置页（没有作品 ID 的旧调用；从作品查看页发起的一律记 `.work(id:)`，产品 03:16 口径）。
     case adjust
 }
 
@@ -244,4 +244,14 @@ public struct WorkReopenRequest: Sendable, Hashable {
     public var workID: WorkID
     public var token: Int
     public init(workID: WorkID, token: Int) { self.workID = workID; self.token = token }
+
+    /// 压在主流程上的页（自下而上）：和平时一样「作品列表 → 查看页」（产品 03:25 第 3 条）。
+    /// 从查看页返回到作品列表，再返回才回主流程（主流程停在发起前那一页，例如「再调一调」设置页，原目标图和「完成」都在）。
+    public var routes: [WorksRoute] { [.list, .detail(workID)] }
+}
+
+/// 我的作品的导航页。
+public enum WorksRoute: Sendable, Hashable {
+    case list
+    case detail(WorkID)
 }

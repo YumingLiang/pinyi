@@ -185,6 +185,8 @@ public final class WorksController {
     /// 结果页记住的「当前结果对应的作品」（B10-13）：存 / 更新成功后记下，和结果版本号绑定。
     /// 「再调一调」只改叠加强度再回来不重新生成、版本号不变 → 一直记得；换拼法 / 重新生成（版本号变了）才清掉。
     private var remembered: (revision: Int, id: WorkID)?
+    /// 本次运行里删掉的作品（`hasWork` 用：选图提示「取消」时不再重开已删作品的查看页）。
+    private var deletedWorkIDs: Set<WorkID> = []
 
     private struct FingerprintKey: Equatable {
         var revision: Int
@@ -451,8 +453,10 @@ public final class WorksController {
         if state.pendingDelete == id { state.pendingDelete = nil }
         do {
             try await store.delete(id)
+            deletedWorkIDs.insert(id)
         } catch WorksStoreError.notFound {
             // 已经不在了：当作删除成功
+            deletedWorkIDs.insert(id)
         } catch {
             state.notice = .worksDeleteFailed
         }
@@ -473,6 +477,9 @@ public final class WorksController {
 
 /// `unsavedPrompt` 就是上面按「当前结果 vs 作品库」算的那个（导出过不算存过）。
 extension WorksController: CurrentResultSaving {
+    /// 这张作品没被删掉（本次运行里经 `deleteConfirmed` 删的才算不在；列表没加载完、没见过的 ID 一律按还在）。
+    public func hasWork(_ id: WorkID) -> Bool { !deletedWorkIDs.contains(id) }
+
     /// 未保存提示里的「保存」：同「存到我的作品」/「更新这张作品」按钮（只改了强度时更新原作品，成功出 `works.updated`）。
     public func saveCurrentResult() async -> Bool {
         await saveCurrentResultTapped()

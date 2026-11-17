@@ -7,7 +7,7 @@ import Foundation
 ///   预览页 → 原预览页；作品查看页 → 那张作品的查看页（主流程退回进来前的那一页，平台层按 `reopenWorkRequest` 重新打开查看页）；
 ///   「再调一调」设置页 → 那个设置页。原结果、作品、「已存」状态都不动。普通主流程（不是「再拼一张」）就是选图页本身，留在原地。
 /// - 「增加可用照片」`picker.unavailable.add_access`：只在 App 整体是受限访问时显示，点了调系统的增加可用照片。
-/// 目标图、`pendingTarget`、旧结果都不动。
+/// 旧结果、作品、「已存」都不动；「再拼一张」途中选过又放弃的目标图不留（回到发起前的目标图）。
 extension AppCoordinator {
     /// 平台层：PickedTargetGate 不通过，或之后解码失败。
     public func pickedTargetUnavailable() {
@@ -34,10 +34,17 @@ extension AppCoordinator {
             flowSend(.back)   // 回原预览页（quickAgainCancelled：释放新目标图、恢复设置，不弹未保存提示）
         } else {
             pendingTarget = nil
+            // P1-2：中途选过能用的照片（写进了 target、代次 +1）再取消，恢复进来前的目标图和代次
+            if let saved = targetBeforeFreshQuickStart {
+                target = saved.target
+                targetGeneration = saved.generation
+            }
             state.flow.cancelFreshQuickStart()
         }
+        targetBeforeFreshQuickStart = nil
         quickStartOrigin = nil
-        if case .work(let id) = origin {
+        // P3：发起的作品在取消前被删了 → 不再重开查看页（停在恢复好的主流程那一页）
+        if case .work(let id) = origin, resultSaver?.hasWork(id) ?? true {
             state.reopenWorkRequest = WorkReopenRequest(workID: id, token: (state.reopenWorkRequest?.token ?? 0) + 1)
         }
     }

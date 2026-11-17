@@ -9,6 +9,12 @@ public protocol CurrentResultSaving: AnyObject {
     var unsavedPrompt: UnsavedPrompt { get }
     /// 把当前结果存到我的作品（没存过 → 新存；只改了强度 → 更新原作品）；成功返回 true。
     func saveCurrentResult() async -> Bool
+    /// 作品库里还有没有这张作品（选图提示「取消」回作品查看页前确认：作品在取消前被删了就不再重开查看页）。
+    func hasWork(_ id: WorkID) -> Bool
+}
+
+public extension CurrentResultSaving {
+    func hasWork(_ id: WorkID) -> Bool { true }
 }
 
 /// 预览页「再拼一张」（需求 v1.0 §2b / §2e）。判断都在这里（Linux 单测），视图只调方法。
@@ -70,8 +76,10 @@ extension AppCoordinator {
             return
         }
         if case .result = state.flow.generation.phase { return }
-        // 「再调一调」途中（验收 7a，产品口径「从再调一调设置页点再拼一张」）：发起页是那个设置页。
-        nextQuickStartOrigin = isAdjustingResult ? .adjust : workID.map { .work(id: $0) }
+        // 发起页（产品 03:16 / 02:35 口径）：从作品查看页点的就回作品查看页——包括「再调一调」途中进作品页点的
+        // （查看页下面的主流程恢复成「再调一调」设置页，原目标图和「完成」都在，从查看页返回即到）。
+        // 没有作品 ID（旧调用）时，「再调一调」途中按设置页发起算。
+        nextQuickStartOrigin = workID.map { .work(id: $0) } ?? (isAdjustingResult ? .adjust : nil)
         if isAdjustingResult, !isCurrentResultKept {
             ask(.startNewFromAdjust)
             return
@@ -81,6 +89,9 @@ extension AppCoordinator {
 
     private func beginFreshQuickStart() {
         pendingTarget = nil
+        // 选图页 / 确认页里选过的照片会直接写 `target`（没有旧结果要保护的普通流程就是这样）；
+        // 「取消」回发起页时要把进来前的目标图和代次原样放回（P1-2：「再调一调」回去仍是原目标图、主按钮仍是「完成」）。
+        targetBeforeFreshQuickStart = (target, targetGeneration)
         state.flow.send(.freshQuickStartStarted)
         quickStartOrigin = nextQuickStartOrigin
     }
@@ -193,6 +204,8 @@ extension AppCoordinator {
 
     private func discardResultAndReturnToStart() {
         pendingTarget = nil
+        targetBeforeFreshQuickStart = nil
+        quickStartOrigin = nil
         target = nil
         targetGeneration += 1
         discardResult()

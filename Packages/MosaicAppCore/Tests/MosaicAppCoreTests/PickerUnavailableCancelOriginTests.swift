@@ -133,27 +133,28 @@ final class PickerUnavailableCancelOriginTests: XCTestCase {
         f.stop()
     }
 
-    // MARK: 「再调一调」设置页（验收 7a）
+    // MARK: 「再调一调」途中进作品页点「再拼一张」（产品 03:16 / 02:35 口径：回作品查看页，「再调一调」进度留在下面）
 
-    func testFromAdjustUnsavedReturnsToAdjustPageKeepingResult() async throws {
+    func testFromAdjustUnsavedReturnsToWorkViewerKeepingAdjustPage() async throws {
         let f = Fixture()
         try await f.generate()
         let rev = f.c.state.resultRevision
         f.c.send(.backToSettings); f.sync()
         XCTAssertTrue(f.c.isAdjustingResult)
-        f.c.startNewFromWorkTapped(workID: WorkID())
+        let wid = WorkID()
+        f.c.startNewFromWorkTapped(workID: wid)
         XCTAssertEqual(f.c.state.unsavedPrompt, .startNewFromAdjust)
         f.c.unsavedPromptDiscard()
         XCTAssertTrue(f.c.state.flow.isFreshQuickStart)
-        XCTAssertEqual(f.c.quickStartOrigin, .adjust)
+        XCTAssertEqual(f.c.quickStartOrigin, .work(id: wid), "点「再拼一张」的是作品查看页")
         f.unavailableThenCancel()
-        XCTAssertEqual(f.c.state.flow.step, .settings, "回到「再调一调」设置页")
+        XCTAssertEqual(f.c.state.reopenWorkRequest?.workID, wid, "回作品查看页")
+        XCTAssertEqual(f.c.state.flow.step, .settings, "查看页下面的主流程是「再调一调」设置页")
         XCTAssertTrue(f.c.isAdjustingResult, "结果还留着")
         XCTAssertEqual(f.c.settingsPrimaryAction, .done, "还能「完成」回原结果")
         XCTAssertTrue(f.c.state.flow.hasTarget)
         XCTAssertEqual(f.c.state.resultRevision, rev)
         XCTAssertEqual(f.works.state.count, 0)
-        XCTAssertNil(f.c.state.reopenWorkRequest, "发起页是设置页，不去作品查看页")
         await f.c.adjustDoneTapped(); await f.c.settle()
         XCTAssertEqual(f.c.state.flow.step, .result, "「完成」照常回到原结果")
         f.stop()
@@ -166,12 +167,87 @@ final class PickerUnavailableCancelOriginTests: XCTestCase {
         f.c.send(.backToSettings); f.sync()
         f.c.startNewFromWorkTapped(workID: id)
         XCTAssertNil(f.c.state.unsavedPrompt, "已存且没改：不弹")
-        XCTAssertEqual(f.c.quickStartOrigin, .adjust)
+        XCTAssertEqual(f.c.quickStartOrigin, .work(id: id))
         f.unavailableThenCancel()
+        XCTAssertEqual(f.c.state.reopenWorkRequest?.workID, id)
         XCTAssertEqual(f.c.state.flow.step, .settings)
         XCTAssertTrue(f.c.isAdjustingResult)
         XCTAssertEqual(f.works.state.saveStatus, .saved(id))
         XCTAssertEqual(f.c.currentUnsavedPrompt, .none)
+        f.stop()
+    }
+
+    /// 没有作品 ID 的旧调用、「再调一调」途中：发起页按设置页算，回设置页、不重开查看页。
+    func testAdjustWithoutWorkIDReturnsToAdjustPage() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.send(.backToSettings); f.sync()
+        f.c.startNewFromWorkTapped()
+        f.c.unsavedPromptDiscard()
+        XCTAssertEqual(f.c.quickStartOrigin, .adjust)
+        f.unavailableThenCancel()
+        XCTAssertNil(f.c.state.reopenWorkRequest)
+        XCTAssertEqual(f.c.state.flow.step, .settings)
+        XCTAssertEqual(f.c.settingsPrimaryAction, .done)
+        f.stop()
+    }
+
+    // MARK: P1-2 中途选过能用的照片再取消：原目标图、代次原样恢复
+
+    func testPickedValidThenUnavailableCancelRestoresOriginalTarget() async throws {
+        let f = Fixture()
+        try await f.generate()
+        let id = try await f.save()
+        let original = f.c.target.map { $0.bytes }
+        let generation = f.c.targetGeneration
+        f.c.send(.backToSettings); f.sync()
+        XCTAssertEqual(f.c.settingsPrimaryAction, .done)
+        f.c.startNewFromWorkTapped(workID: id)
+        // 选一张能用的（和原图不同）→ 确认页 → 返回选图页
+        var other = try CoordinatorHarness.target()
+        other = try PixelBuffer(width: other.width, height: other.height, bytes: other.bytes.map { 255 &- $0 })
+        f.c.setTarget(other)
+        XCTAssertNotEqual(f.c.target.map { $0.bytes }, original, "普通流程选图直接写 target")
+        f.c.flowSend(.back)
+        // 再选一张用不了的 →「取消」
+        f.unavailableThenCancel()
+        XCTAssertEqual(f.c.state.reopenWorkRequest?.workID, id)
+        XCTAssertEqual(f.c.state.flow.step, .settings)
+        XCTAssertEqual(f.c.target.map { $0.bytes }, original, "原目标图放回去")
+        XCTAssertEqual(f.c.targetGeneration, generation, "代次也放回去")
+        XCTAssertEqual(f.c.settingsPrimaryAction, .done, "主按钮仍是「完成」")
+        XCTAssertNil(f.c.targetBeforeFreshQuickStart)
+        f.stop()
+    }
+
+    /// 开始生成新图后不再恢复：保存的旧目标图清掉。
+    func testSnapshotDroppedOnceGenerationStarts() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.send(.backToSettings); f.sync()
+        f.c.startNewFromWorkTapped(workID: WorkID())
+        f.c.unsavedPromptDiscard()
+        XCTAssertNotNil(f.c.targetBeforeFreshQuickStart)
+        f.c.setTarget(try CoordinatorHarness.target())
+        await f.c.generateTapped(); await f.c.settle()
+        XCTAssertNil(f.c.targetBeforeFreshQuickStart)
+        XCTAssertNil(f.c.quickStartOrigin)
+        f.stop()
+    }
+
+    // MARK: P3 作品在取消前被删了：不重开查看页
+
+    func testDeletedWorkIsNotReopened() async throws {
+        let f = Fixture()
+        try await f.generate()
+        let id = try await f.save()
+        f.c.startNewFromWorkTapped(workID: id)
+        await f.works.deleteConfirmed(id)
+        XCTAssertFalse(f.works.hasWork(id))
+        f.unavailableThenCancel()
+        XCTAssertNil(f.c.state.reopenWorkRequest, "作品已删，不推一个不存在的查看页")
+        XCTAssertEqual(f.c.state.flow.step, .result, "停在恢复好的主流程（原预览页）")
+        XCTAssertTrue(f.c.state.hasResult)
         f.stop()
     }
 
@@ -199,5 +275,28 @@ final class PickerUnavailableCancelOriginTests: XCTestCase {
         await f.c.generateTapped(); await f.c.settle()
         XCTAssertNil(f.c.quickStartOrigin)
         f.stop()
+    }
+}
+
+/// 产品 03:25 第 3 条：重新打开的查看页按「作品列表 → 查看页」压在主流程上；返回先到列表，再返回才回主流程（发起前那一页）。
+final class WorkReopenRoutesTests: XCTestCase {
+    func testRoutesAreListThenDetail() {
+        let id = WorkID()
+        XCTAssertEqual(WorkReopenRequest(workID: id, token: 1).routes, [.list, .detail(id)])
+    }
+
+    /// 平台层：主流程推的是作品列表（带上要重开的作品），列表再推查看页，只推一次。
+    func testPlatformPushesListThenDetail() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let main = try String(contentsOf: root.appendingPathComponent("App/Views/MainFlowView.swift"), encoding: .utf8)
+        let works = try String(contentsOf: root.appendingPathComponent("App/Works/WorksViews.swift"), encoding: .utf8)
+        XCTAssertTrue(main.contains("WorksListView(reopenWorkID: id)"), "主流程推作品列表")
+        XCTAssertFalse(main.contains("{ WorkDetailView(id: id) }"), "主流程不直接推查看页")
+        XCTAssertTrue(main.contains("req.routes"))
+        XCTAssertTrue(works.contains("var reopenWorkID: WorkID?"))
+        XCTAssertTrue(works.contains("navigationDestination(isPresented: $reopenedDetailShown)"))
+        XCTAssertTrue(works.contains("guard reopenWorkID != nil, !didReopen"), "列表只自动推一次（从查看页返回后留在列表）")
     }
 }

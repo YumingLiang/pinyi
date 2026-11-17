@@ -1,5 +1,18 @@
 # CHANGES
 
+## fix/picker-unavailable-cancel（追加）：QA 复核 pr22-picker-cancel-report.md + 产品 03:16 / 03:25 口径
+
+- **merge origin/feat/app-layer 57eff11**（含 #19、#21），CHANGES.md 两边都保留，没有 rebase。
+- **P1-2 原目标图恢复**：作品页 /「再调一调」进来的「再拼一张」开始时记下 `target` 和代次（`targetBeforeFreshQuickStart`）；选图提示「取消」回发起页时原样放回。
+  中途选过能用的照片、确认页返回、再选用不了的再取消，「再调一调」页仍是原目标图、主按钮仍是「完成」。开始生成新图 / 回首页时清掉。
+- **P1-3 发起页**：从作品查看页点「再拼一张」一律记 `.work(id:)`（含「再调一调」途中）；取消 → 回作品查看页，下面的主流程恢复成「再调一调」设置页（结果、「完成」、「已存」都在）。
+  没有作品 ID 的旧调用在「再调一调」途中仍按 `.adjust`。
+- **P3 / 产品 03:25 第 3 条 重开的层级**：`WorkReopenRequest.routes` = 作品列表 → 查看页；平台层先推 `WorksListView(reopenWorkID:)`，列表再自动推查看页（只推一次）。
+  从查看页返回到作品列表，和平时一样；再返回才回主流程（发起前那一页）。
+- **P3 已删作品不重开**：`CurrentResultSaving.hasWork(_:)`（`WorksController`：本次运行里删掉的作品返回 false）；作品在取消前被删了就不发 `reopenWorkRequest`，停在恢复好的主流程。
+- 测试：`PickerUnavailableCancelOriginTests` 按新口径改 2 个（「再调一调」途中从作品页发起 → `.work(id:)`、回查看页），新增 4 个（没有作品 ID 的旧调用回设置页、P1-2 原目标图和代次恢复、
+  开始生成后清掉快照、已删作品不重开）；新增 `WorkReopenRoutesTests` 2 个（routes、平台层先推列表再推查看页的源码守护）。
+
 ## fix/picker-unavailable-cancel：选图提示「取消」回到发起「再拼一张」的那一页（P2，copy v1.6）
 
 - 问题：`picker.unavailable` 弹窗点「取消」，从作品查看页 /「再调一调」设置页发起的「再拼一张」停在选图页。

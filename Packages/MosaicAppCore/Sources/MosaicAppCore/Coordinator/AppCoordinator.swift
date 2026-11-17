@@ -39,6 +39,8 @@ public final class AppCoordinator {
     var quickStartOrigin: QuickStartOrigin?
     /// 下一次进入「再拼一张」时的发起页（中间可能先弹未保存提示）。
     var nextQuickStartOrigin: QuickStartOrigin?
+    /// 作品页 /「再调一调」进来的「再拼一张」开始前的目标图和代次（选图提示「取消」时恢复；开始生成新图或放弃时清掉）。
+    var targetBeforeFreshQuickStart: (target: PixelBuffer?, generation: Int)?
     /// 「存到我的作品」（`WorksController`）：未保存提示要问它当前结果存没存过、以及「保存」按钮去存。弱引用，不成环。
     public weak var resultSaver: (any CurrentResultSaving)?
     /// 每换一次目标图 +1（PixelBuffer 不做内容比较，用代次判断「目标图换没换」）。
@@ -476,7 +478,9 @@ public final class AppCoordinator {
         if state.flow.isQuickAgain, starts {
             commitQuickAgain()
         }
-        if state.flow.isFreshQuickStart, starts { state.flow.endFreshQuickStart(); quickStartOrigin = nil }
+        if state.flow.isFreshQuickStart, starts {
+            state.flow.endFreshQuickStart(); quickStartOrigin = nil; targetBeforeFreshQuickStart = nil
+        }
         state.flow.syncWithGeneration()
         for eff in effects {
             switch eff {

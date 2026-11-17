@@ -35,13 +35,17 @@ struct MainFlowView: View {
                 }
             }
             // 从作品查看页发起的「再拼一张」在选图提示上点了「取消」：回到那张作品的查看页（copy v1.6「回到发起页」）。
+            // 按原来的层级重建：主流程 → 作品列表 → 查看页（P3：从查看页返回先回列表，再返回才是主流程，
+            // 主流程停在发起前那一页，例如「再调一调」设置页，原目标图和「完成」都在）。
             .navigationDestination(isPresented: $reopenedWorkShown) {
-                if let id = reopenedWorkID { WorkDetailView(id: id) }
+                if let id = reopenedWorkID { WorksListView(reopenWorkID: id) }
             }
         }
         .onChange(of: model.reopenWorkRequest) { req in
             guard let req else { return }
-            reopenedWorkID = req.workID
+            // 按 `req.routes`（作品列表 → 查看页）重建：这里推列表，列表出现后自己再推查看页
+            guard case .detail(let id)? = req.routes.last, req.routes.first == .list else { return }
+            reopenedWorkID = id
             reopenedWorkShown = true
         }
         // 作品查看页「再拼一张」：整个导航栈退回主流程（换 id = 重建栈，弹掉作品列表 / 查看页）。
