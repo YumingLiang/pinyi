@@ -7,12 +7,12 @@ import MosaicAppCore
 /// 再用 128px 缩略图逐格绘制并叠加目标图（α 0–0.3，sRGB 编码值上混合，与 `OverlayBlend` 同公式）。
 /// 导出（4000 / 6000 分条渲染）不在本卡范围。⚠️ 盲写。
 enum MosaicPreviewRenderer {
-    /// 预览每格像素：长边约 2400px 封顶（120 列 × 20px），内存约 2400×1800×4 ≈ 17 MB。
+    /// 预览每格像素：目标 48–64 px，长边约 4096 封顶（见 `PreviewImageLimits`）。
     static func cellPixels(for g: MosaicGeneration) -> Int {
-        max(8, min(32, 2400 / max(g.layout.columns, g.layout.rows)))
+        PreviewImageLimits.cellPixels(columns: g.layout.columns, rows: g.layout.rows)
     }
 
-    /// 特征色块预览（同步、很快）。
+    /// 特征色块占位预览（同步、很快）。故意用每格 8 px，避免和缩略图预览同时占两份大图内存。
     static func colorBlocks(_ product: GenerationProduct) -> CGImage? {
         guard let p = try? PreviewRenderer.render(product.generation, table: product.snapshot.library.table, cellPixels: 8) else { return nil }
         return ImagePixels.cgImage(p)
