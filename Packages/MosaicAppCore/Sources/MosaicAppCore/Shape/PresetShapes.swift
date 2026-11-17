@@ -25,6 +25,7 @@ public enum PresetShapes {
         Entry(id: .moon, path: moon()),
         Entry(id: .fourLeafClover, path: fourLeafClover()),
         Entry(id: .house, path: house()),
+        Entry(id: .speechBubble, path: speechBubble()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -242,6 +243,23 @@ extension PresetShapes {
         b.polygon([ShapePoint(0, 50), ShapePoint(50, 6), ShapePoint(100, 50)])                         // 屋顶
         b.polygon([ShapePoint(14, 46), ShapePoint(86, 46), ShapePoint(86, 96), ShapePoint(14, 96)])    // 墙体（与屋顶重叠）
         b.polygon([ShapePoint(66, 10), ShapePoint(79, 10), ShapePoint(79, 38), ShapePoint(66, 38)])    // 烟囱（下端压进屋顶）
+        return b.build()
+    }
+}
+
+// MARK: - 对话框
+
+extension ShapePresetID {
+    /// 对话框
+    public static let speechBubble = ShapePresetID(rawValue: "speechBubble")
+}
+
+extension PresetShapes {
+    /// 对话框：圆角矩形气泡 + 左下方的尾巴。
+    static func speechBubble() -> ShapePath {
+        var b = ShapePathBuilder()
+        b.roundedRect(x: 0, y: 0, width: 100, height: 70, radius: 16)
+        b.polygon([ShapePoint(20, 62), ShapePoint(42, 62), ShapePoint(14, 92)])
         return b.build()
     }
 }
