@@ -2,7 +2,7 @@
 
 ## feat/preview-detail-layer：结果页预览清晰层（正式修复放大发糊；架构师 21:02 方案）
 
-基于 feat/preview-sharp-quick（`39e277a`，含止血改动）。AndyL：「可能主要是不清晰，先把清晰度的问题修复了」。底图（每格 ≤ 64 px、长边 ≤ 4096）不动；放大到底图不够清楚时，只给可见格子换高清方图。不改生成 / 匹配，不碰 LiveDependencies 的清晰度注入，不碰 target.heic。
+基于 feat/preview-sharp-quick（`39e277a`，含止血改动），已 merge feat/app-layer `a976303`（#12 生成提速，生成走 `GenerationRunner.production`）和 `7557daa`。AndyL：「可能主要是不清晰，先把清晰度的问题修复了」。底图（每格 ≤ 64 px、长边 ≤ 4096）不动；放大到底图不够清楚时，只给可见格子换高清方图。不改生成 / 匹配，不碰 LiveDependencies 的清晰度注入，不碰 target.heic。
 
 - **MosaicAppCore `Preview/DetailLayer.swift`（新，纯逻辑）**：
   - `DetailGeometry`：和 `ZoomableContainer` 同一套变换（scaledToFit 居中 → 以视口中心 scaleEffect → offset），算内容 / 格子的屏幕像素矩形、每格屏幕像素、可见格子范围（半开区间，边缘落在格线上不多算一格）、外扩 N 圈、中心优先顺序（先可见格、再外扩圈），以及 scaleEffect 之内摆放用的未缩放格子 frame。
@@ -29,6 +29,7 @@ AndyL 反馈预览放大后小格子很糊。原因是结果页预览每格只�
 - `App/Views/MainFlowView.swift`：结果页 `Image` 的插值从 `.none` 改成 `.high`。作品查看页本来就是 `.medium`，这次不动。
 - `App/Models/AppModel.swift`：离开结果页或还没有作品时取消绘制任务并释放 `resultImage`；过期任务用 `resultRevision` 把关，不会把大图写回去。换新结果时先换成小色块，立刻丢掉上一张大图。
 - 测试：`PreviewImageLimitsTests`（尺寸、长边上限、改前改后对照、`PreviewRenderer` 输出尺寸）。`PreviewRenderBenchTests` 只在 `MOSAIC_BENCH=1` 时跑，对照色块预览 / 格点合成的改前改后耗时，以及 `GenerationRunner` 中档生成墙钟。
+
 ## feat/gen-perf-fix：生成不再逐张检查清晰度，速度回到 14ac550
 
 AndyL 反馈 d31925f 生成比 14ac550 慢很多。原因是 #5「不能略糊」（35a9f75 / e3e68ec）把逐张 PhotoKit 探测（单张 `fetchAssets` + 256 px `requestImage`，8 并发）和「剔除后整张重新匹配（最多 3 轮）+ 兜底补格」接进了生成链路。AndyL 11-16 决定取消生成前的逐张检查。
