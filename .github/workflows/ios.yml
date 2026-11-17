@@ -164,10 +164,31 @@ jobs:
           EXPECT_NAME: ${{ matrix.display_name }}
         run: |
           set -euo pipefail
+          # 判定不走 `strings | grep -q` 管道：grep -q 找到就退出，strings 收 SIGPIPE（141），
+          # 在 pipefail 下整条管道算失败 → 误判 FOUND=0（Internal 误红、Release 漏报）。改成先落盘再 grep，
+          # 且 grep 的 0/1/2 分开处理：2（读错）直接失败，不当成「没找到」。
+          has_text() {  # $1=文本文件 $2=固定串 → echo 1/0；出错 exit 1
+            local rc=0
+            grep -qF -- "$2" "$1" || rc=$?
+            case $rc in 0) echo 1 ;; 1) echo 0 ;; *) echo "::error::grep failed (rc=$rc) on $1" >&2; exit 1 ;; esac
+          }
+          binary_has_marker() {  # $1=二进制 → echo 1/0
+            local out="$RUNNER_TEMP/strings-$$.txt"
+            strings -a "$1" > "$out"
+            has_text "$out" PINYI_INTERNAL_TOOLS_MARKER
+          }
+          # 自检：64 MB 的二进制，标记放在最前面（最容易触发旧写法的 SIGPIPE），以及完全没有标记的情况。
+          ST="$RUNNER_TEMP/guard-selftest.bin"
+          { printf 'PINYI_INTERNAL_TOOLS_MARKER\0'; head -c 67108864 /dev/urandom; } > "$ST"
+          [ "$(binary_has_marker "$ST")" = 1 ] || { echo "::error::guard self-test: marker at head not detected"; exit 1; }
+          head -c 67108864 /dev/zero > "$ST"
+          [ "$(binary_has_marker "$ST")" = 0 ] || { echo "::error::guard self-test: false positive on marker-free file"; exit 1; }
+          rm -f "$ST"
+          echo "guard self-test OK (marker-at-head=1, no-marker=0)"
           APP=$(ls -d "build/Build/Products/${CONFIGURATION}-iphoneos/"*.app | head -n 1)
           EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
           NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Info.plist")
-          if strings -a "$APP/$EXE" | grep -q PINYI_INTERNAL_TOOLS_MARKER; then FOUND=1; else FOUND=0; fi
+          FOUND=$(binary_has_marker "$APP/$EXE")
           echo "configuration=$CONFIGURATION marker=$FOUND displayName=$NAME"
           if [ "$FOUND" != "$EXPECT_MARKER" ]; then
             echo "::error::$CONFIGURATION: INTERNAL_TOOLS marker found=$FOUND, expected=$EXPECT_MARKER"; exit 1
@@ -176,8 +197,11 @@ jobs:
             echo "::error::$CONFIGURATION: CFBundleDisplayName=$NAME, expected=$EXPECT_NAME"; exit 1
           fi
           # InfoPlist.strings 不得再覆盖显示名（否则内测包在 zh-Hans 下仍显示「拼忆」）
-          if [ -f "$APP/zh-Hans.lproj/InfoPlist.strings" ] && plutil -p "$APP/zh-Hans.lproj/InfoPlist.strings" | grep -q CFBundleDisplayName; then
-            echo "::error::InfoPlist.strings overrides CFBundleDisplayName"; exit 1
+          if [ -f "$APP/zh-Hans.lproj/InfoPlist.strings" ]; then
+            plutil -p "$APP/zh-Hans.lproj/InfoPlist.strings" > "$RUNNER_TEMP/infoplist-strings.txt"
+            if [ "$(has_text "$RUNNER_TEMP/infoplist-strings.txt" CFBundleDisplayName)" = 1 ]; then
+              echo "::error::InfoPlist.strings overrides CFBundleDisplayName"; exit 1
+            fi
           fi
 
   # 与 AndyL 本机 Xcode 27.2 对齐：不签名，只编 Release / Internal，提前拦住新编译器（Swift 6 region isolation 等）的报错。
