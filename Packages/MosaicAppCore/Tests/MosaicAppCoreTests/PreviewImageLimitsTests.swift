@@ -64,9 +64,10 @@ final class PreviewImageLimitsTests: XCTestCase {
     }
 
     func testPreviewRendererOutputSizeFollowsLimits() throws {
-        let records = (0..<40).map { i in
-            FeatureRecord(vector: FeatureVector(uniform: SIMD3(0.4 + Float(i) * 0.001, 0.02, -0.01)),
-                          lightnessVariance: 0.01)
+        let records: [FeatureRecord] = (0..<40).map { (i: Int) -> FeatureRecord in
+            let x: Float = 0.4 + Float(i) * 0.001
+            let v = SIMD3<Float>(x, 0.02, -0.01)
+            return FeatureRecord(vector: FeatureVector(uniform: v), lightnessVariance: 0.01)
         }
         let table = FeatureTable(records: records)
         let target = try PixelBuffer.solid(width: 160, height: 120, red: 180, green: 40, blue: 50)

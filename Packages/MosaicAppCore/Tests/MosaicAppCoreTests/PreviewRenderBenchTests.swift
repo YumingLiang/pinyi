@@ -66,11 +66,13 @@ final class PreviewRenderBenchTests: XCTestCase {
         ]
 
         for c in cases {
-            let records = (0..<c.assets).map { i in
-                FeatureRecord(vector: FeatureVector(uniform: SIMD3(0.3 + Float(i % 50) * 0.004,
-                                                                   0.02 - Float(i % 7) * 0.002,
-                                                                   -0.01 + Float(i % 5) * 0.003)),
-                              lightnessVariance: 0.01)
+            let records: [FeatureRecord] = (0..<c.assets).map { (i: Int) -> FeatureRecord in
+                // 拆成显式 Float，避免 Swift 6.3 报 "unable to type-check this expression"
+                let x: Float = 0.3 + Float(i % 50) * 0.004
+                let y: Float = 0.02 - Float(i % 7) * 0.002
+                let z: Float = -0.01 + Float(i % 5) * 0.003
+                let v = SIMD3<Float>(x, y, z)
+                return FeatureRecord(vector: FeatureVector(uniform: v), lightnessVariance: 0.01)
             }
             let table = FeatureTable(records: records)
             let target = try PixelBuffer.solid(width: 160, height: 120, red: 180, green: 40, blue: 50)
