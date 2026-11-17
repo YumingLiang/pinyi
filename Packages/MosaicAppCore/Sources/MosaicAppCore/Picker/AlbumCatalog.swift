@@ -141,7 +141,7 @@ public struct AlbumSection: Sendable, Hashable, Identifiable {
     }
 }
 
-/// 相簿列表纯逻辑（**T1 实现**，Linux 单测）。T0 只定签名，函数体是占位，调用会崩溃。
+/// 相簿列表纯逻辑（**T1 实现**，Linux 单测：`AlbumCatalogTests`）。`filter` 是 P1，仍是占位。
 ///
 /// T1 要满足的规则：
 /// 1. 节顺序：全部照片 → 我的相簿 → 媒体类型 → 共享相簿；空节不输出（「全部照片」节始终输出，哪怕 0 张）。
@@ -156,18 +156,105 @@ public enum AlbumCatalog {
 
     /// 原始快照 → 要显示的节（规则见上）。**T1**
     public static func sections(from snapshot: AlbumCatalogSnapshot) -> [AlbumSection] {
-        fatalError("T1: AlbumCatalog.sections 未实现")
+        var out: [AlbumSection] = [
+            AlbumSection(kind: .allPhotos, entries: [.allPhotos(imageCount: max(0, snapshot.allPhotosCount))]),
+        ]
+        let mine = visibleMyAlbums(snapshot.myAlbums)
+        if !mine.isEmpty { out.append(AlbumSection(kind: .myAlbums, entries: mine)) }
+        let smart = visibleSmartAlbums(snapshot.smartAlbums)
+        if !smart.isEmpty { out.append(AlbumSection(kind: .mediaTypes, entries: smart)) }
+        let shared = visibleSharedAlbums(snapshot.sharedAlbums)
+        if !shared.isEmpty { out.append(AlbumSection(kind: .shared, entries: shared)) }
+        return out
     }
 
     /// 某相簿当前是否可见（存在、不空、可被选中），`BrowsePositionStore` 恢复位置时用。
     /// 「全部照片」始终可见；文件夹不算（不能被选中）。会在文件夹子树里找。**T1**
     public static func isSelectable(_ selection: SourceSelection, in sections: [AlbumSection]) -> Bool {
-        fatalError("T1: AlbumCatalog.isSelectable 未实现")
+        switch selection {
+        case .allPhotos:
+            return true
+        case .album(let id):
+            // `allPhotosID` 不是 PhotoKit 集合，不能当相簿选；文件夹不能选；空相簿不算可见
+            // （正常情况下 `sections(from:)` 已经去掉了，这里再兜一次，防止调用方传未过滤的节）。
+            guard id != AlbumEntry.allPhotosID, let e = entry(id: id, in: sections) else { return false }
+            return !e.isFolder && e.imageCount > 0 && e.selection == selection
+        }
     }
 
     /// 按 id 找一项（含文件夹子树）。**T1**
     public static func entry(id: String, in sections: [AlbumSection]) -> AlbumEntry? {
-        fatalError("T1: AlbumCatalog.entry 未实现")
+        for section in sections {
+            if let hit = find(id: id, in: section.entries) { return hit }
+        }
+        return nil
+    }
+
+    // MARK: 内部实现（T1）
+
+    /// 深度优先找 id（先比自己再进子树），保持列表顺序，命中第一个即返回。
+    private static func find(id: String, in entries: [AlbumEntry]) -> AlbumEntry? {
+        for e in entries {
+            if e.id == id { return e }
+            if let hit = find(id: id, in: e.children) { return hit }
+        }
+        return nil
+    }
+
+    /// 我的相簿：只认用户相簿和文件夹，保持 PhotoKit 顺序，递归去掉空相簿和空文件夹。
+    /// 数据源误塞进来的其他种类（智能 / 共享 / 全部照片）直接丢弃，不搬到别的节——各节只信自己的来源。
+    private static func visibleMyAlbums(_ entries: [AlbumEntry]) -> [AlbumEntry] {
+        entries.compactMap { e -> AlbumEntry? in
+            switch e.kind {
+            case .userAlbum:
+                return e.imageCount > 0 ? leaf(e) : nil
+            case .folder:
+                let kids = visibleMyAlbums(e.children)
+                guard !kids.isEmpty else { return nil }
+                var f = e
+                f.children = kids
+                return f
+            case .allPhotos, .smart, .cloudShared:
+                return nil
+            }
+        }
+    }
+
+    /// 媒体类型：只认白名单里的智能相簿，按白名单顺序；同一种只留第一个（快照里的先后）；空的不显示。
+    private static func visibleSmartAlbums(_ entries: [AlbumEntry]) -> [AlbumEntry] {
+        var firstOfKind: [SmartAlbumKind: AlbumEntry] = [:]
+        for e in entries {
+            guard case .smart(let k) = e.kind, firstOfKind[k] == nil else { continue }
+            firstOfKind[k] = e
+        }
+        return smartAlbumWhitelist.compactMap { k in
+            guard let e = firstOfKind[k], e.imageCount > 0 else { return nil }
+            return leaf(e)
+        }
+    }
+
+    /// 共享相簿：单独一组，按标题 `localizedStandardCompare` 升序，标题相同按 id；空的不显示；同 id 只留第一个。
+    private static func visibleSharedAlbums(_ entries: [AlbumEntry]) -> [AlbumEntry] {
+        var seen = Set<String>()
+        let kept = entries.filter { e in
+            guard e.kind == .cloudShared, e.imageCount > 0 else { return false }
+            return seen.insert(e.id).inserted
+        }.map(leaf)
+        return kept.sorted { a, b in
+            switch a.title.localizedStandardCompare(b.title) {
+            case .orderedAscending: return true
+            case .orderedDescending: return false
+            case .orderedSame: return a.id < b.id
+            }
+        }
+    }
+
+    /// 非文件夹不应有子项；清掉，避免 `entry(id:)` 在叶子下面找到不该出现的东西。
+    private static func leaf(_ e: AlbumEntry) -> AlbumEntry {
+        guard !e.children.isEmpty else { return e }
+        var c = e
+        c.children = []
+        return c
     }
 
     /// 按名字过滤（P1「搜相簿名」，T0/T1 不做；留签名避免以后改接口）。
