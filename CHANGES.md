@@ -32,6 +32,113 @@
 - **测试**：`PickerInterfaceTests` 11 个（白名单正好 8 个且不含 hidden、相簿条目构造与 `selection`、条目树和位置值 Codable 往返、偏好 key、假数据源 / 假加载器能符合协议）。测试替身 `InMemoryPreferenceData`、`FakeGridDataSource`、`FakeGridLoader` 给 T2 / T4 复用。
 - **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`PhotoFetch.swift`、`UserDefaultsPreferenceData.swift`。
 
+## feat/works：去掉旧 render-export 带进来的非作品改动
+
+- 结果页与 feat/app-layer 对齐：保留 ZoomableContainer 和紧急版三档导出按钮，只多一个「保存到我的作品」。去掉 T7 叠加滑杆、实时叠加层（`MosaicWithOverlay` / `overlayImage`）。
+- 去掉 T8 分享面板 UI：`ExportViews.swift`（`ExportControls`、`ExportResultModifier`、分享 sheet、`ActivityView`）。作品查看页的导出提示改用 app-layer 的 `ExportResultAlerts` / `ExportBusyOverlay`。
+- 协调器仍保留 `onExportSucceeded` 和 `export(layout:target:purpose:)`（作品自动存 / 再导出）；结果页失败重试走协调器，以便作品页再导出保留 `exportSource`。不再向 App 层暴露分享面板按钮（`saveSuccessShareTapped` / `exportFailureSecondaryTapped` / `exportRetryTapped`）。
+
+
+## feat/works：接到 feat/app-layer 紧急版整张导出（不含流式条带）
+
+- 在 origin/feat/works（55c361d）上合并 feat/app-layer（含格子居中裁方与扫描特征快照）。结果页用紧急版三档导出按钮，并保留「保存到我的作品」。
+- 导出接口（签名与后续流式导出线一致，实现走紧急版整张位图导出）：`AppDependencies.onExportSucceeded`（`.live(..., onExportSucceeded:)` 默认空实现，导出成功、保存/分享之前调用）；`AppCoordinator.export(layout:target:purpose:)` 按保存的布局再导出。
+- `workResultContext.tier` 跟随 `state.exportTier`（默认超清）；`testResultContextTierFollowsExportTier` 覆盖。
+- 去掉本分支从旧 render-export 带来的 `StripExporter` / 条带测试，不把流式导出带进这一版。等 ImageIO 内存测试后再合流行线。
+
+## feat/works：「我的作品」最小版（11-17 交付范围，基于 feat/render-export）
+
+依据：design/works-storage-v0.1.md（架构师，权威）、product/hd-export-req-v0.2.md B 节 + F 节（F1-3 / F2 / F5）。
+
+### 改动
+- **存储层 `MosaicAppCore/Works/`**：`WorksStore` 协议 + `FileWorksStore`（actor）。`Application Support/Works/<uuid>/` 一个作品一个目录：
+  `meta.json`（formatVersion、id、createdAt、列 / 行、档位、照片数、缺失数、叠加强度、seed（只追溯）、布局指纹、来源、预览 / 目标图文件名与尺寸）、
+  `layout.json`（`MosaicLayout` 原样 JSON：**每格 localIdentifier + 裁剪显式存下，不靠种子重算**）、`preview.jpg`（长边 2732）、`target.jpg`（长边 ≤ 4096）。
+  - 原子写：先写 `.tmp-<uuid>/`（meta.json 最后写）再一次 rename；删除先 rename 成 `.trash-*` 再删；启动 `removeIncomplete()` 清残留，列表不认半截目录。
+  - 查重：按布局 JSON 的 FNV-1a 64 指纹，同一张只存一份（含并发保存：actor 重入时后来者等同一个写任务）。
+  - 升级兼容：后加字段一律 `decodeIfPresent`；formatVersion 更高（新版写的）列表跳过、不删除。
+  - **参与 iCloud 备份**：不设 `isExcludedFromBackup`（与索引目录相反）。
+  - layout.json 不压缩：Linux Foundation 无 `compressed(using:)`、不允许手写 deflate；细档约 1 万格 ≈ 1–2 MB。压缩留作 formatVersion 2。
+  - 图片经注入的 `WorkImageEncoding` 写（App：CG 绘制 + ImageIO JPEG；测试：假实现）。
+- **编排 `WorksController`（@MainActor）**：导出成功自动存（`AppDependencies.onExportSucceeded` → `ExportSuccessRelay` → 控制器）；结果页「存到我的作品」（重复点只存一份）；「换一种拼法」不存（只把按钮复位）；列表、打开、删除二次确认、从作品再导出（`WorkExportHandling`，由 `AppCoordinator.export(layout:target:purpose:)` 实现）。
+  - 缺失原照片：打开 / 导出前批量查一次（`PhotoExistenceChecking`），只计数 + 提示 `works.missing`，并写回 meta。
+    **不**用预览图放大补格子（F 节作废）；本机相近照片重新匹配（4b）只预留协议 `MissingCellRematching`，11-18 实现。
+- **App（盲写）**：首页右上角「我的作品」（带数量）、两列列表（倒序、日期、空状态 `works.empty`、底部常驻 `works.keep_hint`）、查看页复用 `ZoomableContainer`（看 2732 预览图）、「导出」「删除」（confirmationDialog 二次确认）；结果页次按钮「存到我的作品」。
+  适配器：`PhotoKitExistenceChecker`（`PHAsset.fetchAssets(withLocalIdentifiers:)` 每批 500）、`ImageIOWorkImages`。
+- **文案**：copy_v1.1 新增 §5.5（works.* 14 个 key，取自需求 v0.2 B 节，⚠️ 待文案确认），重新生成 Localizable.strings。
+- 没做（按 11-17 范围）：列表长按删除、文件大小 / 占用空间显示、换机后 PHCloudIdentifier 找回、缺图重新匹配、100 个作品性能指标。
+
+### 测试（Linux，MosaicAppCore）
+- `WorksStoreTests`（9）：存 / 列（倒序）/ 读 / 删、同一布局只存一份（含 JSON 往返后指纹不变）、并发同存只一份、写到一半失败不留残留（预览 / 目标图两步）、
+  被杀残留（.tmp / .trash / 无 meta 目录）列表不认且启动清理、旧版 meta / 新版 formatVersion 兼容（预览图逐字节一致）、缺失数持久化、works.* key 都在 strings 里。
+- `WorksControllerTests`（9）：手动存幂等 + 换结果复位、导出成功自动存（经中继）且不重复、换拼法不存但导出新结果会存、保存失败不留文件、打开 / 导出前缺失计数（去重）、作品页再导出不重复且用保存的布局 + 目标图副本、删除二次确认、重启后重开、打不开的提示。
+- `WorksCoordinatorIntegrationTests`：真实 `AppCoordinator` 生成结果 → 手动存的是逐格一致的显式布局 → 换一种拼法不存。
+
+### 盲写风险
+- W1 预览图在保存时按布局重画（128 px 缩略图，细档约 1 万次取图），自动保存在后台进行，耗时需真机看；取不到的格子留白。
+- W2 从结果页进入作品查看页再导出时，导出弹窗由结果页的 `ExportResultModifier` 呈现（本页只盖进度），避免重复弹窗；需真机确认弹窗能从被覆盖的结果页正常弹出。
+- W3 目标图副本来自生成时的降采样目标图（长边 ≤ 2048），不足 4096；要 4096 需在选图时另存一份。
+- W4 缺失原照片的格子在导出里画不出原照片（11-18 用相近照片替换）。
+
+### 对导出线的依赖（⚠️ 合入前必须先有）
+- App target 用到导出线尚未推送的两处接口：`AppDependencies(onExportSucceeded:)`（`.live(…, onExportSucceeded:)` 透传）和
+  `AppCoordinator.export(layout:target:purpose:)`（`CoordinatorWorkExporter` 调用）。在 feat/render-export 推上这两处之前，本分支 Xcode 编译不过；
+  MosaicAppCore（Linux）不依赖它们，测试全绿。导出线推送后本分支 merge 一次，并把 `workResultContext.tier` 接到 `state.exportTier`。
+- 没有新增 `@unchecked Sendable` / `nonisolated(unsafe)`。
+
+## feat/render-export：T7 叠加滑杆 + 普通缩放预览、T8 与分辨率无关的导出部分（基于 feat/app-layer）
+
+> **范围调整（2026-11-16）**：AndyL 新提「高清导出」，导出尺寸 / 档位（原 4000 / 6000）待架构师和产品定案，可能到长边 2–3 万像素。本分支 **不硬编码档位、不做导出卡 UI**（T10/T11 暂停）：`ExportRequest` 只带一个 `longEdge: Int`，条带渲染与存储预检不假设尺寸上限，按字节预算逐条流式写盘。协调器暂沿用 `ExportSize` 默认值作为长边来源，定案后只需换掉这一处。
+
+### 改动
+
+- **T7 预览**
+  - 预览缩放改用 app-layer 的可复用 `ZoomableContainer` + `ZoomState`（P0 修复，见下节），内容是 `MosaicWithOverlay`。不用 CATiledLayer；预览位图长边 ≤ 2400 px，放大时最近邻插值。结果页去掉 ScrollView，避免拖动和滚动抢手势。
+  - 结果页加叠加滑杆（0–0.3）。叠加层是裁到网格区域的目标图，SwiftUI 用 `opacity(α)` 叠在马赛克上，拖动实时生效，不重画马赛克。导出时在每条带里用同一个 α 混合（sRGB 编码值上的 α 混合，与 `OverlayBlend` 同公式）。
+- **T8 导出（逻辑在 MosaicAppCore `Export/StripExporter.swift`，Linux 有测试）**
+  - `ExportGeometry(layout:longEdge:stripByteBudget:)`：任意长边，每格像素 = ⌊长边 ÷ N⌋；条带高度由**字节预算**（默认 16 MiB 画布）反推整行格子数，长边越大条带越矮，单条带内存与长边无关（最少 1 行格子）；字节数全部 Int64（3 万像素 raw ≈ 2.7 GB 不溢出）；磁盘预算 = raw 暂存 + 2 × JPEG 上界 + 50 MB 余量。
+  - `StripExporter`（实现 `MosaicExporting`）：
+    - 存储预检不足时直接抛 `insufficientStorage`，不渲染、不建文件。
+    - 逐条渲染并追加到 `tmp/export/<uuid>.rgba`，**每条之前 `Task.checkCancellation()`**（B-34）。
+    - 编码到 `<uuid>.jpg` 后删掉 raw。取消或出错时 raw 与半截输出都删掉。
+    - 写入中磁盘满（`CocoaError.fileWriteOutOfSpace` / ENOSPC）统一映射为 `insufficientStorage`，其余映射为 `encodingFailed`。
+  - 平台层（App）只有两块：`CGStripRenderer`（条带画布 + 有界并发取缩略图 + 叠加）和 `ImageIOJPEGEncoder`（`CGDataProvider(url:)` 读 raw，质量 0.9）。
+    - 缩略图先按格子大小取高质量（≤ 512 px，零网络）；取不到的退回 128 px 扫描缩略图。
+  - 保存只要「仅添加」相册权限（`PHAccessLevel.addOnly`），用 `PHAssetCreationRequest` 写入。分享用 `UIActivityViewController`，面板关闭后删临时文件。
+  - 失败文案全部用 copy v1.1 的 key，判断顺序是权限 > 空间 > 其他：
+    - 权限被拒：`save.add_denied.*`，主按钮「去设置」，次按钮「分享」。
+    - 空间不足：`save.disk_full.*`，按钮「我知道了」。
+    - 其他：`save.failed` + `save.failed.retry`，按原用途重来。
+    - 后台打断：`export.interrupted` + `export.retry`。
+    - 成功：`save.success.*`（含「分享」）。
+    - 导出中：`export.progress.*`。
+  - 协调器新增 `exportFailurePrimaryTapped` / `exportFailureSecondaryTapped` / `exportRetryTapped` / `saveSuccessShareTapped`，并记录上次导出用途。
+  - B-27：启动时 `removeStaleExports()` 清空整个 `tmp/export/`。
+  - 结果页只有「保存」「分享」两个按钮，**没有尺寸选择 / 导出卡**（原 4000 / 6000 / 内部 8000 选择已删，待定案）。
+
+### 测试（`StripExporterTests`，9 个）
+
+| 测试 | 编号 |
+|---|---|
+| `testGeometryHasNoSizeCeilingAndBoundedStripMemory` | 长边 1000～30000：条带并集 = 整图、格子全覆盖、单条带 ≤ 字节预算、Int64 预算公式、3 万像素 raw > 2 GB 正确 |
+| `testSuccessWritesStripsInOrderEncodesAndRemovesRaw` | 自上而下顺序写入、只剩输出文件、进度单调到 1 |
+| `testCancelDuringStripLoopStopsAtNextStripBoundary_B34` | B-34：取消后只完成当前条带、不开始下一条、不编码、不留文件 |
+| `testStoragePrecheckFailsBeforeRendering_B17` | B-17 预检 |
+| `testDiskFullDuringWriteMapsToInsufficientStorage_B17` | B-17 写入中磁盘满（Cocoa / POSIX ENOSPC） |
+| `testOtherFailureMapsToEncodingFailed_B30` | B-30 |
+| `testRemoveStaleExportsClearsDirectory_B27` | B-27 |
+| `testCoordinatorSaveWithStripExporterLeavesNoTempFiles` | 协调器 + 真实 StripExporter：保存后、分享面板关闭后都不留临时文件 |
+| `testExportResultButtonsFollowCopyKeys_B16_B17_B18_B30` | 各提示按钮的 key 与动作 |
+
+AppTests（模拟器）：`testImageIOEncoderWritesJPEGFromRawStripFile`、`testStaleExportsRemoved`。
+
+### 盲写风险（macOS CI / 真机核对）
+
+- R23：`CGDataProvider(url:)` + `CGImageDestination` 编码大图时 ImageIO 是否整张解到内存。条带渲染已流式，但**编码一步**在 2–3 万像素时是瓶颈：30000×22500 raw ≈ 2.7 GB，JPEG 单边上限 65535 px。需真机看 phys_footprint；「高清导出」定案后可能要换分块编码（如 HEIC tile / `CGImageDestinationAddImageFromSource`）——属于 T10/T11 的设计。
+- R24：叠加用的目标图是 2048 长边的降采样图，大长边导出时被放大；α ≤ 0.3，影响有限。
+- R25：`completionWithItemsHandler` 与 `sheet(onDismiss:)` 都会调 `shareFinished()`，第二次是空操作。
+- R26：`export.degraded` 提示（部分原图未下载、导出时降级）**未接**，需要渲染器回报降级格数，留到后续。
+
 ## feat/sharp-filter：「不能略糊」——生成时只用本机有 ≥ 256 px 版本的照片（hd-export-req-v0.2 F5 / hd-default-and-sharpness-v0.1 方案 1）
 
 - **做法（不重扫全库）**：照常匹配 → 只探测**实际分到格子上**的照片（去重）→ 不合格的从候选掩码里剔掉 → 用原有匹配器（含放宽链）整图重配 → 再探测新出现的照片，最多重配 3 轮。生成前先把本会话缓存里已知不合格的剔掉，第二次生成通常 0 轮重配、0 次探测。
@@ -77,7 +184,6 @@
   - 可复用组件 `App/Views/ZoomableContainer.swift`（结果页现用，后续「作品查看」也用）：`Binding<ZoomState>` 由调用方持有，`@GestureState` 标记手势进行中，复位时调 cancel（`onEnded` 已提交时为空操作）。
   - 结果页的状态放在 `AppModel.resultZoom`，视图重建 / 旋转 / 切后台都不丢，换新作品时复位。
 - **测试**（`ZoomStateTests`，17 个，`testZoomRegression*` 为 QA 回归）：连续 5 次 ×1.5 捏合基准 = 累乘、粗网格到上限停住；连续 5 次缩小到下限停住、再放大从当前倍数接着；中途取消的捏合 / 平移基准不变（含「先取消后 onEnded」的乱序）；双击与捏合交替；旋转 / 视口为 0 后倍数保持；上下限夹取；单格铺满屏幕上限；坏手势值忽略。
-
 ## feat/app-layer：评审 d6fa750 必须修 MF-1～MF-7、架构师 G-1（严格并发 + TSan）/ G-3（AppCoordinator）、QA 跟进
 
 ### 对照表
