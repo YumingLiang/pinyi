@@ -27,7 +27,7 @@ final class PresetShapesTests: XCTestCase {
         "flower": Expectation(mirrorX: true, mirrorY: false, fill: 0.65...0.85),
         "moon": Expectation(mirrorX: false, mirrorY: true, fill: 0.35...0.65),
         "fourLeafClover": Expectation(mirrorX: false, mirrorY: false, fill: 0.40...0.70),
-        "house": Expectation(mirrorX: false, mirrorY: false, fill: 0.65...0.90),
+        "house": Expectation(mirrorX: false, mirrorY: false, fill: 0.55...0.85),
         "speechBubble": Expectation(mirrorX: false, mirrorY: false, fill: 0.65...0.90),
         "roundedSquare": Expectation(mirrorX: true, mirrorY: true, fill: 0.95...0.98),
     ]

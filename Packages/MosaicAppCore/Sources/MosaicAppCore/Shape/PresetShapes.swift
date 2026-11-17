@@ -24,6 +24,7 @@ public enum PresetShapes {
         Entry(id: .flower, path: flower()),
         Entry(id: .moon, path: moon()),
         Entry(id: .fourLeafClover, path: fourLeafClover()),
+        Entry(id: .house, path: house()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -223,6 +224,24 @@ extension PresetShapes {
         let len = (end.x * end.x + end.y * end.y).squareRoot()
         let nx = -end.y / len * half, ny = end.x / len * half
         b.polygon([ShapePoint(nx, ny), ShapePoint(-nx, -ny), ShapePoint(end.x - nx, end.y - ny), ShapePoint(end.x + nx, end.y + ny)])
+        return b.build()
+    }
+}
+
+// MARK: - 小房子
+
+extension ShapePresetID {
+    /// 小房子
+    public static let house = ShapePresetID(rawValue: "house")
+}
+
+extension PresetShapes {
+    /// 小房子：三角屋顶（两侧出檐）+ 方形墙体 + 右侧烟囱。不挖门窗（内部不留孔）。
+    static func house() -> ShapePath {
+        var b = ShapePathBuilder()
+        b.polygon([ShapePoint(0, 50), ShapePoint(50, 6), ShapePoint(100, 50)])                         // 屋顶
+        b.polygon([ShapePoint(14, 46), ShapePoint(86, 46), ShapePoint(86, 96), ShapePoint(14, 96)])    // 墙体（与屋顶重叠）
+        b.polygon([ShapePoint(66, 10), ShapePoint(79, 10), ShapePoint(79, 38), ShapePoint(66, 38)])    // 烟囱（下端压进屋顶）
         return b.build()
     }
 }
