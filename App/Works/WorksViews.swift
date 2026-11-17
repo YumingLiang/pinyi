@@ -159,6 +159,12 @@ struct WorkDetailView: View {
             }
             .controlSize(.large)
             .disabled(works.state.opened?.id != id || model.exportPhase.isBusy)
+            // quick-start v1.0 §2a：查看页也能「再拼一张」（第三级文字按钮）。退回主流程后同预览页的流程和未保存提示。
+            Button { model.startNewFromWork() } label: {
+                Label { Text(L10nKey.quickAgain) } icon: { Image(systemName: "plus") }
+            }
+            .buttonStyle(.borderless)
+            .disabled(model.exportPhase.isBusy || model.state.isGenerating)
         }
         .padding()
         .navigationTitle(Text(verbatim: works.state.opened.map { WorksModel.dateFormatter.string(from: $0.summary.createdAt) } ?? ""))

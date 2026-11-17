@@ -1,5 +1,80 @@
 # CHANGES
 
+## feat/start-new：「再拼一张」+ 未保存提示（quick-start-req v1.0 §2a / §2b / §2e；hd-export-req B10 第 4、11 条）
+
+**依赖 #17（fix/works-delete，48b0569），需先合 #17。** 本分支已 merge `origin/feat/app-layer`（ed58064）和 `origin/fix/works-delete`（48b0569），都是 merge，没有 rebase。未保存提示要用 #17 的 `WorksController.unsavedPrompt` / `.needsUpdate` /「更新原作品」。
+**追加（23:10，验收 7 / 7a）**
+- 「再调一调」途中（设置页，结果还留着：`AppCoordinator.isAdjustingResult`）从作品查看页点「再拼一张」：按同一套判断弹未保存提示（新 reason `UnsavedResultPrompt.startNewFromAdjust`）。没存（含只导出过）→ `quick.unsaved.title`；存过但只改了强度 → `quick.unsaved.update_title`，「保存」= 更新原作品；已存且没改 → 不弹，直接去选图。「不保存」/存好后 → 直接去选目标图（fresh quick start）；「取消」→ 留在设置页，「完成」仍可回原结果。结果页 / 没有结果时的详情页入口行为不变。
+- 为此 `workResultContext` 在「再调一调」途中也带上原结果布局（保存 / 更新要用）；未保存提示对话框从结果页挪到主流程根视图（`UnsavedPromptDialog`），设置页上也能弹。
+- 新增文案 `works.replaced`「有 {count} 格原来的照片现在用不了，已换成相近的照片」（按格计，一次性提示，查看页 / 导出前 / 结果页共用）：copy_v1.1.md + gen-localizable + `L10nKey.worksReplaced` / `allWorks`。**只加了 key，没有调用点**：代码里还没有「把取不到的格子换成相近照片」的逻辑（`MissingCellRematching` 只是 11-18 预留接口；生成时的 refill 是清晰度重配，不是这件事），按要求不在本分支新写。`works.missing` 已是 v1.3（按格计）。
+- 测试：`QuickAgainUnsavedRulesTests` +6（7a：没存弹/取消/保存/不保存、已存不弹、只改强度 update_title 并更新原作品、改了密度仍按原结果判断）。
+
+**追加（23:15–23:20，#18 QA 复核 qa/pr18-another-report.md）**
+- P1-a 隐藏照片兜底：系统 PhotosPicker 选完后按 `itemIdentifier` 经 `PhotoFetch.pickedAssetLookup`（`images(withLocalIdentifiers:)`，写死不含隐藏）再取一次 PHAsset，取不到或 `isHidden` 就不解码、按「读不出来」处理（`setTarget(nil)` → `target.unreadable`）。判断在 `PickedTargetGate`（MosaicAppCore，可单测）。主流程和「再拼一张」共用同一个选图页，两处都生效。**发版前仍需 T7 真机**（系统选择器是否显示隐藏照片；受限访问下未授权照片会取不到 → 读不出来，提示口径待产品对齐）。
+- P1-b seed 回指纹：已 merge `origin/fix/works-delete`（9d35937，含 aebe091），未保存提示与保存按钮同一口径。
+- P2-a 「再调一调」途中从作品查看页「再拼一张」：见上一节 7a。
+- P2-b 确认页设置只作用于新图：进「再拼一张」时记下设置（密度、强度）和素材来源，返回原预览页时恢复，旧结果、「已存 / 更新这张作品」按钮、「完成」都不变；真正开始拼图时用确认页上的值。
+- P2-c 确认页返回（§2e 23:20 定）：过渡期用系统 PhotosPicker，确认页按一次返回直接回原预览页，原结果保留，不弹未保存提示。自做选图页（§4）的两步返回留了钩子 `MainFlow.confirmBackReturnsToPicker`（现为 false），接入时改 true 即可。
+- P3：回到原预览页即释放新选的目标图（`pendingTarget`）；本 PR 涉及的注释「需求 v0.4」改成 v1.0。
+- 未保存提示收起：`confirmationDialog` 的 isPresented 改成可写绑定，收起走 `unsavedPromptDismissed()`：延后一轮、仍是同一个提示（`unsavedPromptID`）且没在保存时按「取消」。「保存」改成同步入口 `unsavedPromptSaveTapped()`（先清提示、标记保存中再进 Task），收起先到后到都不会吞掉保存。
+- 测试：`QuickAgainUnsavedRulesTests` +10（确认页一次返回 ×2、两步返回钩子、P2-b ×2、收起复位 / 收起不吞保存 / 旧收起不关新提示、PickedTargetGate、兜底拒绝按读不出来）；`QuickAgainTests` 两条按 P2-c 改为一次返回。
+
+**追加（23:55，copy v1.6：选图后读不出照片）**
+- 系统选择器选的照片经 PhotoFetch 取不到（不管隐藏 / 未授权 / 已删除），或之后解码失败，一律弹同一个提示 `picker.unavailable`「这张照片现在用不了，换一张试试」。`PickedTargetGate` 只输出可用 / 不可用（`PhotoFetch.isPickedAssetAvailable`），代码里不区分原因；系统选择器这条路不再用 `target.unreadable`。
+- 按钮：`picker.unavailable.change`「换一张」重新打开选择器（`targetPickerReopenRequest`）；`common.cancel`「取消」回到发起页、当前结果保留（「再拼一张」途中回原预览页；主流程 / 作品查看页进来的留在选图页，已选的目标图不动）；`picker.unavailable.add_access`「增加可用照片」只在 App 整体 `authorization == .limited` 时显示，点了调 `presentLimitedLibraryPicker`。点外面收起按「取消」，不会吞掉按钮动作。
+- 文案：copy_v1.1.md §5.8 + gen-localizable（181 key）+ `QuickL10n.allQuick`；`common.cancel` 复用。
+- 测试 +6（只输出可用/不可用、key 在 allUsed、再拼一张取消保留结果和已存状态、换一张、主流程同一提示、受限才显示「增加可用照片」、收起复位且不吞按钮）；原两条 P1-a 测试按新接口改写。
+
+相簿多选（1a、2f）不在本分支，另开 feat/album-multiselect。原来这里的 WIP 提交 73a8a14（只有 `MaterialSource.swift`）没推过，已从本分支拿掉，存在 `/workspace/multiselect-wip/`（patch + 文件）和本地分支 `wip/multiselect-73a8a14`。不改生成、匹配、导出的逻辑。
+
+### 再拼一张（§2b / §2e）
+- **`MainFlow`**：`isQuickAgain`、`.quickAgainStarted`、`.changeSource`。选好目标图直接进确认页（跳过来源页，素材沿用）；确认页返回 → 选图页 → **原预览页**；来源页的「下一步」和返回都回确认页。`autoOpensTargetPicker`：选图页出现时自动弹出系统选图。
+- **`GenerationMachine`**：`(.result, .startTapped)` 可以直接开始新图（只有「再拼一张」的确认页走得到）；如果先弹「照片比较少」，点「返回」回到原结果，结果不丢。
+- **`AppCoordinator+QuickAgain`**：`startNewMosaicTapped()` / `unsavedPromptSave()` / `unsavedPromptDiscard()` / `unsavedPromptCancel()`。结果不在点按钮时清掉：新目标图先放 `pendingTarget`；**真正开始生成新图时**（`send` 里出现 `.run`）才 `commitQuickAgain()`：丢掉 `product`（`hasResult = false` → 平台层释放预览位图）、`resultRevision + 1`（「存到我的作品」按钮复位，作品 id 清掉）、换上新目标图（目标图代次 +1，所以确认页主按钮是「开始拼图」，不是「完成」）。
+- `generateTapped()`：phase 为 `.result` 而且不在「再拼一张」时忽略。`AppState.canStartNewMosaic`：生成中、导出中、提示弹着、保存中、不在结果页时为 false。
+
+### 未保存提示（B10-4 / 11）
+- 只接在「再拼一张」上（预览页还没有返回首页的入口；`leaveResultTapped()` 先备好，等 2c）。「再调一调」和「换一种拼法」不弹。
+- 判断交给 `CurrentResultSaving.unsavedPrompt`（`WorksController` 实现，和「存到我的作品」按钮同一口径）。**导出过不算存过**（去掉了原来的 `resultExportedRevision`）：
+  - 已存且没改 → 不弹，直接去选图；
+  - 没存 → `quick.unsaved.title`；
+  - 存过但只改了叠加强度 → `AppState.unsavedPromptIsUpdate = true`，标题换成 `quick.unsaved.update_title`，「保存」走 `saveCurrentResultTapped()` = 更新原作品（出 `works.updated` 轻提示），不另存。
+- 「保存」：存或更新成功后继续去选图；失败就留在预览页，错误显示在「存到我的作品」下方的 `works.save_failed`。「不保存」：继续，作品库不动。「取消」：什么都不变。按钮文案是 `quick.unsaved.save` / `.discard` / `.cancel`。
+
+### 作品查看页「再拼一张」（§2a）
+- 查看页加第三级文字按钮 `quick.again`。`AppModel.startNewFromWork()` 调协调器的 `startNewFromWorkTapped()`，并把主流程的 `NavigationStack` 换个 id 重建，退回主流程。
+  - 主流程停在结果页：和预览页「再拼一张」完全一样（同样的提示，选图页返回回到那张预览）；
+  - 已经在「再拼一张」途中：不动；
+  - 其他情况（没有结果，或在「再调一调」的设置页）：`MainFlow.isFreshQuickStart`，选一张直接进确认页（素材沿用），没有可返回的预览页，开始生成后回到普通流程。「再调一调」途中的结果不弹提示，和那里点「开始拼图」一样。
+  - 生成中、导出中忽略。
+
+### App
+- `ResultView`：「存到我的作品」下方加「再拼一张」（`+` 图标，`.borderless`）。未保存提示用 `confirmationDialog`，标题按 `unsavedPromptIsUpdate` 在 `quick.unsaved.title` / `quick.unsaved.update_title` 之间切换。`TargetStepView` 按 `autoOpensTargetPicker` 自动弹出系统 PhotosPicker（过渡方案，3 次点击）。确认页顶部显示「素材：{name} · {count} 张」+「换素材」。`AppModel` 在「再拼一张」期间暂存旧目标图缩略图，返回预览页时换回来。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`MainFlowView.swift`、`AppModel.swift`、`WorksViews.swift`。
+
+### 文案
+- copy_v1.1.md：删掉本分支原来的「v1.4 补充 预览页再拼一张」节（和 #17 同步进来的 §5.7 重复）；以 §5.5–5.7 为准（v1.3–v1.5，含 `quick.unsaved.update_title`），和 /workspace/pinyi/copy_v1.1.md 的文案一致。`gen-localizable.py` 重新生成。
+
+### 测试
+- `QuickAgainTests`（16 条，按新规则改）：「已导出不弹」改成 `testExportedButUnsavedResultStillPrompts`（导出过照样弹）；替身 `FakeResultSaver` 改成按 `unsavedPrompt` 回答。
+- 新增 `QuickAgainUnsavedRulesTests`（13 条，用真的 `WorksController`）：
+  - 已存不弹；
+  - 没存时「保存 → 新存并继续 / 不保存 / 取消」，导出过照样弹；
+  - needsUpdate 时标题是 update、「保存」更新同一张并出轻提示后继续、「不保存」原作品不动、「取消」仍是 needsUpdate；强度改回原值不弹；
+  - 新图生成后作品 id 清掉、按钮回到未存；
+  - 作品页入口：停在结果页时同样弹提示、没有结果时直接进选图 → 确认页、生成中忽略。
+- 结果：
+  - MosaicAppCore `swift test --no-parallel` 438 个，0 失败，3 跳过；MosaicCore 153 个，0 失败。
+  - `check-no-network.sh`、`check-photo-fetch.sh`、`gen-localizable.py --check` 通过；改过的 App 文件 `swiftc -parse` 通过。
+
+### 待确认 / 未做
+- 过渡用系统 PhotosPicker 有个前提（v1.0 第 0 节硬规则 3）：T7 真机确认系统选择器不显示隐藏照片，确认之前不能上线。已加 isHidden 兜底（P1-a），能否代替 T7 待产品定。
+- v1.0 §2e 验收 7 写着「已导出或已存的结果不弹」，和第 0 节、第 11 条的「导出过不算存过」矛盾。按后者（和 B10-4）做了。
+- 确认页的「裁剪」（§3）和自做选图页（§4）不在本轮。
+- 多选来源时确认页摘要的三种格式（v1.0 第 12 条）在 feat/album-multiselect 里做。
+
+## fix/works-delete：作品详情页删除不生效（P1）
+
 ## fix/works-delete（续）：「我的作品」保存规则（AndyL 的作品规则 + 产品 hd-export-req B5、B7、B10 第 1–14 条）
 
 删除修复（a9c17b9）已随 #16 合进 feat/app-layer（ed58064）；本节是之后的改动，已 merge（不是 rebase）ed58064，之后又 merge 了 72d6109（#14 perf gate）。
