@@ -19,6 +19,7 @@ public enum PresetShapes {
     public static let registry: [Entry] = [
         Entry(id: .heart, path: heart()),
         Entry(id: .star, path: star()),
+        Entry(id: .circle, path: circle()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -83,6 +84,22 @@ extension PresetShapes {
             b.line(next.x, next.y)
         }
         b.close()
+        return b.build()
+    }
+}
+
+// MARK: - 圆形
+
+extension ShapePresetID {
+    /// 圆形
+    public static let circle = ShapePresetID(rawValue: "circle")
+}
+
+extension PresetShapes {
+    /// 圆形。
+    static func circle() -> ShapePath {
+        var b = ShapePathBuilder()
+        b.circle(50, 50, 50)
         return b.build()
     }
 }
