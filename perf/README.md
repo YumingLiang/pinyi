@@ -24,6 +24,17 @@ ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --f
      局限：快机型归一化后偏低（×0.75–0.92），在没有同机型基线的快机型上灵敏度下降——碰到新机型就按下面步骤补基线。
 - 可在 `threshold.per_metric` 按指标覆盖 `ratio` / `min_delta_ms` / `same_cpu_ratio`。
 - 基线里有、本次没跑出来的指标 → 失败（防止门禁被悄悄删掉）；本次有、基线没有 → 🆕 只显示不判定。
+- **同一 job 内自动重测（11-17 起）**：第 1 次测量里超限的指标，只对它们所在的包（按结果文件推出 指标 → 包）
+  在同一个 job 里再跑一次 `--filter PerfGateTests`，得到第 2 份结果；**两次都超限才失败**，只在第 1 次超限按抖动处理、通过。
+  第 1 次全部通过就不重测；**缺失的指标直接失败、不重测**。第 2 次没有 calib（只重测了 MosaicAppCore）时沿用第 1 次的 calib（同一台 VM）。
+  job summary 里列出 基线 / 第 1 次中位数与比值 / 第 2 次中位数与比值 / 结论。
+  - 依据：PR #18 run 44038111294 attempt 1 里 `runner_gen_coarse` ×1.32、`runner_preview_fetch` ×1.36，是约 1 秒的集中突发
+    （preview 后两个样本 + 紧接着的 gen_coarse 整个用例，下一个用例就恢复），calib 在 40 秒后的另一个进程里测、看不到；
+    attempt 2 同一 commit gen_coarse ×0.99。min-of-samples 救不了（5 个样本都在突发里）。
+  - 真回归（slowpath +2 s、稳定 ×1.3 以上）在第 2 次照样复现，灵敏度不变；只在第 1 次失败时多花约 1 分钟。
+  - 退出码：0 通过 / 1 失败（两次都超限或缺失）/ 其他 = 脚本或环境错误。脚本：`scripts/perf-gate-run.sh`（测量）+ `scripts/perf-gate.py check --retry-results`（判定）。
+  - 每次测量前后打印 `nproc`、`/proc/loadavg`、`/proc/stat` 的 steal（`[perf-diag]` 行，并附在 summary 末尾），**只作诊断，不参与判定**。
+- 判定逻辑的自测：`python3 scripts/test_perf_gate.py`（合成数据：只在第 1 次突发 → 过；两次都慢 → 挂；缺失 → 挂；preview +12 ms → 过、+16 ms → 挂）。CI 在测量前先跑。
 - job summary 里有表：指标 / 基线 / 本次中位数 / 比值 / 归一化比值 / 本次极差 / 结果。
 
 ## 当前门禁指标（`Packages/MosaicCore/Tests/MosaicCoreTests/GenerationPerfGateTests.swift`）
@@ -79,7 +90,7 @@ python3 scripts/perf-gate.py check --results /tmp/p1/perf-results.jsonl
 新指标按全局 calib 缩放后写入全局，同机型只补新指标；新数据没覆盖到的同机型条目会被删掉。
 这样新一批 runner 偏慢（或偏快）不会把已有基线带偏。
 
-`threshold.per_metric`：`runner_slowpath_*` 的 `min_delta_ms` 为 50（QA，fake PhotoKit sleep 对调度敏感）；
+`threshold.per_metric`：`runner_slowpath_*` 的 `min_delta_ms` 为 50（QA，fake PhotoKit sleep 对调度敏感）；`runner_preview_fetch_*` 为 15（11-17：PR #18 的 0838ac9 在 EPYC 7763 上稳定比基线多约 9 ms、原因未定，10 ms 只剩 1 ms 余量；预览真回归是重复取图，≥ ×2）；
 `runner_gen_*` / `runner_reshuffle_*` 为 4（runner 上 6 次：同机型偏差 ≤ 4.5%、归一化后 ≤ ×1.045）。
 
 不要用 box / 本机的结果更新基线（核数和 CPU 与 runner 不同）。

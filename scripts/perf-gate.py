@@ -63,9 +63,9 @@ def cpu_key(meta):
     return f"{cpu} / {meta['nproc']}c" if cpu and meta.get("nproc") else cpu
 
 
-def check(args):
-    base = load_baseline(args.baseline)
-    [(meta, samples)] = load_results([args.results])
+def evaluate(base, meta, samples):
+    """对一份结果逐指标判定。返回 (info, rows)；row 为 dict：
+    metric, kind（ok / bad / missing / new / calib）, ref, base_ms, med, ratio, norm, limit, min_delta, spread。"""
     thr = base.get("threshold", {})
     calib = base.get("calibration_metric")
     gate_on = thr.get("gate_on", "raw")   # 无同机型基线时的口径：raw | normalized | both
@@ -79,21 +79,27 @@ def check(args):
     speed = None
     if calib and calib in samples and calib in base.get("metrics", {}):
         speed = statistics.median(samples[calib]) / base["metrics"][calib]["median_ms"]
+    info = {"cpu": cpu, "same": bool(same), "same_gate": same_gate, "same_speed": same_speed,
+            "gate_on": gate_on, "speed": speed}
 
-    rows, failed = [], []
+    rows = []
     for metric in sorted(set(samples) | set(base.get("metrics", {}))):
         b = base.get("metrics", {}).get(metric)
+        row = {"metric": metric, "kind": "ok", "ref": "", "base_ms": b and b["median_ms"], "med": None,
+               "ratio": None, "norm": None, "limit": None, "min_delta": None, "spread": None}
+        rows.append(row)
         if metric not in samples:
-            rows.append((metric, "", b and b["median_ms"], None, None, None, "", "❌ 缺失（门禁指标没跑出来）"))
-            failed.append(metric)
+            row["kind"] = "missing"
             continue
         s = samples[metric]
         med = statistics.median(s)
-        spread = (max(s) - min(s)) / med * 100 if med > 0 else 0.0
+        row["med"] = med
+        row["spread"] = (max(s) - min(s)) / med * 100 if med > 0 else 0.0
         if b is None and metric not in same:
-            rows.append((metric, "", None, med, None, None, f"{spread:.0f}%", "🆕 无基线（不判定）"))
+            row["kind"] = "new"
             continue
         t = threshold_for(base, metric)
+        row["min_delta"] = t["min_delta_ms"]
         if metric in same:
             bm = same[metric]["median_ms"]
             ratio = med / bm
@@ -115,36 +121,131 @@ def check(args):
             norm_bad = norm is not None and norm > limit and not delta_ok
             bad = {"raw": raw_bad, "normalized": norm_bad if norm is not None else raw_bad,
                    "both": raw_bad and (norm_bad if norm is not None else True)}[gate_on]
+        row.update(ref=ref, base_ms=bm, ratio=ratio, norm=norm, limit=limit)
         if metric == calib:
-            rows.append((metric, ref, bm, med, ratio, None, f"{spread:.0f}%", "ℹ️ 标定（不判定）"))
-            continue
-        status = f"❌ 回归（> ×{limit:.2f} 且 > +{t['min_delta_ms']:.0f} ms）" if bad else f"✅（限 ×{limit:.2f}）"
-        if bad:
-            failed.append(metric)
-        rows.append((metric, ref, bm, med, ratio, norm, f"{spread:.0f}%", status))
+            row["kind"] = "calib"
+            row["norm"] = None
+        elif bad:
+            row["kind"] = "bad"
+    return info, rows
 
-    def f(v, fmt):
-        return "—" if v is None else fmt.format(v)
+
+def _f(v, fmt):
+    return "—" if v is None else fmt.format(v)
+
+
+def _info_line(info, label=""):
+    if info["same"]:
+        txt = (f"有同机型基线，按同机型比（口径 `{info['same_gate']}`"
+               + (f"，本机 calib = 同机型基线的 ×{info['same_speed']:.2f}" if info["same_speed"] else "") + "）。")
+    else:
+        txt = f"无同机型基线，按全局基线、口径 `{info['gate_on']}`。"
+    if info["speed"]:
+        txt += f" 标定速度 = 全局基线的 ×{info['speed']:.2f}（>1 表示本 runner 更慢）。"
+    return f"{label}runner：`{info['cpu'] or '未知'}`；{txt}"
+
+
+def _status(row):
+    k = row["kind"]
+    if k == "missing":
+        return "❌ 缺失（门禁指标没跑出来）"
+    if k == "new":
+        return "🆕 无基线（不判定）"
+    if k == "calib":
+        return "ℹ️ 标定（不判定）"
+    if k == "bad":
+        return f"❌ 超限（> ×{row['limit']:.2f} 且 > +{row['min_delta']:.0f} ms）"
+    return f"✅（限 ×{row['limit']:.2f}）"
+
+
+def _judged_ratio(row):
+    return row["norm"] if row["norm"] is not None else row["ratio"]
+
+
+def check(args):
+    """退出码：0 = 通过；1 = 失败（回归在两次测量里都超限，或指标缺失）；2 = 用法 / 输入错误（argparse / 异常）。
+    只给 --results（第 1 次）时：有回归即退出 1，并把可重测的指标写到 --failed-out，由 CI 决定是否重测。
+    同时给 --retry-results（第 2 次）时：第 1 次超限的指标，只有第 2 次也超限（或第 2 次没跑出来）才算失败。"""
+    base = load_baseline(args.baseline)
+    [(meta1, s1)] = load_results([args.results])
+    info1, rows1 = evaluate(base, meta1, s1)
+    missing = [r["metric"] for r in rows1 if r["kind"] == "missing"]
+    regressed = [r["metric"] for r in rows1 if r["kind"] == "bad"]
+    if args.failed_out:
+        Path(args.failed_out).write_text(json.dumps({"regressed": regressed, "missing": missing}, ensure_ascii=False) + "\n",
+                                         encoding="utf-8")
 
     out = ["### Generation perf regression（Linux release，中位数 vs `" + args.baseline + "`）", ""]
-    out.append(f"runner：`{cpu or '未知'}`；" + ((f"有同机型基线，按同机型比（口径 `{same_gate}`" + (f"，本机 calib = 同机型基线的 ×{same_speed:.2f}" if same_speed else "") + "）。") if same else
-               f"无同机型基线，按全局基线、口径 `{gate_on}`。")
-               + (f" 标定速度 = 全局基线的 ×{speed:.2f}（>1 表示本 runner 更慢）。" if speed else ""))
-    out.append("")
-    out.append("| 指标 | 对照 | 基线 ms | 本次中位数 ms | 比值 | 归一化比值 | 本次极差/中位数 | 结果 |")
-    out.append("|---|---|---:|---:|---:|---:|---:|---|")
-    for m, ref, bm, med, ratio, norm, spread, status in rows:
-        out.append(f"| `{m}` | {ref or '—'} | {f(bm, '{:.1f}')} | {f(med, '{:.1f}')} | {f(ratio, '×{:.3f}')} | {f(norm, '×{:.3f}')} | {spread or '—'} | {status} |")
-    out.append("")
+    failed = list(missing)
+    if not args.retry_results:
+        out.append(_info_line(info1))
+        out.append("")
+        out.append("| 指标 | 对照 | 基线 ms | 本次中位数 ms | 比值 | 归一化比值 | 本次极差/中位数 | 结果 |")
+        out.append("|---|---|---:|---:|---:|---:|---:|---|")
+        for r in rows1:
+            out.append(f"| `{r['metric']}` | {r['ref'] or '—'} | {_f(r['base_ms'], '{:.1f}')} | {_f(r['med'], '{:.1f}')} | "
+                       f"{_f(r['ratio'], '×{:.3f}')} | {_f(r['norm'], '×{:.3f}')} | {_f(r['spread'], '{:.0f}%')} | {_status(r)} |")
+        out.append("")
+        failed += regressed
+        if missing:
+            out.append(f"**失败（缺失，不重测）：{', '.join(missing)}**。")
+        if regressed:
+            out.append(f"**第 1 次超限：{', '.join(regressed)}**（CI 会对所在包自动重测一次；两次都超限才算失败）。")
+    else:
+        [(meta2, s2)] = load_results([args.retry_results])
+        calib = base.get("calibration_metric")
+        if calib and calib not in s2 and calib in s1:
+            # 只重测了不含 calib 的包（例如 MosaicAppCore）：同一台 VM，沿用第 1 次的 calib 做归一化。
+            s2 = {**s2, calib: s1[calib]}
+        meta2 = meta2 or meta1
+        info2, rows2 = evaluate(base, meta2, s2)
+        by2 = {r["metric"]: r for r in rows2}
+        confirmed = []
+        for m in regressed:
+            r2 = by2.get(m)
+            if r2 is None or r2["kind"] in ("bad", "missing"):
+                confirmed.append(m)
+        failed += confirmed
+        out.append(_info_line(info1, "第 1 次 "))
+        out.append(_info_line(info2, "第 2 次 "))
+        out.append("")
+        out.append("判定：第 1 次超限的指标在同一 job 里重测一次，**两次都超限才失败**；第 1 次通过的指标不重测。")
+        out.append("")
+        out.append("| 指标 | 对照 | 基线 ms | 第 1 次中位数 ms | 第 1 次比值 | 第 2 次中位数 ms | 第 2 次比值 | 结论 |")
+        out.append("|---|---|---:|---:|---:|---:|---:|---|")
+        for r in rows1:
+            m = r["metric"]
+            retried = m in s2 and (m in regressed or m != calib)
+            if r["kind"] == "missing":
+                verdict = "❌ 缺失（不重测）"
+            elif m in regressed:
+                verdict = "❌ 两次都超限" if m in confirmed else "✅ 第 1 次超限、重测通过（视为抖动）"
+            else:
+                verdict = _status(r)
+            r2v = by2.get(m) if retried else None
+            out.append(f"| `{m}` | {r['ref'] or '—'} | {_f(r['base_ms'], '{:.1f}')} | {_f(r['med'], '{:.1f}')} | "
+                       f"{_f(_judged_ratio(r), '×{:.3f}') if r['ratio'] is not None else '—'} | "
+                       f"{_f(r2v and r2v['med'], '{:.1f}') if retried else '（未重测）'} | "
+                       f"{(_f(_judged_ratio(r2v), '×{:.3f}') if r2v and r2v['ratio'] is not None else '—') if retried else '—'} | {verdict} |")
+        out.append("")
+        out.append("比值列为判定口径的比值（有 calib 时为归一化比值）。")
+        if failed:
+            out.append(f"**失败：{', '.join(failed)}**。")
+        elif regressed:
+            out.append(f"**通过**：{', '.join(regressed)} 只在第 1 次超限，重测通过，按抖动处理。")
     if failed:
-        out.append(f"**失败：{', '.join(failed)}**。确认是有意的变慢后，按 perf/README.md 更新基线。")
+        out.append("确认是有意的变慢后，按 perf/README.md 更新基线。")
     text = "\n".join(out) + "\n"
     print(text)
     if args.summary:
         with open(args.summary, "a", encoding="utf-8") as fh:
             fh.write(text)
     for m in failed:
-        print(f"::error::[perf] {m} 回归或缺失，见 job summary")
+        if args.failed_out and not args.retry_results and m in regressed:
+            # CI 第 1 次：超限还会重测，先只给 warning，免得重测通过的绿 job 上挂红色 annotation。
+            print(f"::warning::[perf] {m} 第 1 次超限，将重测")
+        else:
+            print(f"::error::[perf] {m} 回归或缺失，见 job summary")
     return 1 if failed else 0
 
 
@@ -250,6 +351,8 @@ def main():
     c.add_argument("--results", required=True)
     c.add_argument("--baseline", default=DEFAULT_BASELINE)
     c.add_argument("--summary")
+    c.add_argument("--retry-results", help="同一 job 内重测的结果（第 2 次）；给了就按「两次都超限才失败」判定")
+    c.add_argument("--failed-out", help="把第 1 次的 {regressed, missing} 写成 JSON（CI 据此决定重测哪些包）")
     u = sub.add_parser("update")
     u.add_argument("--results", nargs="+", required=True)
     u.add_argument("--baseline", default=DEFAULT_BASELINE)
