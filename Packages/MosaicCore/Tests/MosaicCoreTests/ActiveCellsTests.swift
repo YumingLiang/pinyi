@@ -40,45 +40,10 @@ final class ActiveCellsTests: XCTestCase {
         }
     }
 
-    /// FNV‑1a：tiles、距离的位模式、回退级别、关键统计。
-    private func digest(_ a: MosaicAssignment) -> UInt64 {
-        var h: UInt64 = 0xcbf2_9ce4_8422_2325
-        func mix(_ v: UInt64) {
-            var x = v
-            for _ in 0..<8 {
-                h ^= x & 0xff
-                h = h &* 0x0000_0100_0000_01b3
-                x >>= 8
-            }
-        }
-        for t in a.tiles { mix(UInt64(bitPattern: Int64(t))) }
-        for d in a.distances { mix(UInt64(d.bitPattern)) }
-        for l in a.levels { mix(UInt64(l.rawValue)) }
-        mix(UInt64(a.statistics.cellCount))
-        mix(UInt64(bitPattern: Int64(a.statistics.resolvedCap ?? -1)))
-        mix(UInt64(a.statistics.distinctTilesUsed))
-        mix(UInt64(a.statistics.maxUses))
-        return h
-    }
+    private func digest(_ a: MosaicAssignment) -> UInt64 { NilPathDigestTests.digest(a) }
 
-    // MARK: - nil 回归（逐位一致）
-
-    /// 金标准由 fbc03fa（加 activeCells 之前）同一用例算出：掩码为 nil 时，同种子结果必须逐位相同。
-    func testNilMaskMatchesPreShapeGoldenDigest() throws {
-        let grid = try MosaicGrid(columns: 40, rows: 30)
-        let lib = FeatureMatrix(vectors: syntheticVectors(count: 300, seed: 3))
-        let a = try GreedyAssigner(configuration: AssignmentConfiguration(seed: 42))
-            .assign(grid: grid, cellFeatures: cells(grid, seed: 4), library: lib)
-        XCTAssertEqual(digest(a), Self.goldenAssign)
-
-        let snap = try LibrarySnapshot(table: table(500, seed: 11))
-        let g = try MosaicPipeline().generate(target: gradientTarget(), density: .coarse, snapshot: snap, seed: 7)
-        XCTAssertNil(g.activeCells)
-        XCTAssertEqual(digest(g.assignment), Self.goldenPipeline)
-    }
-
-    static let goldenAssign: UInt64 = 15_918_930_707_374_718_768
-    static let goldenPipeline: UInt64 = 17_248_742_613_598_977_437
+    // MARK: - nil 回归
+    // 跨提交逐位金标准（只在 x86_64 Linux 上比）见 `NilPathDigestTests`；下面两条在所有平台都断言。
 
     /// 显式传 nil、以及全 1 掩码，都与不传完全相同。
     func testExplicitNilAndAllActiveMaskEqualDefault() throws {
@@ -94,6 +59,24 @@ final class ActiveCellsTests: XCTestCase {
                                       activeCells: CellMask(columns: 40, rows: 30, allActive: true))
         XCTAssertEqual(explicitNil, base)
         XCTAssertEqual(all, base)
+    }
+
+    /// 流水线：传 nil 与传全 1 掩码结果完全相同（所有平台）；摘要打印到日志，便于各平台对照。
+    func testPipelineNilAndAllActiveMaskAreIdentical() throws {
+        let snap = try LibrarySnapshot(table: table(500, seed: 11))
+        let target = try gradientTarget()
+        let pipe = MosaicPipeline()
+        let layout = try Layout.grid(width: target.width, height: target.height, density: .coarse)
+        let none = try pipe.generate(target: target, density: .coarse, snapshot: snap, seed: 7)
+        let explicitNil = try pipe.generate(target: target, density: .coarse, snapshot: snap, seed: 7, activeCells: nil)
+        let allMask = try CellMask(columns: layout.grid.columns, rows: layout.grid.rows, allActive: true)
+        let all = try pipe.generate(target: target, density: .coarse, snapshot: snap, seed: 7, activeCells: allMask)
+        print("PIPELINE-DIGEST platform=\(NilPathDigestTests.platform) nil=\(digest(none.assignment)) allActive=\(digest(all.assignment))")
+        XCTAssertNil(none.activeCells)
+        XCTAssertEqual(explicitNil.assignment, none.assignment)
+        XCTAssertEqual(all.assignment, none.assignment)
+        XCTAssertEqual(digest(all.assignment), digest(none.assignment))
+        XCTAssertEqual(all.assignment.statistics.cellCount, layout.cellCount)
     }
 
     // MARK: - 掩码内外
