@@ -352,7 +352,7 @@ public actor PhotoIndex {
                 let outcomes = try await BoundedConcurrency.map(batch, maxConcurrent: limit) { id -> (ScanItemOutcome, Double) in
                     switch await thumbs.thumbnail(for: id, request: request) {
                     case .unavailableLocal: return (.unavailableLocal, 0)
-                    case .failed: return (.failed, 0)
+                    case .failed, .missing: return (.failed, 0)
                     case .image(let buffer):
                         let e0 = clock.now()
                         guard var rec = try? extractor.extract(from: buffer) else { return (.failed, clock.now() - e0) }

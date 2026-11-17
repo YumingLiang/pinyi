@@ -1,5 +1,16 @@
 # CHANGES
 
+## feat/preview-detail-layer：隐私加固（QA 复验 ed6cce7）
+
+已 merge feat/app-layer `2b2fb93`（#18「再拼一张」；此前已含 #17 / #14 / #16）。隐藏照片任何地方都不能露出，不能只靠 PhotoFetch 取不到。
+
+- **按 ID 取图双保险**：新增 `PhotoFetch.visibleImages(withLocalIdentifiers:)`，在 `includeHiddenAssets = false` 之后再按 `isHidden` 过滤（`VisibleAssetFilter.accepting`，纯函数）。`PhotoKitThumbnails.assets()`、网格缩略图缓存、目标图、分辨率探测、作品存在检查都改走这里。网格缩略图读缓存时再看一遍 `isHidden`。
+- **#18 选图兜底统一走 visibleImages**：`PhotoFetch.isPickedAssetAvailable`（系统 PhotosPicker / `PickedTargetGate`）改为调用 `visibleImages`，不再自己 `images` + `isHidden`。隐藏 / 取不到的目标图仍只回答不可用，不区分原因。
+- **导出不走 128px 泄漏兜底**：新增 `ThumbnailResult.missing`（PhotoFetch 取不到或已隐藏）。`ExportFillStats.decision(afterHighQuality:)`：`.missing` 直接白格子，不请求 `.scanDisplay`；`.unavailableLocal` / `.failed`（例如 iCloud 原图未下载、解码失败）仍试 128px。`LiveMosaicExporter` 和清晰层取图都用这一决策。
+- **「完成」路径**（只改叠加强度、不重新生成）：重画底图走 `ThumbnailPreviewPlan` + `.scanDisplay`（与 `MosaicPreviewRenderer.thumbnails` 相同），隐藏照片 `thumbnail` 返回 `.missing`，白底保留；导出仍走 `decision(afterHighQuality:)`，不退回 128px。`HiddenExportTests.testAdjustDoneRedrawAndExportHiddenCellsAreWhite` 覆盖此路径。「完成」按钮随 #17 进入本分支；取图/导出合同见 `HiddenExportTests.testAdjustDoneRedrawAndExportHiddenCellsAreWhite`。
+- **测试**：`ExportFillStatsTests` 增补决策 / 过滤；新增 `HiddenExportTests`（三档隐藏格全白、泄漏路径也不再画糊格子、可见但高清失败仍走 128px、「完成」重画+导出、源码守卫）。`AppTests/PhotoFetchTests.testVisibleImagesAndExportSourceGuards` 在模拟器 CI 再守一层。
+- **未改**：结果页已画好的底图 / 清晰层缓存，隐藏后若人还停在结果页仍可能显示旧图；离开结果页或换拼法才会 `reset`。这不是本补丁引入的，留给相册变化监听。
+
 ## feat/start-new：「再拼一张」+ 未保存提示（quick-start-req v1.0 §2a / §2b / §2e；hd-export-req B10 第 4、11 条）
 
 **依赖 #17（fix/works-delete，48b0569），需先合 #17。** 本分支已 merge `origin/feat/app-layer`（ed58064）和 `origin/fix/works-delete`（48b0569），都是 merge，没有 rebase。未保存提示要用 #17 的 `WorksController.unsavedPrompt` / `.needsUpdate` /「更新原作品」。
@@ -73,10 +84,28 @@
 - 确认页的「裁剪」（§3）和自做选图页（§4）不在本轮。
 - 多选来源时确认页摘要的三种格式（v1.0 第 12 条）在 feat/album-multiselect 里做。
 
-## fix/works-delete：作品详情页删除不生效（P1）
+
+## feat/preview-detail-layer：结果页预览清晰层（正式修复放大发糊；架构师 21:02 方案）
+
+基于 feat/preview-sharp-quick（`39e277a`，含止血改动），已 merge feat/app-layer `ed58064`（#16 删除修复；此前已含 #9 / #12 / #13）。AndyL：「可能主要是不清晰，先把清晰度的问题修复了」。底图（每格 ≤ 64 px、长边 ≤ 4096）不动；放大到底图不够清楚时，只给可见格子换高清方图。不改生成 / 匹配，不碰 LiveDependencies 的清晰度注入，不碰 target.heic。
+
+- **MosaicAppCore `Preview/DetailLayer.swift`（新，纯逻辑）**：
+  - `DetailGeometry`：和 `ZoomableContainer` 同一套变换（scaledToFit 居中 → 以视口中心 scaleEffect → offset），算内容 / 格子的屏幕像素矩形、每格屏幕像素、可见格子范围（半开区间，边缘落在格线上不多算一格）、外扩 N 圈、中心优先顺序（先可见格、再外扩圈），以及 scaleEffect 之内摆放用的未缩放格子 frame。
+  - `DetailLayerTrigger`：启用条件 = 屏幕每格像素 > 底图每格像素 × 1.5，且可见格 ≤ 960（QA P2-1：原 300 盖不住细档 4.65–8.55x / 中档 4.65–5.7x；960 盖住 iPhone 17 Pro Max 细档 4:3 在阈值附近的约 930 格）。返回外扩 1 圈后的范围和档位。取图计划仍按 64 MB 字节预算截断（中心优先）。分档阈值不改。
+  - `DetailTier`：按可见格数分档，> 64 → 256 px，≤ 64 → 512，≤ 4 → 1024。
+  - `DetailLayerState`：防抖 + 代次。缩放 / 平移每次变化代次 +1，150 ms 内没有新变化才更新可见集合；过期定时器作废；集合没变不重复更新；离开结果页 / 换拼法 / 内存警告 `reset()` 清空 + 清缓存。
+  - `DetailLoadPlan`（按照片分组，同一照片多格只取一次）、`DetailRequestDiff`（可见集合变化时要取消 / 新发的请求）。
+  - `PerfPhase.previewDetail`（性能页「预览清晰层」）。
+- **App `Rendering/PreviewDetailLayer.swift`（新）**：
+  - `PreviewDetailLayer`（MainActor）：取图复用导出 hq 请求（`fastFormat = false`、`fastResize = false`、`centerCropToSquare = true`，不联网），取不到退回 `.scanDisplay`，再取不到就保持底图、不提示。最多 6 个请求在飞，可见集合变化时取消不再需要的。`NSCache` 按字节计费、上限 64 MB、键 = assetID；离开结果页、换拼法、内存警告时清空。显示中的图被视图持有、NSCache 淘汰不掉，所以取图计划再按 64 MB 截断（中心优先，外圈先丢），守住峰值 ≤ 现在 + 64 MB。每次更新写 os_log（category `preview-detail`）和性能页。
+  - `PreviewDetailTilesView`：放在 `ZoomableContainer` 内容里（和底图同一个 scaleEffect 之内），每格一个 `Image`，frame = 未缩放格子尺寸，`.position` 定位，**不加 drawingGroup 等光栅化修饰符**。手势进行中清晰层随内容一起缩放平移，不隐藏也不会错位；手势停下 150 ms 后才换可见集合。
+  - 叠加 α > 0：清晰层上再叠目标图（同一 cropRect、同一 α，`.opacity`），用已显示格子的形状做遮罩，只盖住有清晰图的格子（其余是底图，底图里已叠过）。目标图长边 > 2048 时先缩到 2048 再持有（架构师建议；放大后这一层本来就是糊的，和导出一致）。
+- **App `Adapters/PhotoKitThumbnails.swift`**：新增 `cancellableThumbnail`（Task 取消 → `cancelImageRequest`），只给清晰层用。`assets(_:)` 改走 PhotoFetch（与 #9 同一写法；后续隐私加固改为 `visibleImages`，见上方）。**扫描和导出取图也改走 PhotoFetch**（扫描、底图预览、超清导出、作品重画都经 `assets(_:)`）。
+- **App `Models/AppModel.swift`、`Views/MainFlowView.swift`**：结果页内容改成「底图 + 清晰层」ZStack；`onChange(of: resultZoom)` 通知清晰层；换结果时 `configure`，离开结果页时 `reset`。
+- **拉伸检查**：底图缩略图预览用 `.scanDisplay`（`centerCropToSquare = true`，dd61da7 起）按短边居中裁方，没有非等比拉伸；色块占位不涉及照片。清晰层请求同样 `centerCropToSquare = true`。本次不做竖图上三分之一裁切。
+- **测试**：`DetailLayerTests` 20 个（可见格子 / 外扩 / 中心优先、未缩放 frame 与屏幕矩形互相换算、档位、启用条件、防抖代次、平移换集合 / 缩小清除、reset、取图计划去重、64 MB 字节预算截断、原缺口缩放区间启用且计划 ≤ 64 MB、请求差分）。`DetailLayerBenchTests` 只在 `MOSAIC_BENCH=1` 时跑。PhotoKit / SwiftUI 部分 Linux 只做 `swiftc -parse`。
 
 ## fix/works-delete（续）：「我的作品」保存规则（AndyL 的作品规则 + 产品 hd-export-req B5、B7、B10 第 1–14 条）
-
 删除修复（a9c17b9）已随 #16 合进 feat/app-layer（ed58064）；本节是之后的改动，已 merge（不是 rebase）ed58064，之后又 merge 了 72d6109（#14 perf gate）。
 
 ### QA 复核 48b0569 之后（qa/pr17-works-rules-report.md，开发协调人按 AndyL 规则「换拼法后再存就新存一份，只改强度算同一张」定口径）
@@ -112,6 +141,13 @@
   - QA 测试计划 v0.4 的 `QAWorksRulesTests`（34 条）和 `pending/QAWorksRulesPendingInterfaceTests`（19 条，A1–A12 全部按计划里的名字实现）接入，改动都标了「全栈改 / 全栈加」：`setAlpha` 通知 controller；旧数据重复用 `makeLegacyDuplicate` 构造；pending 的 A2 密度名断言改成「不含」。（曾按查不到出处的「AndyL 口径」反转 seed 断言，QA 复核后已恢复，见上。）
   - 结果：MosaicAppCore `swift test --no-parallel` 409 个，0 失败，3 跳过；`check-photo-fetch.sh`、`check-no-network.sh` 通过；MosaicCore 153 个，0 失败。App 层改动 Linux 上编译不了，未在真机 / Xcode 编过。
 
+
+## fix/works-delete：作品详情页删除不生效（P1）
+
+- **根因**：确认弹窗收起时 SwiftUI 先调 `isPresented` 的 `set(false)` → `deleteCancelled()` 清掉 `pendingDelete`；按钮里的 `Task { await controller.deleteConfirmed() }` 更晚执行，取不到 id 直接 return，删除被静默吞掉。从 PR #6 上线起就存在，不是 #11 / #15 引入的回归。
+- **修法**：新增 `WorksController.deleteConfirmed(_ id: WorkID)`，不依赖共享的 `pendingDelete`；`WorksModel.deleteConfirmed(_:)` 转发；弹窗「删除」按钮直接传当前作品 id。旧的无参入口保留并转调新入口。
+- **测试**：MosaicAppCoreTests 新增 `QAWorksDeleteRegressionTests`（14 条：删后列表、重启、目录清理、打开中删除、并发保存、连删、删后再存、防重复保存及查重口径现状）和 `QAWorksDeleteFixContractTests`（3 条：UI 时序下带 id 删除、交错删除、取消不删）。MosaicAppCore `swift test` 327 个，0 失败，3 跳过。
+- 未做：列表页长按删除（等 AndyL 决定）；查重口径（overlayAlpha/seed 不同算两份）维持现状，等产品决定。
 
 ## feat/picker-t3：`fetchKeyAssets` 纳入隐藏照片检查（QA #9 补丁）
 

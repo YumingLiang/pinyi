@@ -18,7 +18,7 @@ enum WorksLocation {
     }
 }
 
-/// 原照片还在不在：`PhotoFetch.images(withLocalIdentifiers:)` 分批查（不联网，只查本机相册数据库）。
+/// 原照片还在不在：`PhotoFetch.visibleImages(withLocalIdentifiers:)` 分批查（不联网，只查本机相册数据库）。
 struct PhotoKitExistenceChecker: PhotoExistenceChecking {
     static let batch = 500
 
@@ -27,10 +27,10 @@ struct PhotoKitExistenceChecker: PhotoExistenceChecking {
         var start = 0
         while start < identifiers.count {
             let chunk = Array(identifiers[start..<min(identifiers.count, start + Self.batch)])
-            // 走 PhotoFetch：隐藏照片取不到，和已删除一样按缺图处理（design 5.1）
-            let result = PhotoFetch.images(withLocalIdentifiers: chunk)
-            // 32ec2b5 的教训：不用 enumerateObjects 闭包捕获可变状态，按下标取
-            for i in 0..<result.count { found.insert(result.object(at: i).localIdentifier) }
+            // 走 PhotoFetch.visibleImages：隐藏照片取不到，和已删除一样按缺图处理（design 5.1）
+            for a in PhotoFetch.visibleImages(withLocalIdentifiers: chunk) {
+                found.insert(a.localIdentifier)
+            }
             start += chunk.count
         }
         return found

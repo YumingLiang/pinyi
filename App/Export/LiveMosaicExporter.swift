@@ -87,13 +87,19 @@ struct LiveMosaicExporter: MosaicExporting {
                     next += 1
                     guard let id = ids[i] else { fills.add(.blank); done += 1; continue }
                     group.addTask {
-                        if case .image(let pb) = await thumbs.thumbnail(for: id, request: hq) {
-                            return (i, pb, .highQuality)
+                        let hqResult = await thumbs.thumbnail(for: id, request: hq)
+                        switch ExportFillStats.decision(afterHighQuality: hqResult) {
+                        case .highQuality:
+                            if case .image(let pb) = hqResult { return (i, pb, .highQuality) }
+                            return (i, nil, .blank)
+                        case .blank:
+                            return (i, nil, .blank)
+                        case .tryScanDisplay:
+                            if case .image(let pb) = await thumbs.thumbnail(for: id, request: .scanDisplay) {
+                                return (i, pb, .blurryFallback)
+                            }
+                            return (i, nil, .blank)
                         }
-                        if case .image(let pb) = await thumbs.thumbnail(for: id, request: .scanDisplay) {
-                            return (i, pb, .blurryFallback)
-                        }
-                        return (i, nil, .blank)
                     }
                     return
                 }

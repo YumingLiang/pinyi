@@ -38,7 +38,7 @@ final class PhotoKitTargetImageLoader {
     init() {}
 
     func load(assetID: String, timing: TargetImageFetchMachine<UIImage>.Timing = .init()) async -> TargetImageFetchResult {
-        guard let asset = PhotoFetch.images(withLocalIdentifiers: [assetID]).firstObject else { return .missing }
+        guard let asset = PhotoFetch.visibleImages(withLocalIdentifiers: [assetID]).first else { return .missing }
         if Task.isCancelled {
             return TargetImageFetchResult(image: nil, localLongSide: 0, isDegraded: false, sawInCloud: false,
                                           assetMissing: false, reason: .cancelled, usedFallback: false)
