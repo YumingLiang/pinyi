@@ -1,0 +1,117 @@
+# macOS Thread Sanitizer：App 层 AppTests（iOS 模拟器）+ MosaicCore / MosaicAppCore 的 swift test --sanitize=thread（QA 覆盖缺口 G-1）。
+# 为什么放 nightly 而不是每个 PR：TSan 比普通测试慢 5–15 倍，macOS runner 并发名额有限（免费档 5 个），
+# 放进 PR 会拖慢 ios.yml 的门禁。仓库公开，标准 GitHub 托管 runner 不收费；转私有后约 0.062 美元/分钟，届时再评估。
+# 注意：schedule 只在默认分支（main）上生效，本文件合入 main 后才开始每晚运行；在此之前可手动 workflow_dispatch。
+# 本 workflow 不读取任何 secret。
+# 代码目前在 feat/app-layer 上，main 只有本文件。手动运行时请选 feat/app-layer：
+#   Actions → tsan-nightly → Run workflow → Branch: feat/app-layer
+# 定时只认 main 上的文件，main 上的这份如何处理需要 AndyL 决定。
+name: tsan-nightly
+
+on:
+  schedule:
+    - cron: "17 11 * * *"   # UTC 11:17 = 太平洋时间 03:17（冬令时）/ 04:17（夏令时）
+  workflow_dispatch:
+  push:  # TEMP: 验证用，合并前删除
+    branches: [ci/tsan-nightly-app-layer]
+
+concurrency:
+  group: tsan-nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tsan:
+    name: TSan ${{ matrix.package }} (macOS)
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer   # 与 ios.yml 一致（Swift 6.3.3）
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [MosaicCore, MosaicAppCore]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::$DEVELOPER_DIR not found on runner"; ls -d /Applications/Xcode*.app; exit 1
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: swift test --sanitize=thread
+        working-directory: Packages/${{ matrix.package }}
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: |
+          set -o pipefail
+          swift test --sanitize=thread 2>&1 | tee tsan.txt
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-${{ matrix.package }}
+          path: Packages/${{ matrix.package }}/tsan.txt
+          retention-days: 14
+
+  # App 层（AppTests，含 AppModel / PhotoKit 适配）在 iOS 模拟器上跑 TSan。
+  tsan-app:
+    name: TSan App (iOS simulator)
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          d = json.load(sys.stdin)["devices"]
+          def ver(rt):
+              m = re.search(r"iOS-(\d+)-(\d+)", rt)
+              return (int(m.group(1)), int(m.group(2))) if m else (-1, -1)
+          for rt in sorted((r for r in d if "iOS" in r), key=ver, reverse=True):
+              for dev in d[rt]:
+                  if dev.get("isAvailable") and dev["name"].startswith("iPhone"):
+                      print(dev["udid"]); sys.exit(0)
+          sys.exit("no available iPhone simulator")
+          ')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: xcodebuild test -enableThreadSanitizer YES
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project PhotoMosaic.xcodeproj \
+            -scheme Pinyi \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath DerivedData \
+            -enableThreadSanitizer YES \
+            -resultBundlePath TSanApp.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee xcodebuild-tsan-app.log
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-app
+          path: |
+            TSanApp.xcresult
+            xcodebuild-tsan-app.log
+          retention-days: 14
