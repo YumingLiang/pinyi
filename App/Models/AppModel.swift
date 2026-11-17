@@ -116,6 +116,10 @@ final class AppModel: ObservableObject {
     var emptyState: LibraryEmptyState? { state.emptyState }
     var transientNotice: L10nKey? { state.transientNotice }
     var access: SourceAccess { state.access }
+    /// 来源是相簿、张数还没算出来：显示加载中（§2f 补充 3）。
+    var isMaterialCountLoading: Bool { state.isMaterialCountLoading }
+    /// 「开始拼图」在等相簿列表加载完（§2f 补充 3）。
+    var isWaitingForAlbums: Bool { state.isWaitingForAlbums }
     var allPhotosRow: SourceRow { state.allPhotosRow }
     var authorization: PhotoAuthorization { state.authorization }
     var sourceLowResLine: LocalizedLine? { state.sourceLowResLine }

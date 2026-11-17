@@ -22,6 +22,14 @@ public struct VisibleIndexMap: Sendable, Hashable {
         visibleToRaw = sawHidden ? kept : nil
     }
 
+    /// 在后台线程建表（quick-start v1.0 §2f 补充 4：隐藏照片过滤不能在主线程扫取图结果）。
+    /// `isHidden` 会在非主线程上被逐个调用；调用方（App 的网格数据源）在主线程等结果。
+    public static func buildInBackground(rawCount: Int, isHidden: @escaping @Sendable (Int) -> Bool) async -> VisibleIndexMap {
+        await Task.detached(priority: .userInitiated) {
+            VisibleIndexMap(rawCount: rawCount, isHidden: isHidden)
+        }.value
+    }
+
     /// 没有隐藏项。
     public var isIdentity: Bool { visibleToRaw == nil }
 

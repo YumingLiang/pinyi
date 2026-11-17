@@ -76,6 +76,10 @@ public struct AppState: Sendable, Hashable {
     public var authorization: PhotoAuthorization = .notDetermined
     /// 索引已从磁盘加载（加载在启动关键路径之外，评审 §3 / MF-4）。
     public var indexLoaded = false
+    /// 相簿列表至少加载完一次（§2f 补充 3）。之前来源是相簿时，张数显示「加载中」，不显示旧数字。
+    public var albumsLoaded = false
+    /// 「开始拼图」在等相簿列表加载完（§2f 补充 3）：按钮短暂显示加载状态。
+    public var isWaitingForAlbums = false
     public var indexStatus = IndexStatus(assetTotal: nil, available: 0, pending: 0, unavailableLocal: 0, failed: 0,
                                          isScanning: false, wasInterrupted: false, hasCompletedInitialScan: false)
     public var scan = ScanFlow()
@@ -154,6 +158,15 @@ public struct AppState: Sendable, Hashable {
 
     /// 确认页素材摘要「素材：{name} · {count} 张」（需求 v1.0 §2b）。`allPhotosTitle`：平台层把
     /// 「全部照片 / 已允许访问的照片」本地化后传进来（逻辑层不产出中文）。张数与来源页该行显示的一致。
+    /// 来源是相簿、张数还没算出来（启动时相簿列表未加载完，或去重合计在算）：显示加载中，不显示旧数字 / 0（§2f 补充 3）。
+    public var isMaterialCountLoading: Bool {
+        switch flow.source.selection {
+        case .allPhotos: return false
+        case .album: return !albumsLoaded
+        case .albums: return !albumsLoaded || flow.source.selectionUnion == nil
+        }
+    }
+
     public func materialSummary(allPhotosTitle: String) -> LocalizedLine {
         switch flow.source.selection {
         case .allPhotos:

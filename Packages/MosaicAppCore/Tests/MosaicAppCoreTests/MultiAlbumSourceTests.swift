@@ -201,7 +201,6 @@ final class MultiAlbumSourceTests: XCTestCase {
         XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "gone", "U", "B"]), "启动即恢复")
         await ready(h)
         XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "B"]), "删掉的、打不开的静默去掉")
-        XCTAssertNil(c.state.flow.source.notice, "不提示")
         c.stop()
 
         let prefs2 = InMemoryPreferenceData()
@@ -209,7 +208,6 @@ final class MultiAlbumSourceTests: XCTestCase {
         let h2 = harness(prefs: prefs2)
         await ready(h2)
         XCTAssertEqual(h2.coordinator.state.flow.source.selection, .allPhotos, "全部失效回到全部照片")
-        XCTAssertNil(h2.coordinator.state.flow.source.notice)
         XCTAssertEqual(SourceSelectionStore(backend: prefs2).load(), .allPhotos)
         h2.coordinator.stop()
 
@@ -218,7 +216,6 @@ final class MultiAlbumSourceTests: XCTestCase {
         let h3 = harness(prefs: prefs3)
         await ready(h3)
         XCTAssertEqual(h3.coordinator.state.flow.source.selection, .allPhotos, "单个记住的相簿没了：静默回全部照片（§1a 验收 2）")
-        XCTAssertNil(h3.coordinator.state.flow.source.notice)
         h3.coordinator.stop()
     }
 
@@ -232,7 +229,6 @@ final class MultiAlbumSourceTests: XCTestCase {
         h.library.state.update { s in s.albums.removeAll { $0.id == "B" }; s.albumMembers["B"] = nil }
         await c.refreshAlbums()
         XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "C"]), "删掉其中一个，只少这一个（验收 6）")
-        XCTAssertNil(c.state.flow.source.notice)
         c.stop()
     }
 
@@ -272,5 +268,138 @@ final class MultiAlbumSourceTests: XCTestCase {
             XCTFail("全部打不开要抛 albumUnreadable")
         } catch { XCTAssertEqual(error as? PhotoIndexError, .albumUnreadable) }
         h.coordinator.stop()
+    }
+
+    // MARK: 2f 补充（00:15）
+
+    /// 补充 1：本次手动选的单个相簿不见了，也静默去掉回全部照片；来源标签和确认页摘要立即是处理后的结果。
+    @MainActor
+    func testInSessionSingleAlbumGoneIsSilentAndSummaryUpdates() async throws {
+        let h = harness()
+        let c = h.coordinator
+        await ready(h)
+        c.selectSource(.album(id: "C"))
+        XCTAssertEqual(c.state.materialSummary(allPhotosTitle: "全部照片"), LocalizedLine(.quickSourceSummary, ["猫", "30"]))
+        h.library.state.update { s in s.albums.removeAll { $0.id == "C" }; s.albumMembers["C"] = nil }
+        await c.refreshAlbums()
+        XCTAssertEqual(c.state.flow.source.selection, .allPhotos)
+        XCTAssertFalse(c.state.isMaterialCountLoading)
+        XCTAssertEqual(c.state.materialSummary(allPhotosTitle: "全部照片"),
+                       LocalizedLine(.quickSourceSummary, ["全部照片", CountFormat.grouped(c.state.allPhotosRow.count)]))
+
+        // 多相簿去掉一个：摘要马上换成剩下的那个（单相簿格式）
+        c.openAlbumList(); c.toggleAlbum("A"); c.toggleAlbum("B")
+        XCTAssertTrue(c.finishAlbumSelection())
+        h.library.state.update { s in s.albums.removeAll { $0.id == "B" }; s.albumMembers["B"] = nil }
+        await c.refreshAlbums()
+        XCTAssertEqual(c.state.flow.source.selection, .album(id: "A"))
+        XCTAssertEqual(c.state.materialSummary(allPhotosTitle: "全部照片"), LocalizedLine(.quickSourceSummary, ["宝宝", "150"]))
+
+        // 列表开着时被选中的那个打不开了（还在列表里）：勾选静默去掉
+        c.openAlbumList()
+        h.library.state.update { s in s.albumMembers["A"] = nil }
+        await c.refreshAlbums()
+        XCTAssertEqual(c.state.flow.source.draft?.ids, [])
+        XCTAssertEqual(c.state.flow.source.selection, .allPhotos)
+        c.stop()
+    }
+
+    /// 补充 1：生成前（列表已加载）所选相簿刚被删掉：按 ID 再核对一次，静默去掉后再生成，不拿失效的选择去生成。
+    @MainActor
+    func testGenerateRechecksSelectionAfterLoad() async throws {
+        let h = harness()
+        let c = h.coordinator
+        await ready(h)
+        c.setTarget(try CoordinatorHarness.target())
+        c.openAlbumList(); c.toggleAlbum("A"); c.toggleAlbum("B")
+        XCTAssertTrue(c.finishAlbumSelection())
+        h.library.state.update { s in s.albumMembers["A"] = nil }   // 列表还没刷新
+        await c.generateTapped()
+        XCTAssertEqual(c.state.flow.source.selection, .album(id: "B"))
+        XCTAssertTrue(c.state.flow.generation.shortagePrompt, "只剩 B 的 150 张，按剩下的判断门槛")
+        c.stop()
+    }
+
+    /// 补充 2：`albums.limited_note` +「增加可用照片」只在受限访问时显示；文案进了 allUsed。
+    func testLimitedNoteOnlyWhenLimited() {
+        XCTAssertTrue(SourceListLogic.showsAlbumsLimitedNote(access: .limited))
+        XCTAssertFalse(SourceListLogic.showsAlbumsLimitedNote(access: .full))
+        XCTAssertEqual(L10nKey.albumsLimitedNote.rawValue, "albums.limited_note")
+        XCTAssertTrue(L10nKey.allUsed.contains(.albumsLimitedNote))
+        XCTAssertTrue(L10nKey.allUsed.contains(.sourceAddPhotos))
+    }
+
+    /// 补充 3：启动时相簿列表加载完之前张数是「加载中」；这时点「开始拼图」先等失效相簿去掉再开始，按钮显示加载状态。
+    @MainActor
+    func testStartBeforeAlbumsLoadedWaitsAndNeverUsesStaleSelection() async throws {
+        let prefs = InMemoryPreferenceData()
+        SourceSelectionStore(backend: prefs).save(.albums(ids: ["A", "gone", "B"]))
+        let gate = GatePoint()
+        let h = harness(prefs: prefs)
+        h.library.albumsGate.set(gate)
+        let c = h.coordinator
+        XCTAssertTrue(c.state.isMaterialCountLoading, "启动即恢复，列表没加载：加载中")
+        XCTAssertFalse(c.state.albumsLoaded)
+
+        // 记录每次进入「生成中」时的来源
+        let seen = Locked<[SourceSelection]>([])
+        let waiting = Locked<[Bool]>([])
+        let token = c.observe { s in
+            waiting.update { $0.append(s.isWaitingForAlbums) }
+            if case .running = s.flow.generation.phase { seen.update { $0.append(s.flow.source.selection) } }
+        }
+        c.start()
+        await gate.reached.wait()
+        // 扫描本身先做完（扫描结束后的相簿刷新同样停在闸门上），让「开始拼图」只卡在相簿列表上
+        await waitFor(c, "扫描完成") { SourceListLogic.isScanComplete($0.indexStatus) }
+        XCTAssertFalse(c.state.albumsLoaded)
+        XCTAssertTrue(c.state.isMaterialCountLoading, "列表还在加载：不显示旧数字")
+        c.setTarget(try CoordinatorHarness.target())
+        let tap = Task { await c.generateTapped() }
+        await waitFor(c, "按钮加载状态") { $0.isWaitingForAlbums }
+        XCTAssertEqual(h.generator.calls.get(), 0, "列表加载完之前不开始")
+        XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "gone", "B"]))
+        await gate.release.open()
+        await tap.value
+        XCTAssertFalse(c.state.isWaitingForAlbums)
+        XCTAssertTrue(c.state.albumsLoaded)
+        XCTAssertEqual(c.state.flow.source.selection, .albums(ids: ["A", "B"]))
+        XCTAssertFalse(c.state.isMaterialCountLoading)
+        await c.settle()
+        await waitFor(c, "结果") { if case .result = $0.flow.generation.phase { return true }; return false }
+        XCTAssertFalse(seen.get().isEmpty)
+        XCTAssertTrue(seen.get().allSatisfy { $0 == .albums(ids: ["A", "B"]) }, "\(seen.get())")
+        XCTAssertTrue(waiting.get().contains(true))
+        c.removeObserver(token)
+        c.stop()
+    }
+
+    /// 补充 3：恢复的来源全失效：加载完回到全部照片，张数不再是加载中。
+    @MainActor
+    func testRestoredAllGoneLoadsAtLaunchWithoutAlbumPage() async throws {
+        let prefs = InMemoryPreferenceData()
+        SourceSelectionStore(backend: prefs).save(.album(id: "gone"))
+        let h = harness(prefs: prefs)
+        let c = h.coordinator
+        XCTAssertTrue(c.state.isMaterialCountLoading)
+        c.start(); await c.settle()
+        // 没有打开来源页（没人调 refreshAlbums），启动加载也会核对
+        await waitFor(c, "相簿已加载") { $0.albumsLoaded }
+        XCTAssertEqual(c.state.flow.source.selection, .allPhotos)
+        XCTAssertFalse(c.state.isMaterialCountLoading)
+        c.stop()
+    }
+
+    /// 补充 4：网格的隐藏照片扫描在后台线程做。
+    @MainActor
+    func testVisibleIndexMapBuildsOffMainThread() async {
+        let onMain = Locked<[Bool]>([])
+        let m = await VisibleIndexMap.buildInBackground(rawCount: 6) { i in
+            onMain.update { $0.append(Thread.isMainThread) }
+            return i % 3 == 0
+        }
+        XCTAssertEqual(m.count, 4)
+        XCTAssertEqual(onMain.get().count, 6)
+        XCTAssertFalse(onMain.get().contains(true), "isHidden 一次都没在主线程上调")
     }
 }

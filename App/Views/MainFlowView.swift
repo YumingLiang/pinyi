@@ -123,6 +123,9 @@ struct SourceStepView: View {
                             Text(L10nKey.sourceAlbumOption)
                             if model.flow.source.selection.isAllPhotos {
                                 Text(L10nKey.sourceAlbumOptionDesc).font(.footnote).foregroundStyle(.secondary)
+                            } else if model.isMaterialCountLoading {
+                                // 相簿列表加载完之前不显示旧数字（§2f 补充 3）
+                                ProgressView().controlSize(.mini)
                             } else {
                                 // 已选相簿：和确认页同一套摘要（1 / 2 / 3 个及以上三种格式）
                                 Text(model.materialSummary).font(.footnote).foregroundStyle(.secondary)
@@ -137,7 +140,6 @@ struct SourceStepView: View {
             if SourceListLogic.showsAddPhotos(access: model.access) {
                 Section { Button { SystemActions.presentLimitedLibraryPicker() } label: { Text(L10nKey.sourceAddPhotos) } }
             }
-            if let n = model.flow.source.notice { Section { Text(n).foregroundStyle(.red) } }
             if let line = model.sourceLowResLine { Section { Text(line).font(.footnote).foregroundStyle(.secondary) } }
             if let n = model.transientNotice { Section { Text(n).font(.footnote).foregroundStyle(.secondary) } }
             if let e = model.emptyState {
@@ -179,6 +181,19 @@ struct AlbumMultiSelectView: View {
     var body: some View {
         NavigationStack {
             List {
+                if SourceListLogic.showsAlbumsLimitedNote(access: model.access) {
+                    // 受限访问（§2f 补充 2）：小字说明 + 4d「增加可用照片」入口
+                    Section {
+                        HStack {
+                            Text(L10nKey.albumsLimitedNote).font(.footnote).foregroundStyle(.secondary)
+                            Spacer()
+                            Button { SystemActions.presentLimitedLibraryPicker() } label: {
+                                Text(L10nKey.sourceAddPhotos).font(.footnote)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
                 ForEach(model.albumRows) { row in
                     Button { if let id = row.albumID { model.toggleAlbum(id) } } label: {
                         HStack {
@@ -240,7 +255,11 @@ struct SettingsStepView: View {
             // 确认页（需求 v1.0 §2b）：「素材：{name} · {count} 张」+「换素材」。「裁剪」（§3）在 feat/app-layer 上还没有，接入后放这里。
             Section {
                 HStack {
-                    Text(model.materialSummary).font(.subheadline)
+                    if model.isMaterialCountLoading {
+                        ProgressView()   // 相簿列表加载完之前不显示旧数字（§2f 补充 3）
+                    } else {
+                        Text(model.materialSummary).font(.subheadline)
+                    }
                     Spacer()
                     Button { model.flowSend(.changeSource) } label: { Text(L10nKey.quickSourceChange) }
                 }
@@ -270,8 +289,13 @@ struct SettingsStepView: View {
                 let action = model.settingsPrimaryAction
                 Button {
                     if action == .done { model.adjustDoneTapped() } else { model.generateTapped() }
-                } label: { Text(action == .done ? L10nKey.commonDone : L10nKey.generateCTA).frame(maxWidth: .infinity) }
+                } label: {
+                    // 等失效相簿去掉再开始（§2f 补充 3）：按钮短暂显示加载状态
+                    if model.isWaitingForAlbums { ProgressView().frame(maxWidth: .infinity) }
+                    else { Text(action == .done ? L10nKey.commonDone : L10nKey.generateCTA).frame(maxWidth: .infinity) }
+                }
                     .buttonStyle(.borderedProminent).controlSize(.large)
+                    .disabled(model.isWaitingForAlbums)
             }
         }
         .confirmationDialog(Text(L10nKey.shortagePregenerate),

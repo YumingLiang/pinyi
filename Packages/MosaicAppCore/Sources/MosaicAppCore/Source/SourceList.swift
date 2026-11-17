@@ -59,6 +59,8 @@ public enum SourceListLogic {
 
     /// 受限访问时来源页常驻「增加可用照片」（决定 1）。
     public static func showsAddPhotos(access: SourceAccess) -> Bool { access == .limited }
+    /// 相簿列表顶部 `albums.limited_note` +「增加可用照片」：只在受限访问时显示（§2f 补充 2）。
+    public static func showsAlbumsLimitedNote(access: SourceAccess) -> Bool { access == .limited }
 
     /// 「选择相簿」是否可用：受限模式下相簿只含已授权照片，仍允许选（与系统行为一致）。
     public static func isScanComplete(_ s: IndexStatus) -> Bool {
@@ -76,8 +78,6 @@ public enum SourceListLogic {
 /// 来源选择状态（§2f：「全部照片」和「相簿（可多选）」二选一）。
 public struct SourcePickerState: Sendable, Hashable {
     public var selection: SourceSelection = .allPhotos
-    /// 相簿打不开（`source.album.unreadable`）时显示的提示。
-    public var notice: L10nKey?
     /// 相簿列表开着时正在勾的那组；nil = 列表没开。
     public var draft: AlbumSelectionDraft?
     /// 底部栏的去重合计（列表开着时）。
@@ -89,7 +89,6 @@ public struct SourcePickerState: Sendable, Hashable {
 
     public mutating func select(_ s: SourceSelection) {
         selection = s
-        notice = nil
     }
 
     /// 底部栏文案（列表开着时）。
@@ -98,26 +97,17 @@ public struct SourcePickerState: Sendable, Hashable {
         return MultiAlbumText.bar(selected: d.ids.count, union: draftUnion)
     }
 
-    /// 生成前取快照发现相簿已不存在：回到「全部照片」并提示。
-    public mutating func albumBecameUnreadable() {
+    /// 生成前取快照发现所选相簿全都打不开了：静默回到「全部照片」（§2f 补充 1，不提示）。
+    public mutating func albumsBecameUnreadable() {
         selection = .allPhotos
-        notice = .sourceAlbumUnreadable
     }
 
-    /// 相簿列表刷新后核对当前来源。
-    /// - 单个相簿（本次运行里选的）：消失或打不开 → 回到全部照片并提示（T4 原行为）。
-    /// - 多个相簿、或启动时从偏好恢复的（`silent`）：静默去掉不能选的，全去掉了回全部照片（§1a 验收 2、§2f）。
+    /// 相簿列表刷新后核对当前来源（§2f 补充 1）：相簿不见了 / 打不开一律**静默**去掉，
+    /// 包括本次手动选的单个相簿、启动时恢复的、多相簿；全部去掉后回到「全部照片」。不弹提示。
     /// 列表开着时，勾选里不能选的也静默去掉。
-    public mutating func reconcile(with rows: [SourceRow], silent: Bool = false) {
+    public mutating func reconcile(with rows: [SourceRow]) {
         let selectable = Set(rows.filter { !$0.isUnreadable }.compactMap(\.albumID))
-        switch selection {
-        case .allPhotos: break
-        case .album:
-            if silent { selection = selection.keepingSelectable(selectable) }
-            else if !selectable.contains(selection.albumIDs[0]) { albumBecameUnreadable() }
-        case .albums:
-            selection = selection.keepingSelectable(selectable)
-        }
+        selection = selection.keepingSelectable(selectable)
         draft?.keep(selectable)
     }
 }

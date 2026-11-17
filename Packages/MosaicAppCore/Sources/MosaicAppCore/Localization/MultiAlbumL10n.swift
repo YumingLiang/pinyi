@@ -12,8 +12,11 @@ public extension L10nKey {
     /// 参数：name1、相簿个数、count。
     static let quickSourceSummaryMany = L10nKey(rawValue: "quick.source.summary_many")
 
+    /// 相簿列表顶部小字，只在受限访问（.limited）时显示（quick-start v1.0 §2f 补充 2）。
+    static let albumsLimitedNote = L10nKey(rawValue: "albums.limited_note")
+
     static let allMultiAlbum: [L10nKey] = [
         sourceSelectionSummary, sourceSelectionNone, sourceSelectionDedupNote, sourceSelectionSummaryPending,
-        sourceAlbumDone, quickSourceSummaryTwo, quickSourceSummaryMany,
+        sourceAlbumDone, quickSourceSummaryTwo, quickSourceSummaryMany, albumsLimitedNote,
     ]
 }

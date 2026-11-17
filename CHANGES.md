@@ -14,6 +14,13 @@
 - 测试：`MultiAlbumSourceTests` +14（规范化、恢复静默去掉 / 回退、并集去重、持久化往返 + 旧格式、勾选草稿、三种摘要 / 底栏文案、VisibleAssetFilter、VisibleIndexMap、协调器：重叠并集计数与持久化、打不开不能勾、全部照片清空、删掉一个只少一个、200 门槛按并集、snapshot 跳过打不开的相簿）；`AlbumCatalogTests` 共享相关用例显式 `includeCloudShared: true` + 新增默认不列共享。
 - 不在本次：结果页缓存失效（5d/5e）；网格（§4）还没接入本轮流程。
 
+**追加（00:15 产品「2f 补充」四点，quick-start-req v1.0）**
+- 补充 1 相簿不见了一律静默：`SourcePickerState.reconcile` 不再区分本次手选的单个相簿，全部静默去掉，全去掉回「全部照片」；`notice` 字段和「相簿打不开」提示删掉（`source.album.unreadable` 只留作列表里置灰行的副文案，copy 用途说明已改）。生成前再按 ID 核对一次所选相簿（`awaitAlbumsBeforeGenerate`），刚被删 / 隐藏的也静默去掉；快照时全部打不开 → 静默回全部照片。来源标签 / 确认页摘要直接读处理后的选择。
+- 补充 2 受限访问：相簿列表顶部 `albums.limited_note` +「增加可用照片」（`source.add_photos`，调 `presentLimitedLibraryPicker`），只在 `.limited` 显示（`SourceListLogic.showsAlbumsLimitedNote`）。copy 从 /workspace/pinyi/copy_v1.1.md 同步进 §5.6，gen-localizable（182 key）。
+- 补充 3 启动时机：记住的来源是相簿时，索引加载后单独起一个任务取相簿列表（`albumsLoadTask`，不拖住扫描）；加载完之前 `AppState.isMaterialCountLoading`，来源行 / 确认页显示加载中，不显示旧数字。加载完之前点「开始拼图」/「再试一次」：`isWaitingForAlbums` 按钮显示加载状态并禁用，等失效相簿去掉后再走门槛和生成。
+- 补充 4 性能：网格的隐藏照片扫描挪到后台（`VisibleIndexMap.buildInBackground`，`Task.detached`）。表建好前网格 `count == 0`，建好后整体重载；相册变化后台建新表，回主线程一起换 fetch result 和表；连续变化只认最后一次，跳过的改整体重载。素材扫描 / 相簿计数本来就在 `PhotoKitLibrary` actor、目录在 nonisolated async 里，不在主线程。
+- 测试：`MultiAlbumSourceTests` +6（本次单选相簿消失静默 + 摘要即时更新、生成前按 ID 再核对、受限小字只在 .limited、加载完之前开始拼图先等且不拿失效选择生成、启动时全失效回全部照片、网格表在后台线程建）；`SourceAndGateTests.testSourcePickerReconcile` 改为静默。
+
 ## feat/start-new：「再拼一张」+ 未保存提示（quick-start-req v1.0 §2a / §2b / §2e；hd-export-req B10 第 4、11 条）
 
 **依赖 #17（fix/works-delete，48b0569），需先合 #17。** 本分支已 merge `origin/feat/app-layer`（ed58064）和 `origin/fix/works-delete`（48b0569），都是 merge，没有 rebase。未保存提示要用 #17 的 `WorksController.unsavedPrompt` / `.needsUpdate` /「更新原作品」。

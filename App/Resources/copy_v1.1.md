@@ -146,7 +146,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.album.option_desc` | 说明 | 可以选一个或几个相簿，比如宝宝和旅行。 |
 | `source.album.list_title` | 相簿列表标题 | 选择相簿（可多选） |
 | `source.album.item_count` | 相簿项副文案（规则同 `source.list.count` / `count_pending`） | {count} 张 |
-| `source.album.unreadable` | 无法读取 | 打不开这个相簿，请换一个，或改用全部照片。 |
+| `source.album.unreadable` | 相簿列表里打不开的相簿：这一行置灰、不能勾时的副文案（§2f；00:15 起相簿不见了一律静默去掉，不再作为提示弹出） | 打不开这个相簿，请换一个，或改用全部照片。 |
 | `source.add_photos` | 受限状态下常驻入口（同样调用系统选择器） | 增加可用照片 |
 | `source.next` | 下一步 | 下一步 |
 | `source.excluded_low_res` | 来源页 / 生成后提示：生成时剔除了手机上版本不够清楚的照片（copy v1.2 补充，hd-export-req-v0.2 F5） | 有 {count} 张照片手机上的版本不够清楚，没有用上 |
@@ -373,6 +373,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.selection.dedup_note` | 底部栏小字 | 同一张照片在几个相簿里只算一次 |
 | `source.selection.summary_pending` | 底部栏，扫描未完成时 | 已选 {n} 个相簿 · 约 {count} 张 |
 | `source.album.done` | 底部主按钮 | 完成 |
+| `albums.limited_note` | 相簿列表顶部，只在受限访问时显示（00:15） | 只显示你允许拼忆访问的照片 |
 | `quick.source.summary_two` | 确认页，2 个相簿 | 素材：{name1}、{name2} · {count} 张 |
 | `quick.source.summary_many` | 确认页，3 个及以上 | 素材：{name1} 等 {n} 个相簿 · {count} 张 |
 

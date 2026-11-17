@@ -57,6 +57,8 @@ public final class AppCoordinator {
     private var observers: [UUID: @MainActor (AppState) -> Void] = [:]
     private var started = false
     private var loadTask: Task<Void, Never>?
+    /// 记住的来源是相簿时，启动后取一次相簿列表（§2f 补充 3）。单独一个任务，不拖住索引加载 / 扫描。
+    var albumsLoadTask: Task<Void, Never>?
     private var scanTask: Task<Void, Never>?
     private var generationTask: Task<Void, Never>?
     /// 最近一次「开始拼图」时用于 200 张门槛判断的张数（筛选后的已知数）。
@@ -75,8 +77,6 @@ public final class AppCoordinator {
     var albumMembers: [String: [String]] = [:]
     /// 打不开的相簿（`assetIDs(inAlbum:)` 抛错）：列表里置灰、不能勾。
     var unreadableAlbums: Set<String> = []
-    /// 启动时从偏好恢复的来源，第一次拿到相簿列表时静默核对（§1a 验收 2）。
-    var restoredSelectionPending = false
     /// 去重合计的计算任务（勾选变化时取消旧的）。
     var unionTasks: [String: Task<Void, Never>] = [:]
     private var changeDebouncer = ChangeDebouncer(interval: 2, maxDelay: 10)
@@ -144,6 +144,13 @@ public final class AppCoordinator {
             self.state.indexLoaded = true
             self.loadTask = nil
             await self.refreshStatus()
+            // 记住的来源是相簿（§1a）：启动就把相簿列表取一次，失效的静默去掉、张数从「加载中」换成真数（§2f 补充 3）。
+            if !self.state.albumsLoaded, !self.state.flow.source.selection.isAllPhotos {
+                self.albumsLoadTask = Task { [weak self] in
+                    await self?.refreshAlbums()
+                    self?.albumsLoadTask = nil
+                }
+            }
         }
         resolveRoute()
     }
@@ -303,6 +310,7 @@ public final class AppCoordinator {
                                                     scanComplete: SourceListLogic.isScanComplete(state.indexStatus),
                                                     unreadable: unreadable)
         reconcileSourceSelection()
+        state.albumsLoaded = true
         await pruneLowResExclusion()
         await refreshUnionCounts()
     }
@@ -389,6 +397,7 @@ public final class AppCoordinator {
         generateGatePending = true
         defer { generateGatePending = false }
         if let load = loadTask { await load.value }
+        await awaitAlbumsBeforeGenerate()
         await refreshStatus()
         let (avail, total) = await sourceCounts()
         switch GenerateGate.decide(status: state.indexStatus, availableInSource: avail, sourceAssetTotal: total) {
@@ -410,6 +419,7 @@ public final class AppCoordinator {
         generateGatePending = true
         defer { generateGatePending = false }
         if let load = loadTask { await load.value }
+        await awaitAlbumsBeforeGenerate()
         await refreshStatus()
         let (avail, _) = await sourceCounts()
         let after = postFilterAvailable(avail)
@@ -540,7 +550,7 @@ public final class AppCoordinator {
                 }
                 let failure = GenerationFailure.classify(error)
                 if failure == .albumUnreadable, self.state.flow.generation.currentRunID == id {
-                    self.state.flow.source.albumBecameUnreadable()
+                    self.state.flow.source.albumsBecameUnreadable()
                 }
                 self.send(.finishedWithError(runID: id, failure: failure))
             }
@@ -756,12 +766,12 @@ public final class AppCoordinator {
     /// 等所有在途工作（加载 / 扫描 / 生成 / 导出，含已取消未结束的）收尾。测试与「退出前落盘」都用它。
     public func settle() async {
         for _ in 0..<64 {
-            let tasks = [loadTask, scanTask, generationTask, exportTask].compactMap { $0 } + retiring
+            let tasks = [loadTask, albumsLoadTask, scanTask, generationTask, exportTask].compactMap { $0 } + retiring
             retiring.removeAll()
             if tasks.isEmpty { return }
             for t in tasks { await t.value }
             // 运行中的生成任务在结果到达后不置 nil（currentRunID 仍在）——已完成就当作收尾
-            if scanTask == nil, exportTask == nil, loadTask == nil, retiring.isEmpty { return }
+            if scanTask == nil, exportTask == nil, loadTask == nil, albumsLoadTask == nil, retiring.isEmpty { return }
         }
     }
 

@@ -6,10 +6,9 @@ extension AppCoordinator {
 
     private var selectionStore: SourceSelectionStore? { dependencies.preferenceData.map(SourceSelectionStore.init) }
 
-    /// init 时：读上次的来源。相簿还没列出来，先放进去，第一次 `refreshAlbums` 时静默核对。
+    /// init 时：读上次的来源。相簿还没列出来，先放进去（张数显示「加载中」），第一次 `refreshAlbums` 时静默核对。
     func restoreSourceSelection() {
         guard let saved = selectionStore?.load(), !saved.isAllPhotos else { return }
-        restoredSelectionPending = true
         state.flow.source.select(saved)
     }
 
@@ -21,8 +20,28 @@ extension AppCoordinator {
     }
 
     func reconcileSourceSelection() {
-        state.flow.source.reconcile(with: [state.allPhotosRow] + state.albumRows, silent: restoredSelectionPending)
-        restoredSelectionPending = false
+        state.flow.source.reconcile(with: [state.allPhotosRow] + state.albumRows)
+    }
+
+    /// 「开始拼图」/「再试一次」前（§2f 补充 3）：来源是相簿时，绝不拿失效的选择去生成。
+    /// - 相簿列表还没加载完：按钮显示加载状态（`isWaitingForAlbums`），等列表加载完、失效相簿静默去掉再继续。
+    /// - 已加载：再按 ID 核对一次所选相簿还打得开（加载后才被删 / 隐藏的），打不开的静默去掉。
+    func awaitAlbumsBeforeGenerate() async {
+        guard !state.flow.source.selection.isAllPhotos else { return }
+        if !state.albumsLoaded {
+            state.isWaitingForAlbums = true
+            defer { state.isWaitingForAlbums = false }
+            if let load = albumsLoadTask { await load.value }
+            if !state.albumsLoaded { await refreshAlbums() }
+        }
+        let ids = state.flow.source.selection.albumIDs
+        guard !ids.isEmpty else { return }
+        var readable: Set<String> = []
+        for id in ids where (try? await dependencies.library.assetIDs(inAlbum: id)) != nil { readable.insert(id) }
+        if readable.count != ids.count {
+            state.flow.source.select(state.flow.source.selection.keepingSelectable(readable))
+            await refreshUnionCounts()
+        }
     }
 
     // MARK: 相簿列表（§2f）
