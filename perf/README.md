@@ -11,8 +11,11 @@ ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --f
 - ubuntu-latest 的机型是混的（11-16 实测 15 次碰到 5 种 CPU：Xeon 8370C、EPYC 7763、EPYC 9V74、Xeon 6975P-C、EPYC 9V45），
   同一指标跨机型的原始中位数能差到 ×2.2，所以**先按机型比**：
   1. CI 在结果文件第一行写 `{"runner_cpu": "...", "nproc": 4}`。
-  2. 基线里有该机型（`by_cpu`，≥ 2 份结果才建）→ `比值 = 本次中位数 ÷ 同机型基线`，
-     **比值 > 1.20 且 绝对差 > 10 ms → 失败**（`threshold.same_cpu.ratio`）。
+  2. 基线里有该机型（`by_cpu`，≥ 2 份结果才建）→ `比值 = 本次中位数 ÷ 同机型基线`，再除以
+     `本次 calib ÷ 同机型基线 calib`，**归一化比值 > 1.20 且 绝对差 > `min_delta_ms` → 失败**
+     （`threshold.same_cpu`，`gate_on: normalized`）。
+     为什么同机型也要归一化：同型号 CPU 的实例也会整体变慢——11-16 run 44028766958 attempt 6（EPYC 9V74）
+     calib ×1.27、所有指标 ×1.27–1.29，代码没变，只按原始比值会误报（当时确实红了一次）。
      依据：同一 job 内 5 次样本极差多数 ≤ 4%、个别到 10%（取中位数后吸收）；同机型跨 run 的中位数偏差 ≤ ×1.03。
   3. 没有该机型 → 对照全局基线（所有结果的中位数），用标定归一化：
      `calib_cpu_scalar` 是固定单线程 CPU 负载（不判定），`speed = 本次 calib ÷ 基线 calib`，
@@ -71,5 +74,12 @@ python3 scripts/perf-gate.py update --results /tmp/p*/perf-results.jsonl --note 
 # 3) 本地自查
 python3 scripts/perf-gate.py check --results /tmp/p1/perf-results.jsonl
 ```
+
+**只新增指标、已有代码没变时**加 `--keep-existing`：已有指标的全局 / 同机型基线保留旧值，
+新指标按全局 calib 缩放后写入全局，同机型只补新指标；新数据没覆盖到的同机型条目会被删掉。
+这样新一批 runner 偏慢（或偏快）不会把已有基线带偏。
+
+`threshold.per_metric`：`runner_slowpath_*` 的 `min_delta_ms` 为 50（QA，fake PhotoKit sleep 对调度敏感）；
+`runner_gen_*` / `runner_reshuffle_*` 为 4（runner 上 6 次：同机型偏差 ≤ 4.5%、归一化后 ≤ ×1.045）。
 
 不要用 box / 本机的结果更新基线（核数和 CPU 与 runner 不同）。

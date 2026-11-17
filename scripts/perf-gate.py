@@ -72,6 +72,10 @@ def check(args):
     cpu = cpu_key(meta)
     same = base.get("by_cpu", {}).get(cpu, {}).get("metrics", {}) if cpu else {}
     same_ratio = thr.get("same_cpu", {}).get("ratio", 1.20)
+    same_gate = thr.get("same_cpu", {}).get("gate_on", "normalized")   # normalized | raw
+    same_speed = None
+    if calib and calib in samples and calib in same:
+        same_speed = statistics.median(samples[calib]) / same[calib]["median_ms"]
     speed = None
     if calib and calib in samples and calib in base.get("metrics", {}):
         speed = statistics.median(samples[calib]) / base["metrics"][calib]["median_ms"]
@@ -94,9 +98,12 @@ def check(args):
             bm = same[metric]["median_ms"]
             ratio = med / bm
             limit = t.get("same_cpu_ratio", same_ratio)
-            norm = None
-            ref = "同机型"
-            bad = ratio > limit and (med - bm) > t["min_delta_ms"]
+            # 同型号 CPU 的实例也会整体慢（11-16 run 44028766958 attempt 6：EPYC 9V74 calib ×1.27、所有指标 ×1.27–1.29，
+            # 代码没变）。所以同机型也用同机型 calib 归一化；纯「机器慢」会被 calib 抵消，代码变慢不影响 calib。
+            norm = ratio / same_speed if same_speed else None
+            ref = "同机型" + ("（归一化）" if same_gate == "normalized" and norm is not None else "")
+            over = (norm if same_gate == "normalized" and norm is not None else ratio) > limit
+            bad = over and (med - bm) > t["min_delta_ms"]
         else:
             bm = b["median_ms"]
             ratio = med / bm
@@ -120,7 +127,7 @@ def check(args):
         return "—" if v is None else fmt.format(v)
 
     out = ["### Generation perf regression（Linux release，中位数 vs `" + args.baseline + "`）", ""]
-    out.append(f"runner：`{cpu or '未知'}`；" + ("有同机型基线，按同机型比。" if same else
+    out.append(f"runner：`{cpu or '未知'}`；" + ((f"有同机型基线，按同机型比（口径 `{same_gate}`" + (f"，本机 calib = 同机型基线的 ×{same_speed:.2f}" if same_speed else "") + "）。") if same else
                f"无同机型基线，按全局基线、口径 `{gate_on}`。")
                + (f" 标定速度 = 全局基线的 ×{speed:.2f}（>1 表示本 runner 更慢）。" if speed else ""))
     out.append("")
@@ -151,9 +158,60 @@ def medians_of(files):
     return out
 
 
+def scaled_medians(files, calib, calib_ref):
+    """把每份结果按本次 calib 缩放到 calib_ref 的机器速度后取中位数（新指标并入已有全局基线时用，口径与全局 calib 一致）。"""
+    metrics = sorted(set().union(*[s for _, s in files]))
+    out = {}
+    for m in metrics:
+        vals = [statistics.median(s[m]) * calib_ref / statistics.median(s[calib]) for _, s in files if m in s and calib in s]
+        if vals:
+            out[m] = {"median_ms": round(statistics.median(vals), 3), "runs": len(vals), "scaled_to_global_calib": True,
+                      "run_medians_ms": [round(statistics.median(s[m]), 3) for _, s in files if m in s and calib in s]}
+    return out
+
+
+def update_keep_existing(args, base, per_file):
+    """只新增指标：已有指标（全局与同机型）一律保留旧值，新指标按全局 calib 缩放后写入全局，
+    同机型（≥ --min-runs 份）只补新指标；新数据没覆盖到的同机型条目删掉。"""
+    calib = base.get("calibration_metric")
+    old = base.get("metrics", {})
+    if not calib or calib not in old:
+        raise SystemExit("--keep-existing 需要全局基线里已有 calibration_metric")
+    added = {m: v for m, v in scaled_medians(per_file, calib, old[calib]["median_ms"]).items() if m not in old}
+    for m, v in added.items():
+        print(f"新增全局 {m:45s} {v['median_ms']:10.1f}（按全局 calib 缩放）")
+    base["metrics"] = {**old, **added}
+    groups = {}
+    for meta, s in per_file:
+        k = cpu_key(meta)
+        if k:
+            groups.setdefault(k, []).append((meta, s))
+    by_cpu = {}
+    for k, files in sorted(groups.items()):
+        if len(files) < args.min_runs:
+            print(f"跳过同机型：{k}（{len(files)} 份 < {args.min_runs}）")
+            continue
+        fresh = medians_of(files)
+        kept = base.get("by_cpu", {}).get(k, {}).get("metrics", {})
+        by_cpu[k] = {"runs": len(files), "metrics": {**fresh, **kept}}
+        print(f"同机型：{k}（{len(files)} 份；保留旧指标 {len(kept)} 个，新增 {len(set(fresh) - set(kept))} 个）")
+    dropped = sorted(set(base.get("by_cpu", {})) - set(by_cpu))
+    if dropped:
+        print(f"删除新数据未覆盖的同机型条目：{dropped}")
+    base["by_cpu"] = by_cpu
+    return base
+
+
 def update(args):
     base = load_baseline(args.baseline)
     per_file = load_results(args.results)
+    if args.keep_existing:
+        base = update_keep_existing(args, base, per_file)
+        if args.note:
+            base["note"] = args.note
+        Path(args.baseline).write_text(json.dumps(base, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"已写入 {args.baseline}")
+        return 0
     new = medians_of(per_file)
     old = base.get("metrics", {})
     for m, v in new.items():
@@ -197,6 +255,8 @@ def main():
     u.add_argument("--baseline", default=DEFAULT_BASELINE)
     u.add_argument("--note")
     u.add_argument("--allow-drop", action="store_true")
+    u.add_argument("--keep-existing", action="store_true",
+                   help="已有指标保留旧基线、只新增指标（代码没变、只是换了一批 runner 时用，避免机型组合变化把基线抬高）")
     u.add_argument("--min-runs", type=int, default=2, help="建同机型基线所需的最少结果份数")
     a = ap.parse_args()
     return check(a) if a.cmd == "check" else update(a)
