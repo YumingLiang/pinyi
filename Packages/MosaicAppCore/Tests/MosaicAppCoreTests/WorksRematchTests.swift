@@ -90,6 +90,19 @@ final class WorksRematchTests: XCTestCase {
             controller.exportHandler = exporter
         }
 
+        /// 「杀掉 App 重开」：新建 store / 补格器（新清晰度缓存）/ controller，同一个作品目录和相册。
+        @MainActor func relaunched() -> WorksController {
+            let snapBox = snap
+            let rematcher = IndexWorkRematcher(snapshot: {
+                guard let s = snapBox.get() else { throw WorkRematchError.indexUnavailable }
+                return s
+            }, existence: existence, sharpness: LocalResolutionChecker(probe: probe))
+            let c = WorksController(store: FileWorksStore(directory: dir, images: images), existence: existence,
+                                    images: images, rematcher: rematcher)
+            c.exportHandler = exporter
+            return c
+        }
+
         func save(target: Bool = true) async throws -> WorkID {
             let t = try PixelBuffer(width: 300, height: 200, bytes: [UInt8](repeating: 0, count: 300 * 200 * 4))
             return try await store.save(WorkDraft(layout: sampleLayout(ids, cols: cols), target: target ? t : nil,
@@ -298,6 +311,107 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.open(id)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["x", "red2", "z"], cols: 3))
         h.controller.stop()
+    }
+
+    // MARK: 提示只出一次（QA H8 / H8b）
+
+    /// `works.replaced` 只在本次真的换了格子时出一次：同一作品第二次打开、再导出、杀掉 App 重开都不再出。
+    func testReplacedNoticeShownOnlyOnce() async throws {
+        let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors,
+                        index: Self.workPhotos + [("red2", (212, 34, 30))])
+        let id = try await h.save()
+        await h.controller.start()
+        h.existence.hide("b")
+        await h.controller.open(id)
+        XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]), "第一次：出")
+        XCTAssertNil(h.controller.state.missingLine)
+
+        // 第二次打开
+        h.controller.close()
+        await h.controller.open(id)
+        XCTAssertNil(h.controller.state.replacedLine, "第二次打开：不出")
+        XCTAssertNil(h.controller.state.missingLine)
+
+        // 再导出
+        await h.controller.exportOpenedTapped(purpose: .save)
+        XCTAssertNil(h.controller.state.replacedLine, "再导出：不出")
+        XCTAssertNil(h.controller.state.missingLine)
+        XCTAssertEqual(h.exporter.calls.last?.0, sampleLayout(["a", "red2", "c", "d", "e", "f"], cols: 3))
+        h.controller.stop()
+
+        // 杀掉 App 重开
+        let c2 = h.relaunched()
+        await c2.start()
+        await c2.open(id)
+        XCTAssertEqual(c2.openedWork?.layout, sampleLayout(["a", "red2", "c", "d", "e", "f"], cols: 3))
+        XCTAssertNil(c2.state.replacedLine, "重开：不出")
+        XCTAssertNil(c2.state.missingLine)
+        XCTAssertEqual(h.images.inner.state.get().previews, 2, "只在第一次重画过预览")
+        c2.stop()
+    }
+
+    /// 留白（兜底）的 `works.missing` 同样只出一次：第二次打开、再导出、重开都不出（索引里一直没有可用的替代）。
+    func testBlankNoticeShownOnlyOnce() async throws {
+        let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)),
+                        index: [("a", (30, 30, 200)), ("c", (30, 200, 30)), ("blurryRed", (204, 30, 30))],
+                        unusable: ["blurryRed", "a", "c"])
+        let id = try await h.save()
+        await h.controller.start()
+        h.existence.hide("b")
+        await h.controller.open(id)
+        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]), "第一次：出")
+        XCTAssertNil(h.controller.state.replacedLine)
+
+        h.controller.close()
+        await h.controller.open(id)
+        XCTAssertNil(h.controller.state.missingLine, "第二次打开：不出（留白格重找了一次，仍没有，不写回）")
+        await h.controller.exportOpenedTapped(purpose: .save)
+        XCTAssertNil(h.controller.state.missingLine, "再导出：不出")
+        XCTAssertEqual(h.exporter.calls.last?.0, sampleLayout(["a", "", "c"], cols: 3))
+        h.controller.stop()
+
+        let c2 = h.relaunched()
+        await c2.start()
+        await c2.open(id)
+        XCTAssertNil(c2.state.missingLine, "重开：不出")
+        XCTAssertNil(c2.state.replacedLine)
+        XCTAssertEqual(h.images.inner.state.get().previews, 2)
+        c2.stop()
+    }
+
+    /// 之前留白的格子，后来有了合格的相近照片（新照片进了索引）：补上，按 `works.replaced` 出一次，之后不再出。
+    func testBlankCellUpgradedLaterNotifiesReplacedOnce() async throws {
+        let base: [(String, RGB)] = [("a", (30, 30, 200)), ("c", (30, 200, 30))]
+        let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)), index: base,
+                        unusable: ["a", "c"])
+        let id = try await h.save()
+        await h.controller.start()
+        h.existence.hide("b")
+        await h.controller.open(id)
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "", "c"], cols: 3))
+        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
+
+        h.snap.set(Self.snapshot(base + [("red2", (212, 34, 30))]))   // 用户新拍了一张、扫描进了索引
+        h.controller.close()
+        await h.controller.open(id)
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "red2", "c"], cols: 3), "留白格升级成照片")
+        XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]), "按 works.replaced 出一次")
+        XCTAssertNil(h.controller.state.missingLine)
+        let meta = try await h.store.load(id).meta
+        XCTAssertEqual(meta.replacedCellCount, 1)
+        XCTAssertEqual(meta.droppedPhotoCount, 1, "历史累计，不回退")
+        XCTAssertEqual(h.images.inner.state.get().previews, 3)
+
+        h.controller.close()
+        await h.controller.open(id)
+        XCTAssertNil(h.controller.state.replacedLine, "之后不再出")
+        h.controller.stop()
+        let c2 = h.relaunched()
+        await c2.start()
+        await c2.open(id)
+        XCTAssertNil(c2.state.replacedLine)
+        XCTAssertNil(c2.state.missingLine)
+        c2.stop()
     }
 
     /// 目标图副本与生成时尺寸不同（被缩小过）：按比例换算格子区域。

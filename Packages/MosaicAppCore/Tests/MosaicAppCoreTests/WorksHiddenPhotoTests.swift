@@ -77,7 +77,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
         XCTAssertEqual(reopened.meta.fingerprint, FileWorksStore.fingerprint(try FileWorksStore.encoder().encode(cleared)))
         XCTAssertEqual(reopened.meta.droppedPhotoCount, 1)
         XCTAssertEqual(reopened.meta.photoCount, 3)
-        XCTAssertEqual(reopened.meta.missingCount, 1)
+        XCTAssertEqual(reopened.meta.missingCount, 0, "都处理过了")
 
         // 高清重导出：布局里没有 b；预览不再重画（已经处理过）
         await h.controller.exportOpenedTapped(purpose: .save)
@@ -133,7 +133,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
         h.controller.close()
         await h.controller.open(id)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "b", ""]), "取消隐藏后不改回去")
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 1)
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 0, "没有新变化，不再提示")
         XCTAssertEqual(h.images.state.get().previews, 2)
         h.controller.stop()
     }

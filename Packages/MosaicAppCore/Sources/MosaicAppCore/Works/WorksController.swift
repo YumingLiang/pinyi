@@ -11,14 +11,19 @@ public enum WorkSaveStatus: Sendable, Hashable {
 }
 
 /// 打开中的作品（查看页）。
+///
+/// 提示只在**本次**处理时真的发生了新替换 / 留白才出一次（QA H8 / H8b）：同一作品第二次打开、再导出、杀掉 App 重开都不再出。
 public struct OpenedWork: Sendable, Hashable {
     public var summary: WorkSummary
-    /// 缺失的原照片数；nil = 还在检查。
+    /// `works.missing` 的张数：本次新留白的原照片 + 本次查到但没能处理的（受限访问 / 索引未就绪 / 写回失败）；nil = 还在检查。
     public var missingCount: Int?
+    /// `works.replaced` 的格数：本次新换成相近照片的格子（含之前留白、这次补上的）。
+    public var replacedCount: Int
     public var id: WorkID { summary.id }
-    public init(summary: WorkSummary, missingCount: Int?) {
+    public init(summary: WorkSummary, missingCount: Int?, replacedCount: Int = 0) {
         self.summary = summary
         self.missingCount = missingCount
+        self.replacedCount = replacedCount
     }
 }
 
@@ -45,10 +50,10 @@ public struct WorksState: Sendable, Hashable {
         guard let n = opened?.missingCount, n > 0 else { return nil }
         return LocalizedLine(.worksMissing, [CountFormat.grouped(n)])
     }
-    /// 查看页 / 导出前：原照片不在了、已换成相近照片的格数（`works.replaced`，参数：格数；累计，检查完才显示）。
+    /// 查看页：本次刚换成相近照片的格数（`works.replaced`，参数：格数；只出一次）。
     public var replacedLine: LocalizedLine? {
-        guard let o = opened, o.missingCount != nil, o.summary.meta.replacedCellCount > 0 else { return nil }
-        return LocalizedLine(.worksReplaced, [CountFormat.grouped(o.summary.meta.replacedCellCount)])
+        guard let n = opened?.replacedCount, n > 0 else { return nil }
+        return LocalizedLine(.worksReplaced, [CountFormat.grouped(n)])
     }
 }
 
@@ -234,9 +239,9 @@ public final class WorksController {
             guard token == openToken else { return }
             openedWork = work
             state.opened = OpenedWork(summary: work.summary, missingCount: nil)
-            guard let (updated, missing) = await reconcileMissing(work) else { return }
+            guard let outcome = await reconcileMissing(work) else { return }
             guard token == openToken, state.opened?.id == id else { return }
-            await apply(updated, missing: missing)
+            await apply(outcome)
         } catch {
             guard token == openToken else { return }
             state.notice = .worksOpenFailed
@@ -275,22 +280,38 @@ public final class WorksController {
     /// - Task 被取消（关掉查看页）：不写回任何东西，返回 nil；下次打开再做。
     /// 目标图副本只读（算格子的目标特征），不改、不删（5c 待定）。
     /// 返回处理后的作品和 `works.missing` 用的张数（留白的 + 这次查到还没处理的）。
-    func reconcileMissing(_ work: Work) async -> (work: Work, missing: Int)? {
+    /// 一次缺图处理的结果。
+    struct ReconcileOutcome {
+        var work: Work
+        /// 本次新替换的格数（`works.replaced`）。
+        var replaced: Int
+        /// 本次要提示的缺失张数（`works.missing`）：新留白的原照片 + 没能处理的。
+        var missingShown: Int
+        /// 写进 meta.missingCount 的「还没处理的缺失数」。
+        var pending: Int
+    }
+
+    func reconcileMissing(_ work: Work) async -> ReconcileOutcome? {
         let missing = await missingAssetIDs(work.layout)
         if Task.isCancelled { return nil }
-        guard !missing.isEmpty else { return (work, work.meta.droppedPhotoCount) }
-        let pendingCount = work.meta.droppedPhotoCount + missing.count
-        guard await existence.canConfirmMissing() else { return (work, pendingCount) }
+        // 之前留白的格子（找不到替代）：有补格器时每次打开再试一次，补上了按 works.replaced 提示一次
+        let retryBlanks = rematcher != nil && work.meta.droppedPhotoCount > 0
+            && work.layout.cellAssignments.contains { $0.localIdentifier.isEmpty }
+        let unchanged = ReconcileOutcome(work: work, replaced: 0, missingShown: missing.count, pending: missing.count)
+        guard !missing.isEmpty || retryBlanks else { return unchanged }
+        guard await existence.canConfirmMissing() else { return unchanged }
+        var targets = missing
+        if retryBlanks { targets.insert("") }   // "" = 留白格，一起重新找
         var result = WorkRematchResult.allBlank(work.layout, missing: missing)
         if let rematcher {
             var target: PixelBuffer?
             if let url = work.targetURL { target = try? await images.readTarget(at: url) }
             do {
-                result = try await rematcher.rematch(work.layout, missing: missing, target: target)
+                result = try await rematcher.rematch(work.layout, missing: targets, target: target)
             } catch is CancellationError {
                 return nil
             } catch WorkRematchError.indexUnavailable {
-                return (work, pendingCount)   // 索引还没好：不改作品，下次打开再补
+                return unchanged   // 索引还没好：不改作品，下次打开再补
             } catch {
                 // 补格本身出错：退回留白（隐藏照片照样不会再出现）
             }
@@ -299,25 +320,27 @@ public final class WorksController {
         if Task.isCancelled { return nil }   // 取消：不写回半成品
         do {
             let updated = try await store.applyRematch(result, base: work.layout, for: work.id)
-            return (updated, updated.meta.droppedPhotoCount + (updated.layout == work.layout ? missing.count : 0))
+            guard updated.layout != work.layout else { return unchanged }   // 没有改动 / 已被别处处理
+            return ReconcileOutcome(work: updated, replaced: result.replacedCells, missingShown: result.droppedPhotos, pending: 0)
         } catch {
-            return (work, pendingCount)
+            return unchanged
         }
     }
 
     /// 把缺图处理结果同步到查看页和列表（预览文件变了，列表缩略图随 `previewURL` 刷新）。
-    private func apply(_ work: Work, missing: Int) async {
+    private func apply(_ outcome: ReconcileOutcome) async {
+        let work = outcome.work
         var summary = work.summary
-        if missing != summary.meta.missingCount {
-            try? await store.setMissingCount(missing, for: work.id)
-            summary.meta.missingCount = missing
+        if outcome.pending != summary.meta.missingCount {
+            try? await store.setMissingCount(outcome.pending, for: work.id)
+            summary.meta.missingCount = outcome.pending
         }
         if let i = state.summaries.firstIndex(where: { $0.id == work.id }) { state.summaries[i] = summary }
         guard openedWork?.id == work.id else { return }   // 期间关掉 / 换了作品：只更新列表
         var updated = work
         updated.summary = summary
         openedWork = updated
-        state.opened = OpenedWork(summary: summary, missingCount: missing)
+        state.opened = OpenedWork(summary: summary, missingCount: outcome.missingShown, replacedCount: outcome.replaced)
     }
 
     // MARK: 再导出
@@ -326,8 +349,9 @@ public final class WorksController {
     /// 目标图副本读不出来就不叠加。
     public func exportOpenedTapped(purpose: ExportPurpose) async {
         guard let work = openedWork, let handler = exportHandler else { return }
-        guard let (updated, missing) = await reconcileMissing(work), openedWork?.id == work.id else { return }
-        await apply(updated, missing: missing)
+        guard let outcome = await reconcileMissing(work), openedWork?.id == work.id else { return }
+        await apply(outcome)
+        let updated = outcome.work
         var target: PixelBuffer?
         if let url = updated.targetURL { target = try? await images.readTarget(at: url) }
         await handler.exportWork(layout: updated.layout, target: target, purpose: purpose)

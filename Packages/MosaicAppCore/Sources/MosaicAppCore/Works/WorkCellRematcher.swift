@@ -43,7 +43,7 @@ public enum WorkRematchError: Error, Sendable, Equatable {
 public protocol MissingCellRematching: Sendable {
     /// - Parameters:
     ///   - layout: 作品当前布局。
-    ///   - missing: 取不到的原照片 ID（删除或后来被隐藏）。
+    ///   - missing: 取不到的原照片 ID（删除或后来被隐藏）；含空串时之前留白的格子也一起重新找。
     ///   - target: 作品里存的目标图副本（只读，算格子的目标特征）；没有时用相邻格子照片的特征估。
     func rematch(_ layout: MosaicLayout, missing: Set<String>, target: PixelBuffer?) async throws -> WorkRematchResult
 }
@@ -194,7 +194,7 @@ public struct IndexWorkRematcher: MissingCellRematching {
             let old = layout.cellAssignments[cell].localIdentifier
             if ids[cell].isEmpty {
                 blank += 1
-                droppedIDs.insert(old)
+                if !old.isEmpty { droppedIDs.insert(old) }   // 之前就留白、这次仍没补上的不重复计
                 out.cellAssignments[cell] = .init(localIdentifier: "", crop: layout.cellAssignments[cell].crop)
             } else {
                 replaced += 1

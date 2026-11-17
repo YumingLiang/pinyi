@@ -130,25 +130,26 @@ final class WorksControllerTests: XCTestCase {
         await h.controller.open(id)
         XCTAssertEqual(h.controller.state.opened?.missingCount, 2, "去重后按张数算：a、d")
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["2"]))
-        XCTAssertEqual(h.controller.state.summaries.first?.meta.missingCount, 2)
+        XCTAssertEqual(h.controller.state.summaries.first?.meta.missingCount, 0, "都处理过了，没有待处理的")
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["", "b", "c", "", "b", ""]))
         let persisted = await FileWorksStore(directory: h.dir, images: h.images).list().first?.meta
-        XCTAssertEqual(persisted?.missingCount, 2)
+        XCTAssertEqual(persisted?.missingCount, 0)
         XCTAssertEqual(persisted?.droppedPhotoCount, 2)
 
         // 导出前再查一次（期间又删了一张）；按处理后的布局导出，带目标图副本
         h.existence.deleted.set(["a", "b", "d"])
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 3)
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 1, "只提示这次新留白的 b")
         XCTAssertEqual(h.exporter.calls.count, 1)
         XCTAssertEqual(h.exporter.calls.first?.0, sampleLayout(["", "", "c", "", "", ""]), "导出用处理后的显式布局")
         XCTAssertEqual(h.exporter.calls.first?.1, true, "目标图副本读回来做叠加")
         XCTAssertEqual(h.exporter.calls.first?.2, .save)
 
-        // 原照片又都在了：格子不改回去，提示照旧（5b）
+        // 原照片又都在了：格子不改回去（5b）；没有新变化，不再提示（H8）
         h.existence.deleted.set([])
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 3)
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 0)
+        XCTAssertNil(h.controller.state.missingLine)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["", "", "c", "", "", ""]))
         h.controller.stop()
     }

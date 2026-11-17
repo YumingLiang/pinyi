@@ -18,7 +18,12 @@
 - 目标图副本只读，不改、不删；叠加层不动（5c 待 AndyL 定）。受限访问只计数不改写、`droppedPhotoCount` 保留。
 - 文案：新增 `works.replaced`（⚠️ 占位，待产品确认）「有 {count} 格的原照片不在了，已换成相近的照片」，只改 copy_v1.1.md 再生成。
 - App：`AppModel` 注入补格器（复用生成用的 `GenerationRunner.pipeline` 与 `sharpness` 缓存）；查看页显示 `works.replaced`；性能页显示最近一次补格附注与 `replaced=`。
-- 测试：`WorksRematchTests`（10 个）。
+- **提示只出一次（QA H8 / H8b）**：`works.replaced` / `works.missing` 只在本次处理真的发生了新替换 / 新留白时出一次
+  （`OpenedWork.replacedCount` / `missingCount` 是本次的数，不是累计数）；同一作品第二次打开、再导出、杀掉 App 重开都不再出。
+  受限访问 / 索引未就绪 / 写回失败时没处理的缺失照常提示（作品没变，导出会是白格）。meta.missingCount 只记「还没处理的」。
+- **留白格之后再试**：有补格器、作品有留白记录（`droppedPhotoCount > 0`）时，每次打开把留白格一起重新找；补上了写回并按 `works.replaced` 出一次，
+  仍没有就不写回、不提示。`droppedPhotoCount` 是历史累计，不回退。
+- 测试：`WorksRematchTests`（13 个，含 H8：替换 / 留白各自的第二次打开、再导出、重开不再提示；留白格后来升级成照片提示一次）。
 
 ## feat/works-hidden：「我的作品」里后来被隐藏的照片按缺图处理 + 重画预览；manifest 加两个可选字段
 

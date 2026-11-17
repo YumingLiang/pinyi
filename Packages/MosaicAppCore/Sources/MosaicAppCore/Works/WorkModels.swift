@@ -233,7 +233,8 @@ extension MosaicLayout {
         guard !assetIDs.isEmpty else { return (self, 0) }
         var out = self
         var dropped = Set<String>()
-        for i in out.cellAssignments.indices where assetIDs.contains(out.cellAssignments[i].localIdentifier) {
+        for i in out.cellAssignments.indices where !out.cellAssignments[i].localIdentifier.isEmpty
+            && assetIDs.contains(out.cellAssignments[i].localIdentifier) {
             dropped.insert(out.cellAssignments[i].localIdentifier)
             out.cellAssignments[i] = CellAssignment(localIdentifier: "", crop: out.cellAssignments[i].crop)
         }

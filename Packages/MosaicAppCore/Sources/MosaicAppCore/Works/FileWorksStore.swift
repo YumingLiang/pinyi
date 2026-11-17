@@ -221,7 +221,7 @@ public actor FileWorksStore: WorksStore {
         meta.photoCount = layout.uniqueAssetIDs.count
         meta.droppedPhotoCount += result.droppedPhotos
         meta.replacedCellCount += result.replacedCells
-        meta.missingCount = meta.droppedPhotoCount
+        meta.missingCount = 0   // 都处理过了（替换或留白），没有待处理的缺失
         do {
             try Self.encoder().encode(meta).write(to: dir.appendingPathComponent(Self.metaFileName), options: .atomic)
         } catch {
