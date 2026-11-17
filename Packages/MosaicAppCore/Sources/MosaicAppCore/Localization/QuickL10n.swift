@@ -8,10 +8,15 @@ public extension L10nKey {
     static let quickUnsavedSave = L10nKey(rawValue: "quick.unsaved.save")
     static let quickUnsavedDiscard = L10nKey(rawValue: "quick.unsaved.discard")
     static let quickUnsavedCancel = L10nKey(rawValue: "quick.unsaved.cancel")
+    /// 系统选择器选的照片经 PhotoFetch 取不到 / 读不出（v1.6，不区分原因）。另一个按钮复用 `commonCancel`。
+    static let pickerUnavailable = L10nKey(rawValue: "picker.unavailable")
+    static let pickerUnavailableChange = L10nKey(rawValue: "picker.unavailable.change")
+    /// 只在 App 整体是受限访问（`.limited`）时显示。
+    static let pickerUnavailableAddAccess = L10nKey(rawValue: "picker.unavailable.add_access")
 
     /// 本模块用到的全部 key（`QuickAgainTests` 断言都在 Localizable.strings 里）。
     static let allQuick: [L10nKey] = [
         quickAgain, quickSourceSummary, quickSourceChange, quickUnsavedTitle, quickUnsavedSave, quickUnsavedDiscard,
-        quickUnsavedCancel,
+        quickUnsavedCancel, pickerUnavailable, pickerUnavailableChange, pickerUnavailableAddAccess,
     ]
 }

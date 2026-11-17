@@ -78,19 +78,32 @@ struct TargetStepView: View {
             if model.flow.autoOpensTargetPicker { showPicker = true }
         }
         .onChange(of: item) { newItem in
+            guard let newItem else { return }
+            item = nil   // 下次选同一张也能再触发
             Task {
                 // ⚠️ 盲写：loadTransferable(type: Data.self) 对 HEIC/RAW 的行为需真机核对；iCloud 原图会触发系统下载（系统进程内，不是本 App 联网）。
-                // #18 P1-a：系统选择器可能显示隐藏照片（等 T7）。按 itemIdentifier 经 PhotoFetch 再取一次 PHAsset，
-                // 取不到或 isHidden 就按「读不出来」处理，不解码。主流程和「再拼一张」共用这个选图页。
-                guard let newItem else { return }
+                // #18 P1-a / copy v1.6：系统选择器可能显示隐藏照片（等 T7）。按 itemIdentifier 经 PhotoFetch 再取一次 PHAsset，
+                // 取不到（不管隐藏 / 未授权 / 已删除）或之后读不出来，一律弹 picker.unavailable，不区分原因。
+                // 主流程和「再拼一张」共用这个选图页。
                 guard PickedTargetGate.allows(itemIdentifier: newItem.itemIdentifier,
-                                              lookup: PhotoFetch.pickedAssetLookup) else {
-                    model.loadTarget(data: nil)
+                                              isAvailable: PhotoFetch.isPickedAssetAvailable) else {
+                    model.pickedTargetUnavailable()
                     return
                 }
                 let data = try? await newItem.loadTransferable(type: Data.self)
-                model.loadTarget(data: data)
+                model.loadPickedTarget(data: data)
             }
+        }
+        // 「换一张」：协调器把请求 +1，这里重新打开系统选择器。
+        .onChange(of: model.targetPickerReopenRequest) { _ in showPicker = true }
+        .alert(Text(L10nKey.pickerUnavailable),
+               isPresented: Binding(get: { model.showsPickerUnavailable },
+                                    set: { if !$0 { model.pickerUnavailableDismissed() } })) {
+            Button { model.pickerUnavailableChange() } label: { Text(L10nKey.pickerUnavailableChange) }
+            if model.pickerUnavailableShowsAddAccess {
+                Button { model.pickerUnavailableAddAccess() } label: { Text(L10nKey.pickerUnavailableAddAccess) }
+            }
+            Button(role: .cancel) { model.pickerUnavailableCancel() } label: { Text(L10nKey.commonCancel) }
         }
     }
 }

@@ -19,6 +19,12 @@
 - 未保存提示收起：`confirmationDialog` 的 isPresented 改成可写绑定，收起走 `unsavedPromptDismissed()`：延后一轮、仍是同一个提示（`unsavedPromptID`）且没在保存时按「取消」。「保存」改成同步入口 `unsavedPromptSaveTapped()`（先清提示、标记保存中再进 Task），收起先到后到都不会吞掉保存。
 - 测试：`QuickAgainUnsavedRulesTests` +10（确认页一次返回 ×2、两步返回钩子、P2-b ×2、收起复位 / 收起不吞保存 / 旧收起不关新提示、PickedTargetGate、兜底拒绝按读不出来）；`QuickAgainTests` 两条按 P2-c 改为一次返回。
 
+**追加（23:55，copy v1.6：选图后读不出照片）**
+- 系统选择器选的照片经 PhotoFetch 取不到（不管隐藏 / 未授权 / 已删除），或之后解码失败，一律弹同一个提示 `picker.unavailable`「这张照片现在用不了，换一张试试」。`PickedTargetGate` 只输出可用 / 不可用（`PhotoFetch.isPickedAssetAvailable`），代码里不区分原因；系统选择器这条路不再用 `target.unreadable`。
+- 按钮：`picker.unavailable.change`「换一张」重新打开选择器（`targetPickerReopenRequest`）；`common.cancel`「取消」回到发起页、当前结果保留（「再拼一张」途中回原预览页；主流程 / 作品查看页进来的留在选图页，已选的目标图不动）；`picker.unavailable.add_access`「增加可用照片」只在 App 整体 `authorization == .limited` 时显示，点了调 `presentLimitedLibraryPicker`。点外面收起按「取消」，不会吞掉按钮动作。
+- 文案：copy_v1.1.md §5.8 + gen-localizable（181 key）+ `QuickL10n.allQuick`；`common.cancel` 复用。
+- 测试 +6（只输出可用/不可用、key 在 allUsed、再拼一张取消保留结果和已存状态、换一张、主流程同一提示、受限才显示「增加可用照片」、收起复位且不吞按钮）；原两条 P1-a 测试按新接口改写。
+
 相簿多选（1a、2f）不在本分支，另开 feat/album-multiselect。原来这里的 WIP 提交 73a8a14（只有 `MaterialSource.swift`）没推过，已从本分支拿掉，存在 `/workspace/multiselect-wip/`（patch + 文件）和本地分支 `wip/multiselect-73a8a14`。不改生成、匹配、导出的逻辑。
 
 ### 再拼一张（§2b / §2e）

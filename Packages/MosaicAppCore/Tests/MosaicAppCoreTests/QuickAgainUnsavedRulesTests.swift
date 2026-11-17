@@ -506,40 +506,134 @@ final class QuickAgainUnsavedRulesTests: XCTestCase {
         f.stop()
     }
 
-    // MARK: P1-a 系统选择器隐藏照片兜底
+    // MARK: P1-a / copy v1.6 系统选择器选的照片用不了：同一个提示 picker.unavailable
 
-    func testPickedTargetGate() {
-        XCTAssertTrue(PickedTargetGate.allows(itemIdentifier: "A", lookup: { _ in .visible }))
-        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: "A", lookup: { _ in .hidden }), "isHidden → 读不出来")
-        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: "A", lookup: { _ in .notFound }), "取不到 → 读不出来")
-        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: nil, lookup: { _ in .visible }), "没有 itemIdentifier → 读不出来")
-        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: "", lookup: { _ in .visible }))
+    func testPickedTargetGateOnlyAvailableOrNot() {
+        XCTAssertTrue(PickedTargetGate.allows(itemIdentifier: "A", isAvailable: { _ in true }))
+        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: "A", isAvailable: { _ in false }), "取不到（不管原因）→ 不可用")
+        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: nil, isAvailable: { _ in true }), "没有 itemIdentifier → 不可用")
+        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: "", isAvailable: { _ in true }))
         var asked: [String] = []
-        _ = PickedTargetGate.allows(itemIdentifier: "X/L0/001", lookup: { asked.append($0); return .visible })
+        _ = PickedTargetGate.allows(itemIdentifier: "X/L0/001", isAvailable: { asked.append($0); return true })
         XCTAssertEqual(asked, ["X/L0/001"], "按 itemIdentifier 查")
     }
 
-    /// 兜底拒绝时平台层走 `setTarget(nil)`：主流程显示「读不出来」；「再拼一张」途中只清新目标图，旧结果不动。
-    func testGateRejectionTreatedAsUnreadableInBothFlows() async throws {
+    func testPickerUnavailableKeysInStrings() throws {
+        for k in [L10nKey.pickerUnavailable, .pickerUnavailableChange, .pickerUnavailableAddAccess, .commonCancel] {
+            XCTAssertTrue(L10nKey.allUsed.contains(k), k.rawValue)
+        }
+    }
+
+    /// 「再拼一张」途中：弹提示，旧结果 / 新目标图都不动；「取消」回原预览页，结果和「已存」状态保留。
+    func testQuickAgainUnavailableCancelReturnsToPreviewKeepingResult() async throws {
         let f = Fixture()
         try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        guard case .saved(let id) = f.works.state.saveStatus else { return XCTFail() }
         let rev = f.c.state.resultRevision
-        f.c.startNewMosaicTapped(); f.c.unsavedPromptDiscard()
-        f.c.setTarget(nil)
-        XCTAssertEqual(f.c.state.flow.targetNotice, .targetUnreadable)
-        XCTAssertEqual(f.c.state.flow.step, .target, "留在选图页")
-        XCTAssertNil(f.c.pendingTarget)
-        f.c.flowSend(.back)
-        XCTAssertEqual(f.c.state.flow.step, .result)
+        f.c.startNewMosaicTapped()
+        XCTAssertEqual(f.c.state.flow.step, .target)
+        f.c.pickedTargetUnavailable()
+        XCTAssertTrue(f.c.state.showsPickerUnavailable)
+        XCTAssertFalse(f.c.state.pickerUnavailableShowsAddAccess, "完全访问：不显示「增加可用照片」")
+        XCTAssertNil(f.c.state.flow.targetNotice, "不用旧的 target.unreadable")
+        XCTAssertEqual(f.c.state.flow.step, .target)
+        f.c.pickerUnavailableCancelTapped(); f.sync()
+        XCTAssertFalse(f.c.state.showsPickerUnavailable)
+        XCTAssertEqual(f.c.state.flow.step, .result, "取消 = 回到发起页（原预览页）")
+        XCTAssertFalse(f.c.state.flow.isQuickAgain)
         XCTAssertEqual(f.c.state.resultRevision, rev)
+        XCTAssertTrue(f.c.state.hasResult)
+        XCTAssertEqual(f.works.state.saveStatus, .saved(id))
+        XCTAssertNil(f.c.pendingTarget)
         f.stop()
+    }
 
-        let g = Fixture()
-        g.c.start(); await g.c.settle()
-        g.c.setTarget(nil)
-        XCTAssertEqual(g.c.state.flow.targetNotice, .targetUnreadable)
-        XCTAssertFalse(g.c.state.flow.hasTarget)
-        XCTAssertEqual(g.c.state.flow.step, .target)
-        g.stop()
+    /// 「换一张」：留在选图页、请求重新打开选择器；之后选到能用的照片照常进确认页。
+    func testUnavailableChangeReopensPicker() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.startNewMosaicTapped(); f.c.unsavedPromptDiscard()
+        f.c.pickedTargetUnavailable()
+        let before = f.c.state.targetPickerReopenRequest
+        f.c.pickerUnavailableChangeTapped()
+        XCTAssertFalse(f.c.state.showsPickerUnavailable)
+        XCTAssertEqual(f.c.state.targetPickerReopenRequest, before + 1)
+        XCTAssertEqual(f.c.state.flow.step, .target)
+        XCTAssertTrue(f.c.state.flow.isQuickAgain)
+        XCTAssertTrue(f.c.state.hasResult)
+        f.c.setTarget(try otherTarget())
+        XCTAssertEqual(f.c.state.flow.step, .settings)
+        f.stop()
+    }
+
+    /// 主流程（第一次选图）也走同一个提示；「取消」留在选图页（没有更早的页），已选的目标图不动。
+    func testMainFlowUnavailableUsesSamePrompt() async throws {
+        let h = CoordinatorHarness(assets: 300)
+        let c = h.coordinator
+        c.start(); await c.settle()
+        XCTAssertEqual(c.state.flow.step, .target)
+        c.pickedTargetUnavailable()
+        XCTAssertTrue(c.state.showsPickerUnavailable)
+        c.pickerUnavailableCancelTapped()
+        XCTAssertFalse(c.state.showsPickerUnavailable)
+        XCTAssertEqual(c.state.flow.step, .target)
+        XCTAssertFalse(c.state.flow.hasTarget)
+        // 已经选过一张，再选到用不了的：原来那张还在
+        c.setTarget(try CoordinatorHarness.target())
+        c.flowSend(.back)
+        c.pickedTargetUnavailable()
+        c.pickerUnavailableChangeTapped()
+        XCTAssertTrue(c.state.flow.hasTarget)
+        XCTAssertNotNil(c.target)
+        c.stop()
+    }
+
+    /// 「增加可用照片」只看 App 整体授权：受限访问显示，点了调系统增加可用照片；非受限不显示、点了也不调。
+    func testAddAccessOnlyWhenLimited() async throws {
+        let h = CoordinatorHarness(assets: 300, auth: .limited)
+        let c = h.coordinator
+        var actions: [SystemAction] = []
+        c.systemActionHandler = { actions.append($0) }
+        c.start(); await c.settle()
+        XCTAssertEqual(c.state.authorization, .limited)
+        c.pickedTargetUnavailable()
+        XCTAssertTrue(c.state.pickerUnavailableShowsAddAccess)
+        c.pickerUnavailableAddAccessTapped()
+        XCTAssertEqual(actions, [.presentLimitedPicker])
+        XCTAssertFalse(c.state.showsPickerUnavailable)
+        c.stop()
+
+        let g = CoordinatorHarness(assets: 300)
+        let d = g.coordinator
+        var gActions: [SystemAction] = []
+        d.systemActionHandler = { gActions.append($0) }
+        d.start(); await d.settle()
+        d.pickedTargetUnavailable()
+        XCTAssertFalse(d.state.pickerUnavailableShowsAddAccess, "非受限：不显示")
+        d.pickerUnavailableAddAccessTapped()
+        XCTAssertEqual(gActions, [], "非受限：不调")
+        XCTAssertTrue(d.state.showsPickerUnavailable, "没处理，提示还在")
+        d.stop()
+    }
+
+    /// 收起：延后按「取消」；按钮先处理过就什么都不做（不吞「换一张」）。
+    func testUnavailableDismissBehavesLikeCancelButNeverSwallowsButtons() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.startNewMosaicTapped(); f.c.unsavedPromptDiscard()
+        f.c.pickedTargetUnavailable()
+        await f.c.pickerUnavailableDismissed()?.value
+        XCTAssertFalse(f.c.state.showsPickerUnavailable)
+        XCTAssertEqual(f.c.state.flow.step, .result, "收起 = 取消")
+
+        f.c.startNewMosaicTapped(); f.c.unsavedPromptDiscard()
+        f.c.pickedTargetUnavailable()
+        let dismiss = f.c.pickerUnavailableDismissed()     // SwiftUI 先收起
+        f.c.pickerUnavailableChangeTapped()                // 再执行按钮
+        await dismiss?.value
+        XCTAssertEqual(f.c.state.flow.step, .target, "「换一张」没被收起吞掉")
+        XCTAssertTrue(f.c.state.flow.isQuickAgain)
+        f.stop()
     }
 }

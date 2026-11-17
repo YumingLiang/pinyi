@@ -83,9 +83,10 @@ enum PhotoFetch {
 
     /// 系统 PhotosPicker 选完后的兜底（#18 P1-a）：按 `itemIdentifier` 再取一次。取不到（隐藏 / 删除 / 受限未授权）
     /// 或 `isHidden` 都不能当目标图（`PickedTargetGate`）。
-    static func pickedAssetLookup(_ id: String) -> PickedAssetLookup {
-        guard let asset = images(withLocalIdentifiers: [id]).firstObject else { return .notFound }
-        return asset.isHidden ? .hidden : .visible
+    /// 只回答可用 / 不可用，不区分原因（copy v1.6）。
+    static func isPickedAssetAvailable(_ id: String) -> Bool {
+        guard let asset = images(withLocalIdentifiers: [id]).firstObject else { return false }
+        return !asset.isHidden
     }
 
     /// 集合的代表照片（封面）。选项同样走 `options`（写死 `includeHiddenAssets = false`），不允许 `options: nil`。
