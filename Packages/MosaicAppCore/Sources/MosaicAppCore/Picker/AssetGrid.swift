@@ -102,8 +102,12 @@ public struct CacheWindowUpdate: Sendable, Hashable {
     }
 }
 
-/// 缓存窗口纯逻辑（**T4 实现**，Linux 单测）：可见区上下各一屏 `startCaching`；移出可见区两屏外才 `stopCaching`；
-/// 快速滑动时不扩大窗口（只缓存可见区）。T0 只有占位，调用会崩溃。
+/// 缓存窗口纯逻辑（T4 实现，Linux 单测 `ThumbnailCacheWindowTests`）：可见区上下各一屏 `startCaching`；
+/// 移出可见区两屏外才 `stopCaching`（中间一屏是回滞带，来回小幅滚动不反复 start / stop）；
+/// 快速滑动时不扩大窗口（只把可见区补进缓存，已缓存的照两屏规则保留）。
+///
+/// 算法：期望区 = 可见区 ±1 屏（快速滑动时 = 可见区）；保留区 = 可见区 ±2 屏。
+/// 新窗口 = (旧窗口 ∩ 保留区) ∪ 期望区；两段不相接（跳转）时直接取期望区。结果总是一个连续区间。
 public struct ThumbnailCacheWindow: Sendable, Hashable {
     /// 当前已在缓存的区间。
     public private(set) var cached: Range<Int> = 0..<0
@@ -117,11 +121,47 @@ public struct ThumbnailCacheWindow: Sendable, Hashable {
     ///   - isFastScrolling: 是否快速滑动（由 T4 按滚动速度判定）。
     public mutating func update(visible: Range<Int>, itemsPerScreen: Int, count: Int,
                                 isFastScrolling: Bool) -> CacheWindowUpdate {
-        fatalError("T4: ThumbnailCacheWindow.update 未实现")
+        let all = 0..<max(0, count)
+        let vis = visible.clamped(to: all)
+        let screen = max(0, itemsPerScreen)
+        let desired = isFastScrolling ? vis : Self.expand(vis, by: screen, within: all)
+        let keep = Self.expand(vis, by: 2 * screen, within: all)
+        let kept = cached.clamped(to: keep)
+
+        let next: Range<Int>
+        if desired.isEmpty {
+            next = kept.isEmpty ? 0..<0 : kept
+        } else if kept.isEmpty || kept.upperBound < desired.lowerBound || desired.upperBound < kept.lowerBound {
+            next = desired
+        } else {
+            next = min(kept.lowerBound, desired.lowerBound)..<max(kept.upperBound, desired.upperBound)
+        }
+
+        let update = CacheWindowUpdate(start: Self.subtract(next, cached), stop: Self.subtract(cached, next))
+        cached = next
+        return update
     }
 
     /// 数据源整体变化 / reload 后清空，返回需要 stop 的区间。
     public mutating func reset() -> CacheWindowUpdate {
-        fatalError("T4: ThumbnailCacheWindow.reset 未实现")
+        defer { cached = 0..<0 }
+        return CacheWindowUpdate(stop: cached.isEmpty ? [] : [cached])
+    }
+
+    private static func expand(_ r: Range<Int>, by n: Int, within all: Range<Int>) -> Range<Int> {
+        guard !r.isEmpty else { return r }
+        let lo = max(all.lowerBound, r.lowerBound - n)
+        let hi = min(all.upperBound, r.upperBound + n)
+        return lo..<hi
+    }
+
+    /// a − b，按升序返回非空的段（最多两段）。
+    private static func subtract(_ a: Range<Int>, _ b: Range<Int>) -> [Range<Int>] {
+        guard !a.isEmpty else { return [] }
+        guard !b.isEmpty, a.overlaps(b) else { return [a] }
+        var out: [Range<Int>] = []
+        if a.lowerBound < b.lowerBound { out.append(a.lowerBound..<b.lowerBound) }
+        if b.upperBound < a.upperBound { out.append(b.upperBound..<a.upperBound) }
+        return out
     }
 }
