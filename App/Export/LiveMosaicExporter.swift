@@ -14,7 +14,7 @@ import MosaicAppCore
 ///   峰值 ≈ 位图 + 4 张缩略图。PhotoKit 请求 targetSize = 每格像素、highQualityFormat、`isNetworkAccessAllowed = false`。
 /// - 编码：CGImageDestination 写 JPEG（质量 0.9）到 `tmp/export/`；保存 / 分享结束后删除，启动时清空目录（B-27）。
 /// - 实际每格像素、尺寸、上限、可用内存、用时、文件大小，以及退回 128px 缩略图（糊格子）和完全空白（白格子）的数量，写 os_log（subsystem 同 Bundle ID，category "export"）和内测性能页。
-/// - 不做（紧急版范围外）：取消、后台续跑、降档提示、存储预检、作品自动保存。
+/// - 不做（紧急版范围外）：取消、后台续跑、降档提示、存储预检。作品自动保存由协调器 `onExportSucceeded` 接入。
 /// ⚠️ 盲写（Linux 上无法编译 CG / ImageIO / PhotoKit）。
 struct LiveMosaicExporter: MosaicExporting {
     let thumbnails: any ThumbnailProviding
@@ -65,7 +65,7 @@ struct LiveMosaicExporter: MosaicExporting {
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .high
 
-        let ids = request.product.cellAssetIDs
+        let ids = request.layout.cellAssignments.map { $0.localIdentifier.isEmpty ? nil : $0.localIdentifier }
         let thumbs = thumbnails
         let hq: ThumbnailRequest = {
             var r = ThumbnailRequest(targetPixelSize: cp)
@@ -119,10 +119,10 @@ struct LiveMosaicExporter: MosaicExporting {
 
         // 叠加目标图（α ≤ 0.3，与预览同公式）。
         let alpha = OverlayBlendLimits.clamp(request.overlayAlpha)
-        if alpha > 0 {
+        if alpha > 0, let targetBuf = request.target {
             autoreleasepool {
-                let crop = request.product.generation.layout.cropRect
-                if let target = ImagePixels.cgImage(request.target),
+                let crop = request.layout.targetCrop
+                if let target = ImagePixels.cgImage(targetBuf),
                    let part = target.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height).integral) {
                     ctx.setAlpha(alpha)
                     ctx.interpolationQuality = .medium

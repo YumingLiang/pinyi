@@ -13,6 +13,7 @@ struct RootView: View {
             case .main: MainFlowView()
             }
         }
+        .environmentObject(model.works)
         .task { await model.start() }
         .onChange(of: scenePhase) { model.scenePhaseChanged($0) }
     }
