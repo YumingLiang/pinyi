@@ -107,3 +107,11 @@
 - 填纯色的格子不写进兜底图文件，颜色存在 layout 的对应格子上（`"fc": [r,g,b]`，#11 a9df567 实现），meta 只记 fallbackVersion 和计数。这些格子不算引用任何照片 ID，不进 assets.ids
 - 迁移：兜底图加 `fallbackVersion = 2`。版本更低的整个作废、删掉文件，这些格子重新匹配；匹配不到的一律填目标色（旧预览可能已经被隐藏像素污染），然后重画 preview 和缩略图。重画完成前不显示旧 preview
 - InternalTools（例如 TestAlbumWriter）按 ID 直接取图，和规则 4 一样豁免，但守护要同时检查这些文件只属于 Internal target
+
+## 隐私口径从严（产品 2026-11-17 04:00，copy v1.7a）
+- 取消 4b：任何补格都不再读旧预览。`MissingCellFill.decide` 对 deleted 也返回 targetColor；classifyMissing 只用于统计和文案。守护测试：任何原因都得不到 previewCrop
+- 受限访问（#11）：只要授权不是完全授权，作品列表和查看页都不解码旧预览，一律占位；查看页显示 `works.limited_placeholder` 和「去设置」按钮（`works.limited_note.settings`）。导出照旧填色，不写回。#11 先按「受限即占位」实现，不逐个作品判断有没有 unknown（判断要对每个作品 fetch 一遍 ID，留给 5e 的 assets.ids 做）
+- 5e 显示判断加第 4 条：受限访问时，作品里不能有查不到的照片。恢复完全授权后按 5e 全量重查
+- 冷启动算一次检查：5e 的 GoneLog 用 fetchPersistentChanges，有变化或 token 失效才补格（#11 里的内存记录不改，冷启动最多多重找一次）
+- 取消隐藏或恢复的照片，只要通过 PhotoFetch，就可以在重找时按相似度被选中，不违反 5b
+- P2 待办：受限访问下在内存里临时渲染预览（unknown 格填目标色，不写回），约 1 天
