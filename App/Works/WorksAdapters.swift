@@ -36,6 +36,19 @@ struct PhotoKitExistenceChecker: PhotoExistenceChecking {
         return found
     }
 
+    /// 缺图原因：只读元数据（`PhotoFetch.missingPhotoMetadata`，不请求图像）；只有完整权限下「查不到」才算确认删除。
+    func missingReasons(among identifiers: Set<String>) async -> [String: MissingPhotoReason] {
+        let ids = identifiers.filter { !$0.isEmpty }.sorted()
+        var found: [String: Bool] = [:]
+        var start = 0
+        while start < ids.count {
+            let chunk = Array(ids[start..<min(ids.count, start + Self.batch)])
+            found.merge(PhotoFetch.missingPhotoMetadata(chunk)) { a, _ in a }
+            start += chunk.count
+        }
+        return MissingPhotoClassifier.classify(Set(ids), found: found, fullAccess: await canConfirmMissing())
+    }
+
     /// 受限访问 / 无权限时没选进来的照片也取不到，不能当成被删 / 被隐藏去改写作品（只计数提示）。
     func canConfirmMissing() async -> Bool {
         PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized

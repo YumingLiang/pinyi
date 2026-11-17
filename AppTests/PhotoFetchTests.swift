@@ -94,4 +94,11 @@ final class PhotoFetchTests: XCTestCase {
         XCTAssertTrue(fetch.contains("!visibleImages(withLocalIdentifiers: [id]).isEmpty"),
                       "isPickedAssetAvailable 应走 visibleImages，不单独 images + isHidden")
     }
+
+    /// 缺图分类（唯一的 includeHiddenAssets 例外）：只回答查不查得到 / isHidden，查不到的 ID 不在结果里；空输入不查。
+    func testMissingPhotoMetadataOnlyReturnsFlags() {
+        XCTAssertEqual(PhotoFetch.missingPhotoMetadata([]), [:])
+        let r: [String: Bool] = PhotoFetch.missingPhotoMetadata(["00000000-0000-0000-0000-000000000000/L0/001"])
+        XCTAssertEqual(r, [:], "不存在的 ID 查不到")
+    }
 }

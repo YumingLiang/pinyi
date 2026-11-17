@@ -372,10 +372,16 @@ public protocol PhotoExistenceChecking: Sendable {
     /// 「取不到」能不能当成真的没了（完整相册权限时为 true）。受限访问 / 无权限时，没选进来的照片也取不到，
     /// 这时只计数提示，**不**改写作品（否则会把整张作品清空）。默认 true。
     func canConfirmMissing() async -> Bool
+    /// 取不到的原照片为什么取不到（隐藏 / 删除 / 拿不准，需求 4.8 第 5e 条）。**只读元数据，不请求任何图像**
+    /// （App 里是 `PhotoFetch.missingPhotoMetadata` + `MissingPhotoClassifier`）。默认一律「拿不准」（按隐藏处理，不用旧预览）。
+    func missingReasons(among identifiers: Set<String>) async -> [String: MissingPhotoReason]
 }
 
 extension PhotoExistenceChecking {
     public func canConfirmMissing() async -> Bool { true }
+    public func missingReasons(among identifiers: Set<String>) async -> [String: MissingPhotoReason] {
+        MissingPhotoClassifier.classify(identifiers, found: [:], fullAccess: false)
+    }
 }
 
 extension MosaicLayout {
@@ -388,7 +394,7 @@ extension MosaicLayout {
         for i in out.cellAssignments.indices where !out.cellAssignments[i].localIdentifier.isEmpty
             && assetIDs.contains(out.cellAssignments[i].localIdentifier) {
             dropped.insert(out.cellAssignments[i].localIdentifier)
-            // 兜底标记由存储层写回时按「有没有旧预览」决定（`FileWorksStore.applyRematch`）
+            // 兜底 / 纯色由存储层写回时按缺失原因决定（`FileWorksStore.applyRematch` → `MissingCellFill.decide`）
             out.cellAssignments[i] = CellAssignment(localIdentifier: "", crop: out.cellAssignments[i].crop)
         }
         return (out, dropped.count)

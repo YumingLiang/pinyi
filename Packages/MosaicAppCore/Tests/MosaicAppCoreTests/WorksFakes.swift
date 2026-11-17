@@ -143,23 +143,35 @@ final class FakeWorkImages: WorkImageEncoding, Sendable {
     }
 }
 
-/// 假「原照片还在不在」。`deleted` 里的 ID 取不到——删除和「后来被隐藏」在 App 里是同一件事
-/// （按 ID 取图不含隐藏照片），这里用同一个集合模拟；`hidden` 只是给测试读起来更清楚的别名入口。
+/// 假「原照片还在不在」。`hidden` / `deleted` 里的 ID 都取不到（App 里按 ID 取图不含隐藏照片）；
+/// 缺图原因（`missingReasons`，只读元数据）按 App 同一套 `MissingPhotoClassifier` 分：隐藏的查得到且 isHidden，删除的查不到。
 final class FakeExistence: PhotoExistenceChecking, Sendable {
     let deleted = Locked(Set<String>())
+    let hidden = Locked(Set<String>())
     let calls = Locked(0)
+    /// `missingReasons` 被调了几次（只读元数据）。
+    let metadataCalls = Locked(0)
     /// false = 模拟受限访问 / 无权限（取不到也不能确认是真没了）。
     let fullAccess = Locked(true)
     func existingIdentifiers(among identifiers: [String]) async -> Set<String> {
         calls.update { $0 += 1 }
-        let gone = deleted.get()
+        let gone = deleted.get().union(hidden.get())
         return Set(identifiers.filter { !gone.contains($0) })
     }
     func canConfirmMissing() async -> Bool { fullAccess.get() }
+    func missingReasons(among identifiers: Set<String>) async -> [String: MissingPhotoReason] {
+        metadataCalls.update { $0 += 1 }
+        let h = hidden.get(), all = fullAccess.get()
+        // 受限访问时没选进来的照片元数据也查不到：隐藏的也查不到
+        let found = Dictionary(uniqueKeysWithValues: identifiers.filter { all && h.contains($0) }.map { ($0, true) })
+        return MissingPhotoClassifier.classify(identifiers, found: found, fullAccess: all)
+    }
     /// 模拟在「照片」App 里把照片设为隐藏：PhotoKit 按 ID 取（includeHiddenAssets = false）不再返回它。
-    func hide(_ ids: String...) { deleted.update { $0.formUnion(ids) } }
+    func hide(_ ids: String...) { hidden.update { $0.formUnion(ids) } }
     /// 取消隐藏：又能取到了。
-    func unhide(_ ids: String...) { deleted.update { $0.subtract(ids) } }
+    func unhide(_ ids: String...) { hidden.update { $0.subtract(ids) } }
+    /// 模拟从相册删除。
+    func delete(_ ids: String...) { deleted.update { $0.formUnion(ids) } }
 }
 
 /// 假墙钟：每次取时间 +1 s（保证新旧顺序确定）。
@@ -195,6 +207,16 @@ func sampleFallbackLayout(_ ids: [String], cols: Int = 3, seed: UInt64 = 7) -> M
     for i in l.cellAssignments.indices where l.cellAssignments[i].localIdentifier.isEmpty { l.cellAssignments[i].fallback = true }
     return l
 }
+
+/// 空格子都是纯色格（原照片隐藏 / 拿不准、没有候选：填目标图该格平均色）。
+func sampleColorLayout(_ ids: [String], color: CellColor, cols: Int = 3, seed: UInt64 = 7) -> MosaicLayout {
+    var l = sampleLayout(ids, cols: cols, seed: seed)
+    for i in l.cellAssignments.indices where l.cellAssignments[i].localIdentifier.isEmpty { l.cellAssignments[i].fill = color }
+    return l
+}
+
+/// `smallTarget()` 的每格平均色。
+let smallTargetColor = CellColor(r: 200, g: 200, b: 200)
 
 func smallTarget() throws -> PixelBuffer {
     try PixelBuffer(width: 4, height: 3, bytes: [UInt8](repeating: 200, count: 4 * 3 * 4))

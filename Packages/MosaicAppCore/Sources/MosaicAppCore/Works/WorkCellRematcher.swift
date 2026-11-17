@@ -73,7 +73,8 @@ public extension MissingCellRematching {
 ///    再用 `LocalResolutionChecker` 查本机版本 ≥ 256 px；不合格的从候选掩码里去掉，只为这些格子重选，最多 `maxRematchRounds` 轮。
 /// 3. 轮数用完仍有格子没合格的：最后兜底只在「本次已确认可见且清晰」的照片里取最近的（忽略单张上限，与 `MosaicPipeline.refill` 一致）。
 /// 4. 仍然没有（索引里没有可用照片、特征口径对不上、候选全不合格、算不出目标特征）才清成空格子；
-///    写回时由存储层用旧预览裁切兜底（`FileWorksStore.applyRematch` / `WorkFallbackImages`），没有旧预览才真的留白。
+///    写回时由存储层按 `MissingCellFill.decide` 补：原照片确认删除 → 旧预览裁切（`WorkFallbackImages`，没有旧预览才留白）；
+///    隐藏 / 拿不准 → 目标图这一格的平均色（`CellAssignment.fill`）。
 ///    索引暂时取不到（`snapshot()` 抛错）不算：抛 `WorkRematchError.indexUnavailable`，作品不动。
 public struct IndexWorkRematcher: MissingCellRematching {
     public var snapshot: @Sendable () async throws -> IndexSnapshot

@@ -20,22 +20,29 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
         /// 「我的作品」预览兜底格（`localIdentifier` 为空、找不到合格相近照片）：渲染 / 导出时用作品目录里存的旧预览裁切放大填充
         /// （`WorkMeta.fallbackFile`）。可选字段：只在为 true 时写出 `"fb": true`，旧版布局、普通格子的 JSON 与指纹都不变。
         public var fallback: Bool
+        /// 「我的作品」纯色格（需求 4.8 第 5e 条）：原照片被隐藏（或拿不准）、又找不到相近照片的格子，填目标图这一格的平均色。
+        /// 不用旧预览（旧预览里就是隐藏照片的像素），也不进 `WorkFallbackImages`。预览重画和高清导出都按这个颜色填，两边一致。
+        /// 可选字段：只在有值时写出 `"fc": [r, g, b]`，旧版布局、普通格子的 JSON 与指纹都不变。
+        public var fill: CellColor?
 
         public static let fullSquare = CropRect(x: 0, y: 0, width: 1, height: 1)
 
-        public init(localIdentifier: String, crop: CropRect = CellAssignment.fullSquare, fallback: Bool = false) {
+        public init(localIdentifier: String, crop: CropRect = CellAssignment.fullSquare, fallback: Bool = false,
+                    fill: CellColor? = nil) {
             self.localIdentifier = localIdentifier
             self.crop = crop
             self.fallback = fallback
+            self.fill = fill
         }
 
-        private enum CodingKeys: String, CodingKey { case id, crop, fb }
+        private enum CodingKeys: String, CodingKey { case id, crop, fb, fc }
 
         public init(from decoder: any Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             localIdentifier = try c.decode(String.self, forKey: .id)
             crop = try MosaicLayout.decodeRect(c.decode([Double].self, forKey: .crop))
             fallback = try c.decodeIfPresent(Bool.self, forKey: .fb) ?? false
+            fill = try c.decodeIfPresent([UInt8].self, forKey: .fc).flatMap(CellColor.init(components:))
         }
 
         public func encode(to encoder: any Encoder) throws {
@@ -43,6 +50,7 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
             try c.encode(localIdentifier, forKey: .id)
             try c.encode(MosaicLayout.encodeRect(crop), forKey: .crop)
             if fallback { try c.encode(true, forKey: .fb) }
+            if let fill { try c.encode([fill.r, fill.g, fill.b], forKey: .fc) }
         }
     }
 
@@ -165,5 +173,17 @@ extension MosaicLayout {
         case .fine: "fine"
         case .custom(let c): "custom-\(c)"
         }
+    }
+}
+
+/// 一格的纯色（sRGB 8 位）。
+public struct CellColor: Sendable, Hashable, Codable {
+    public var r: UInt8
+    public var g: UInt8
+    public var b: UInt8
+    public init(r: UInt8, g: UInt8, b: UInt8) { self.r = r; self.g = g; self.b = b }
+    init?(components c: [UInt8]) {
+        guard c.count == 3 else { return nil }
+        self.init(r: c[0], g: c[1], b: c[2])
     }
 }

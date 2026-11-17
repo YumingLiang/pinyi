@@ -51,8 +51,9 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.existence.hide("b")
         await h.controller.open(id)
-        let cleared = sampleFallbackLayout(["a", "", "c", "a", "", "d"])
-        XCTAssertEqual(h.controller.openedWork?.layout, cleared, "用到 b 的两格按缺图处理（旧预览兜底）")
+        let cleared = sampleColorLayout(["a", "", "c", "a", "", "d"], color: smallTargetColor)
+        XCTAssertEqual(h.controller.openedWork?.layout, cleared,
+                       "用到 b 的两格：b 被隐藏、没有候选 → 填目标图这一格的平均色（不用旧预览裁切）")
         XCTAssertEqual(h.images.state.get().previews, 2, "预览重新生成了一次")
         XCTAssertEqual(h.images.state.get().reads, 1, "重画预览时读回目标图副本做叠加")
 
@@ -61,16 +62,20 @@ final class WorksHiddenPhotoTests: XCTestCase {
         XCTAssertNotEqual(opened.summary.previewURL, before.previewURL)
         let previewData = try FakeWorkImages.previewHeader(opened.summary.previewURL)
         let bColor = FakeWorkImages.color(of: "b")
-        XCTAssertEqual(previewData, FakeWorkImages.previewBytes(cleared, fallbacks: [1: bColor, 4: bColor]),
-                       "b 的两格用旧预览裁出的小图填充（叠加已去掉，颜色与原来一致）")
+        let fill = FakeWorkImages.RGB8(r: 200, g: 200, b: 200)
+        XCTAssertNotEqual(fill, bColor)
+        XCTAssertEqual(previewData, FakeWorkImages.previewBytes(cleared, fallbacks: [1: fill, 4: fill]),
+                       "b 的两格填目标平均色，不含旧预览（b）的像素")
+        XCTAssertEqual(h.images.state.get().fallbackWrites, 0, "纯色格不写进 WorkFallbackImages")
+        XCTAssertGreaterThanOrEqual(h.existence.metadataCalls.get(), 1, "按只读元数据分了原因")
         XCTAssertFalse(String(decoding: previewData, as: UTF8.self).contains(",b,"), "新预览不再按 ID 取 b")
         XCTAssertFalse(FileManager.default.fileExists(atPath: before.previewURL.path), "旧预览（还看得到 b）已删")
         XCTAssertEqual(h.controller.state.summaries.first?.previewURL, opened.summary.previewURL)
         XCTAssertEqual(opened.missingCount, 2, "按格算")
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["2"]))
-        let fallbackFile = try XCTUnwrap(opened.summary.meta.fallbackFile)
+        XCTAssertNil(opened.summary.meta.fallbackFile, "没有兜底图")
         XCTAssertEqual(try h.files(id), [FileWorksStore.metaFileName, FileWorksStore.layoutFileName, "target.jpg",
-                                         opened.summary.previewURL.lastPathComponent, fallbackFile])
+                                         opened.summary.previewURL.lastPathComponent])
         XCTAssertEqual(try h.tempLeftovers(), [], "临时目录清掉了")
 
         // 写回磁盘：新进程重开也是处理后的布局、新预览、新指纹
@@ -88,7 +93,8 @@ final class WorksHiddenPhotoTests: XCTestCase {
         XCTAssertEqual(exported, cleared)
         XCTAssertFalse(exported.cellAssignments.contains { $0.localIdentifier == "b" })
         XCTAssertEqual(h.exporter.calls.last?.1, true)
-        XCTAssertEqual(h.exporter.fallbacks.last, [1: bColor, 4: bColor], "重导出用存盘的兜底图")
+        XCTAssertEqual(h.exporter.fallbacks.last, [1: fill, 4: fill], "重导出填同一颜色（与预览一致）")
+        XCTAssertEqual(h.exporter.fallbacks.last, h.images.state.get().lastFallbacks)
         XCTAssertEqual(h.images.state.get().previews, 2)
 
         // 再导出成功 → 自动保存按新指纹查重命中
@@ -130,13 +136,13 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.existence.hide("c")   // 查看页开着时去「照片」App 隐藏
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.exporter.calls.last?.0, sampleFallbackLayout(["a", "b", ""]))
+        XCTAssertEqual(h.exporter.calls.last?.0, sampleColorLayout(["a", "b", ""], color: MissingCellFill.neutral))
         XCTAssertEqual(h.images.state.get().previews, 2)
 
         h.existence.unhide("c")
         h.controller.close()
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "b", ""]), "取消隐藏后不改回去")
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "b", ""], color: MissingCellFill.neutral), "取消隐藏后不改回去")
         XCTAssertEqual(h.controller.state.opened?.missingCount, 0, "没有新变化，不再提示")
         XCTAssertEqual(h.images.state.get().previews, 2)
         h.controller.stop()
@@ -156,14 +162,14 @@ final class WorksHiddenPhotoTests: XCTestCase {
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["x", "y", "z"]))
         await h.controller.open(withB)
         XCTAssertEqual(h.images.state.get().previews, 4)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "", "c"], color: MissingCellFill.neutral))
         let untouched = try await h.store.load(alsoB)
         XCTAssertEqual(untouched.layout, sampleLayout(["b", "q", "r"]))
         h.controller.stop()
     }
 
     /// 受限访问 / 无权限：没选进来的照片也取不到，不能当成被删 / 被隐藏——不改作品、**不提示**（每次打开都不出），
-    /// 没处理的缺失数只记在 meta.missingCount（性能页）；导出时这些格子临时从当前预览裁切放大，不出白格、不存盘。
+    /// 没处理的缺失数只记在 meta.missingCount（性能页）；导出时这些格子拿不准原因、按隐藏处理：临时填目标平均色，不出白格、不存盘。
     func testLimitedAccessOnlyCountsAndDoesNotRewrite() async throws {
         let h = Harness()
         let id = try await h.saveWork(["a", "b", "c"])
@@ -188,9 +194,9 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         await h.controller.exportOpenedTapped(purpose: .save)
         XCTAssertEqual(h.exporter.calls.last?.0, sampleLayout(["a", "b", "c"]), "布局不改（自动保存查重照样命中）")
-        XCTAssertEqual(h.exporter.fallbacks.last,
-                       [0: FakeWorkImages.color(of: "a"), 1: FakeWorkImages.color(of: "b"), 2: FakeWorkImages.color(of: "c")],
-                       "导出时临时从当前预览裁切放大")
+        let gray = FakeWorkImages.RGB8(r: 128, g: 128, b: 128)
+        XCTAssertEqual(h.exporter.fallbacks.last, [0: gray, 1: gray, 2: gray],
+                       "受限访问拿不准是隐藏还是删除 → 按隐藏处理：导出临时填目标平均色（这里没有目标图副本，中性灰），不用当前预览裁切")
         XCTAssertNil(h.controller.state.missingLine)
         XCTAssertEqual(try h.files(id), filesBefore, "临时兜底不存盘")
         XCTAssertEqual(h.images.state.get().fallbackWrites, 0)
@@ -215,7 +221,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.images.state.update { $0.failAt = nil }
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "", "c"], color: MissingCellFill.neutral))
         XCTAssertEqual(h.controller.state.opened?.missingCount, 1, "这次真的兜底了，提示一次")
         h.controller.stop()
     }
@@ -228,8 +234,8 @@ final class WorksHiddenPhotoTests: XCTestCase {
         async let first = store.dropMissingPhotos(["b"], for: id)
         async let second = store.dropMissingPhotos(["b"], for: id)
         let (w1, w2) = try await (first, second)
-        XCTAssertEqual(w1.layout, sampleFallbackLayout(["a", "", "c"]))
-        XCTAssertEqual(w2.layout, sampleFallbackLayout(["a", "", "c"]))
+        XCTAssertEqual(w1.layout, sampleColorLayout(["a", "", "c"], color: MissingCellFill.neutral))
+        XCTAssertEqual(w2.layout, sampleColorLayout(["a", "", "c"], color: MissingCellFill.neutral))
         XCTAssertEqual(h.images.state.get().previews, 2, "第二次发现没东西可去，不再重画")
         let meta = try await store.load(id).meta
         XCTAssertEqual(meta.droppedPhotoCount, 1)
@@ -249,7 +255,8 @@ final class WorksHiddenPhotoTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("n")
         await h.controller.open(legacyID)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["m", "", "o"]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["m", "", "o"], color: MissingCellFill.neutral),
+                       "隐藏 → 填色（没有目标图副本时中性灰）")
         XCTAssertEqual(h.controller.state.opened?.missingCount, 1, "旧 meta 里记的缺失数不重复累计")
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyDir.appendingPathComponent("preview.jpg").path))
         h.controller.stop()

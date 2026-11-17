@@ -471,7 +471,8 @@ public final class WorksController {
     /// 缺图处理（photo-picker-v0.1 §5.1「我的作品」；需求 v0.4 §4.8 5a / 5b；hd-export-req-v0.2 F2 / F5「4b」）：
     /// - 没有缺失：什么都不动（不重画预览）。
     /// - 有缺失且能确认（完整相册权限）：交给 `rematcher` 换成本机、可见、清晰的相近照片（`IndexWorkRematcher`），
-    ///   实在找不到的用旧预览裁切兜底（没有旧预览才留白）；然后**重新生成预览**并原子写回（`applyRematch`）。之后再导出用写回的布局。
+    ///   实在找不到的按缺失原因补（`MissingCellFill.decide`，只读元数据分类）：确认删除 → 旧预览裁切（没有旧预览才留白）；
+///   隐藏 / 拿不准 → 填目标图这一格的平均色（不碰旧预览）；然后**重新生成预览**并原子写回（`applyRematch`）。之后再导出用写回的布局。
     ///   照片恢复 / 取消隐藏后不改回去（5b）。没有注入 `rematcher` 或补格出错时全部兜底（不是失败）。
     /// - 之前兜底 / 留白的格子：有补格器时每次打开再找一次，补上了按 `works.replaced` 提示一次（兜底图随之删掉）。
     /// - 受限访问 / 无权限（`canConfirmMissing == false`）、索引未就绪或写回失败：不改作品、**不提示**，
@@ -520,8 +521,11 @@ public final class WorksController {
             lastRematchNote = result.note
         }
         if Task.isCancelled { return nil }   // 取消：不写回半成品
+        // 找不到相近照片时怎么补要看原照片为什么没了（隐藏 / 删除 / 拿不准，只读元数据，不取图）
+        let reasons = missing.isEmpty ? [:] : await existence.missingReasons(among: missing)
+        if Task.isCancelled { return nil }
         do {
-            let updated = try await store.applyRematch(result, base: work.layout, for: work.id)
+            let updated = try await store.applyRematch(result, base: work.layout, for: work.id, reasons: reasons)
             guard updated.layout != work.layout else {
                 // 没有改动（之前兜底的这次仍没补上）/ 已被别处处理
                 return missing.isEmpty ? nothingToDo : unchanged
@@ -564,10 +568,17 @@ public final class WorksController {
         let updated = outcome.work
         var target: PixelBuffer?
         if let url = updated.targetURL { target = try? await images.readTarget(at: url) }
-        // 兜底格（存盘的）+ 没处理的缺失格（受限访问等，临时从预览裁）：导出放大填充，不出白格
-        let hasFallback = updated.layout.cellAssignments.contains { $0.fallback }
-        let fallbacks = hasFallback || !outcome.pendingCells.isEmpty
-            ? await store.fallbackTiles(for: updated.id, transientCells: outcome.pendingCells) : [:]
+        // 兜底格（存盘的）+ 纯色格 + 没处理的缺失格（受限访问等，临时补：确认删除的从预览裁，其余填目标平均色）：
+        // 导出放大填充，不出白格，颜色与预览一致
+        let hasFill = updated.layout.cellAssignments.contains { $0.fallback || $0.fill != nil }
+        var transientReasons: [Int: MissingPhotoReason] = [:]
+        if !outcome.pendingCells.isEmpty {
+            let ids = Set(outcome.pendingCells.map { updated.layout.cellAssignments[$0].localIdentifier })
+            let byID = await existence.missingReasons(among: ids)
+            for cell in outcome.pendingCells { transientReasons[cell] = byID[updated.layout.cellAssignments[cell].localIdentifier] }
+        }
+        let fallbacks = hasFill || !outcome.pendingCells.isEmpty
+            ? await store.fallbackTiles(for: updated.id, transientCells: outcome.pendingCells, transientReasons: transientReasons) : [:]
         await handler.exportWork(layout: updated.layout, target: target, fallbacks: fallbacks, purpose: purpose)
     }
 

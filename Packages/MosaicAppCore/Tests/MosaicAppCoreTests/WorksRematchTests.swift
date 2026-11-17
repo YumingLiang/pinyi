@@ -201,7 +201,12 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b", "hiddenRed")
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c", "d", "e", "f"], cols: 3))
+        XCTAssertEqual(h.controller.openedWork?.layout,
+                       sampleColorLayout(["a", "", "c", "d", "e", "f"], color: CellColor(r: 200, g: 30, b: 30), cols: 3),
+                       "b 被隐藏且没有合格候选 → 填目标图这一格的平均色（红），不用旧预览裁切")
+        XCTAssertEqual(h.images.inner.state.get().lastFallbacks, [1: .init(r: 200, g: 30, b: 30)], "预览里这一格是目标色")
+        XCTAssertNotEqual(FakeWorkImages.color(of: "b"), .init(r: 200, g: 30, b: 30))
+        XCTAssertEqual(h.images.inner.state.get().fallbackWrites, 0, "不写进 WorkFallbackImages")
         XCTAssertEqual(h.controller.state.opened?.missingCount, 1)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         XCTAssertNil(h.controller.state.replacedLine)
@@ -220,7 +225,7 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b")
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"], cols: 3))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "", "c"], color: CellColor(r: 200, g: 30, b: 30), cols: 3))
         let meta = try await h.store.load(id).meta
         XCTAssertEqual(meta.droppedPhotoCount, 1)
         h.controller.stop()
@@ -384,7 +389,8 @@ final class WorksRematchTests: XCTestCase {
         XCTAssertNil(h.controller.state.missingLine, "第二次打开：不出（留白格重找了一次，仍没有，不写回）")
         await h.controller.exportOpenedTapped(purpose: .save)
         XCTAssertNil(h.controller.state.missingLine, "再导出：不出")
-        XCTAssertEqual(h.exporter.calls.last?.0, sampleFallbackLayout(["a", "", "c"], cols: 3))
+        XCTAssertEqual(h.exporter.calls.last?.0, sampleColorLayout(["a", "", "c"], color: CellColor(r: 200, g: 30, b: 30), cols: 3))
+        XCTAssertEqual(h.exporter.fallbacks.last, [1: .init(r: 200, g: 30, b: 30)], "导出填同一颜色")
         h.controller.stop()
 
         let c2 = h.relaunched()
@@ -490,7 +496,7 @@ final class WorksRematchTests: XCTestCase {
                         unusable: ["a", "c"])
         let id = try await h.save()
         await h.controller.start()
-        h.existence.hide("b")
+        h.existence.delete("b")   // 删除 → 旧预览裁切兜底（隐藏的纯色格见 testNoAcceptableCandidateLeavesBlankAndCounts）
         await h.controller.open(id)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"], cols: 3))
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))

@@ -1,5 +1,27 @@
 # CHANGES
 
+## feat/works-hidden（追加 4）：被隐藏的格子不用旧预览裁切（需求 4.8 第 5e 条，架构师 11-17 意见二）
+
+- **缺图兜底分两种**：找不到相近照片时，原照片**确认删除** → 照旧按 4b 用旧预览裁切（进 `WorkFallbackImages`）；**被隐藏或拿不准**
+  （受限访问、查到却不是隐藏的竞态、没给原因）→ 填目标图这一格的平均色（目标图副本按格区域求平均；没有副本时中性灰），
+  按格计入 `works.missing`，**不读旧预览、不进 `WorkFallbackImages`**。
+  - 纯函数 `MissingCellFill.decide(reason:hasCandidate:)` → `.candidate` / `.previewCrop` / `.targetColor`（查看页、导出、5d 结果页、5e 后台队列共用）；
+    `MissingPhotoClassifier.classify`（只有完整权限下「查不到」才算删除）。
+  - 布局：`CellAssignment.fill`（JSON 可选字段 `"fc": [r, g, b]`，只在纯色格写出；旧布局、普通格子 JSON 与指纹不变）。
+  - 预览重画、只改叠加强度的重画、高清导出（`fallbackTiles`）都用 `MissingCellFill.colorTiles` 的同一颜色，两边一致。
+  - 受限访问下导出时临时补的格子同样按原因分（拿不准 → 填色，不再从当前预览裁）。
+- **只读元数据分类**：`PhotoExistenceChecking.missingReasons(among:)`；App 侧 `PhotoFetch.missingPhotoMetadata`——对取不到的 ID
+  调一次 `fetchAssets(withLocalIdentifiers:)`、开 `includeHiddenAssets`，只看查不查得到和 `isHidden`，不请求图像、不返回 `PHAsset`。
+  **全 App 唯一一处 `includeHiddenAssets = true`**。
+- **`check-photo-fetch.sh`**：规则 2 只放行 `App/Adapters/PhotoFetch.swift` 里带 `// photo-fetch: hidden-metadata-only <理由>` 的那一行，全仓只许一处；
+  新规则 2b：这一行必须在 `func missingPhotoMetadata` 函数体内，函数体里不许出现任何取图 API。自测 `scripts/tests/check-photo-fetch-hidden-exception-test.sh`（19 例），linux-core 加一步跑它。
+- `performApply` 写 meta 指纹改用 `WorkFingerprint.of(layout)`（#17 口径）。
+- 测试：新增 `MissingCellFillTests`（10 个：决策表、分类、目标平均色、`fc` 往返、隐藏无候选填色且旧预览读取 0 次 / 输出不含旧预览像素、
+  删除无候选用旧预览裁切、混合 + 导出与预览同色 + 重开一致、纯色格升级、受限访问导出填色、分类只走元数据）；`FakeExistence` 区分 `hide` / `delete`，
+  原先测「旧预览裁切」的用例改用 `delete`，测隐藏的用例改断言为填色。AppTests 加 `testMissingPhotoMetadataOnlyReturnsFlags`。
+- 只改测试：`PerformanceTests.testEndToEndWithVarianceAndCancellation` 断言 `fired` 为真、`thrown` 是 `CancellationError`，延迟只打印
+  （`>= max(1, total/3)` + 只取消一次已在 ce0b932）；`CancellationTests` 同类写法 `completed == 3` 改 `>= 3`。内核未改。
+
 ## feat/works-hidden（追加 3）：QA 复核 qa/pr11-works-hidden-report.md
 
 - **H8 提示几秒后自动消失**（copy v1.3「一次性轻提示，几秒后自动消失，不打断操作」）：`works.replaced` / `works.missing` 出现后

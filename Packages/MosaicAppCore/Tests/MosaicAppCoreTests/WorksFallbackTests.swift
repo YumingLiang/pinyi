@@ -83,7 +83,7 @@ final class WorksFallbackTests: XCTestCase {
         let h = Harness()
         let id = try await h.save(["a", "b", "a", "a", "c", "d"])
         await h.controller.start()
-        h.existence.hide("a")
+        h.existence.delete("a")
         await h.controller.open(id)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["3"]))
         let meta = try await h.store.load(id).meta
@@ -100,7 +100,7 @@ final class WorksFallbackTests: XCTestCase {
         let id = try await h.save(["a", "b", "c", "d", "e", "f"], target: try Self.gradientTarget())
         await h.controller.start()
         let oldPreview = try XCTUnwrap(h.controller.state.summaries.first?.previewURL)
-        h.existence.hide("b", "f")
+        h.existence.delete("b", "f")
         await h.controller.open(id)
 
         let work = try XCTUnwrap(h.controller.openedWork)
@@ -136,7 +136,7 @@ final class WorksFallbackTests: XCTestCase {
         let h = Harness()
         let id = try await h.save(["a", "b", "c"], target: try smallTarget())
         await h.controller.start()
-        h.existence.hide("c")
+        h.existence.delete("c")
         await h.controller.open(id)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         let previews = h.images.state.get().previews
@@ -171,7 +171,7 @@ final class WorksFallbackTests: XCTestCase {
         let store = FileWorksStore(directory: dir, images: images)
         let id = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c"]), target: try Self.gradientTarget(),
                                                 overlayAlpha: 0.2, origin: .savedManually)).summary.id
-        let w1 = try await store.dropMissingPhotos(["a", "b"], for: id)
+        let w1 = try await store.dropMissingPhotos(["a", "b"], for: id, reasons: ["a": .deleted, "b": .deleted])
         XCTAssertEqual(w1.layout, sampleFallbackLayout(["", "", "c"]))
         let first = try XCTUnwrap(w1.meta.fallbackFile)
         let tiles1 = await store.fallbackTiles(for: id, transientCells: []).mapValues(FakeWorkImages.average)
@@ -181,7 +181,7 @@ final class WorksFallbackTests: XCTestCase {
         next.cellAssignments[0] = .init(localIdentifier: "x")
         next.cellAssignments[2] = .init(localIdentifier: "")
         let w2 = try await store.applyRematch(WorkRematchResult(layout: next, replacedCells: 1, blankCells: 2, droppedPhotos: 1),
-                                              base: w1.layout, for: id)
+                                              base: w1.layout, for: id, reasons: ["c": .deleted])
         XCTAssertEqual(w2.layout.cellAssignments.map(\.localIdentifier), ["x", "", ""])
         XCTAssertEqual(w2.layout.cellAssignments.map(\.fallback), [false, true, true])
         let second = try XCTUnwrap(w2.meta.fallbackFile)
@@ -215,7 +215,7 @@ final class WorksFallbackTests: XCTestCase {
         await h.controller.start()
         let preview = try XCTUnwrap(h.controller.state.summaries.first?.previewURL)
         try Data("not an image".utf8).write(to: preview)
-        h.existence.hide("b")
+        h.existence.delete("b")
         await h.controller.open(id)
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(work.layout, sampleLayout(["a", "", "c"]))
@@ -237,7 +237,7 @@ final class WorksFallbackTests: XCTestCase {
         let filesBefore = try h.files(id)
         let metaBefore = try Data(contentsOf: h.workDir(id).appendingPathComponent(FileWorksStore.metaFileName))
         h.images.state.update { $0.failAt = .fallback }
-        h.existence.hide("b")
+        h.existence.delete("b")
         await h.controller.open(id)
         XCTAssertNil(h.controller.state.missingLine)
         XCTAssertEqual(try h.files(id), filesBefore)
