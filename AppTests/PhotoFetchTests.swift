@@ -74,4 +74,21 @@ final class PhotoFetchTests: XCTestCase {
         let small = PhotoKitTargetImageLoader.targetSize(pixelWidth: 1200, pixelHeight: 1600)
         XCTAssertEqual(small, CGSize(width: 1200, height: 1600), "不放大")
     }
+
+    /// 源码守卫（模拟器 CI）：按 ID 取图走 visibleImages（取回后再滤 isHidden）；导出按 decision 处理 missing。
+    func testVisibleImagesAndExportSourceGuards() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let fetch = try String(contentsOf: root.appendingPathComponent("App/Adapters/PhotoFetch.swift"), encoding: .utf8)
+        let thumbs = try String(contentsOf: root.appendingPathComponent("App/Adapters/PhotoKitThumbnails.swift"), encoding: .utf8)
+        let exp = try String(contentsOf: root.appendingPathComponent("App/Export/LiveMosaicExporter.swift"), encoding: .utf8)
+        let loader = try String(contentsOf: root.appendingPathComponent("App/Adapters/PhotoKitThumbnailLoader.swift"), encoding: .utf8)
+        XCTAssertTrue(fetch.contains("func visibleImages(withLocalIdentifiers"))
+        XCTAssertTrue(fetch.contains("VisibleAssetFilter.accepting"))
+        XCTAssertTrue(fetch.contains("isHidden"))
+        XCTAssertTrue(thumbs.contains("PhotoFetch.visibleImages(withLocalIdentifiers:"))
+        XCTAssertTrue(thumbs.contains("return .missing"))
+        XCTAssertTrue(exp.contains("ExportFillStats.decision(afterHighQuality:"))
+        XCTAssertTrue(loader.contains("PhotoFetch.visibleImages(withLocalIdentifiers:"))
+        XCTAssertTrue(loader.contains("!a.isHidden"))
+    }
 }

@@ -91,6 +91,9 @@ public enum ThumbnailResult: Sendable {
     case image(PixelBuffer)
     /// 本地取不到（`requestImage` 返回 nil，或 `PHImageResultIsInCloudKey = true`）。内部状态 `unavailableLocal`。
     case unavailableLocal
+    /// PhotoFetch 取不到，或取回后 `isHidden == true`（已隐藏 / 已删除）。
+    /// 导出遇到此结果直接白格子，不走 128px 兜底（防御缓存泄漏）。
+    case missing
     /// 解码失败等其他错误。
     case failed
 }

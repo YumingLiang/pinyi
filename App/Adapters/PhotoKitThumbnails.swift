@@ -31,12 +31,12 @@ actor PhotoKitThumbnails: ThumbnailProviding {
     }
 
     private nonisolated func assets(_ ids: [String]) -> [PHAsset] {
-        // 走 PhotoFetch：隐藏 / 删除的照片取不到，按缺图处理（photo-picker-v0.1 §5.1）。不用 enumerateObjects 闭包。
-        PhotoKitLibrary.array(PhotoFetch.images(withLocalIdentifiers: ids))
+        // 走 PhotoFetch，取回后再滤 isHidden（双保险；QA 复验 ed6cce7）。不用 enumerateObjects 闭包。
+        PhotoFetch.visibleImages(withLocalIdentifiers: ids)
     }
 
     func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {
-        guard let asset = assets([assetID]).first else { return .failed }
+        guard let asset = assets([assetID]).first else { return .missing }
         let size = CGSize(width: request.targetPixelSize, height: request.targetPixelSize)
         let opts = options(request)
         let mode: PHImageContentMode = request.aspectFill ? .aspectFill : .aspectFit
@@ -71,7 +71,7 @@ actor PhotoKitThumbnails: ThumbnailProviding {
     /// 扫描 / 导出不走这里，行为不变。
     func cancellableThumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {
         if Task.isCancelled { return .failed }
-        guard let asset = assets([assetID]).first else { return .failed }
+        guard let asset = assets([assetID]).first else { return .missing }
         let size = CGSize(width: request.targetPixelSize, height: request.targetPixelSize)
         let opts = options(request)
         let mode: PHImageContentMode = request.aspectFill ? .aspectFill : .aspectFit

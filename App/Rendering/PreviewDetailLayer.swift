@@ -11,8 +11,8 @@ import MosaicAppCore
 /// - 底图（`AppModel.resultImage`）不动。本层只给「可见格子 + 外扩 1 圈」各放一张 256 / 512 / 1024 px 的方图，
 ///   由 `PreviewDetailTilesView` 放进 `ZoomableContainer` 的内容里（scaleEffect 之内）。
 /// - 取图 = 导出的 hq 请求（`fastFormat = false`、`fastResize = false`、`centerCropToSquare = true`，不联网），
-///   取不到退回 `.scanDisplay`（128 px）；还取不到就不放这一格，底图照常显示，不提示。
-///   照片一律经 `PhotoKitThumbnails` → `PhotoFetch.images(withLocalIdentifiers:)`，隐藏照片取不到。
+///   取不到先看 `ExportFillStats.decision`：`.missing`（隐藏 / 删除）不走 128 px；`.unavailableLocal` / `.failed` 才退回 `.scanDisplay`；再取不到就不放这一格，底图照常显示，不提示。
+///   照片一律经 `PhotoKitThumbnails` → `PhotoFetch.visibleImages(withLocalIdentifiers:)`，隐藏照片取不到。
 /// - 最多 6 个请求在飞；可见集合变化时，不再需要的请求立即取消（Task 取消 → `cancelImageRequest`）。
 /// - 缓存：`NSCache` 按字节计费，上限 64 MB，键 = assetID（同一照片多格只取一次；缓存档位低于所需时重取）。
 ///   离开结果页、换拼法（新 resultRevision）、内存警告时清空。
@@ -190,7 +190,7 @@ final class PreviewDetailLayer: ObservableObject {
                 hq.centerCropToSquare = true
                 var result = await thumbs.cancellableThumbnail(for: id, request: hq)
                 var fellBack = false
-                if case .image = result {} else if !Task.isCancelled {
+                if case .tryScanDisplay = ExportFillStats.decision(afterHighQuality: result), !Task.isCancelled {
                     result = await thumbs.cancellableThumbnail(for: id, request: .scanDisplay)
                     fellBack = true
                 }

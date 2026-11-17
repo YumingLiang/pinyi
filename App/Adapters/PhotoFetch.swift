@@ -77,8 +77,21 @@ enum PhotoFetch {
     }
 
     /// 按 localIdentifier 取回图片。被隐藏 / 删除 / 受限访问移出的照片取不到（调用方当缺图处理）。
+    /// 取回后请再用 `visibleImages(withLocalIdentifiers:)`，不要直接使用本结果里的 PHAsset：
+    /// `fetchAssets(withLocalIdentifiers:)` 对 `includeHiddenAssets` 的行为不完全一致。
     static func images(withLocalIdentifiers ids: [String]) -> PHFetchResult<PHAsset> {
         PHAsset.fetchAssets(withLocalIdentifiers: ids, options: options(imagesOnly: true, sources: Sources.any))
+    }
+
+    /// 按 ID 取回后再滤掉 `isHidden`（双保险）。不用 `enumerateObjects` 闭包。
+    /// 隐藏 / 删除 / 受限访问移出的照片不在结果里，调用方当缺图处理。
+    static func visibleImages(withLocalIdentifiers ids: [String]) -> [PHAsset] {
+        let result = images(withLocalIdentifiers: ids)
+        guard result.count > 0 else { return [] }
+        return VisibleAssetFilter.accepting(
+            result.objects(at: IndexSet(integersIn: 0..<result.count)),
+            isHidden: { $0.isHidden }
+        )
     }
 
     /// 集合的代表照片（封面）。选项同样走 `options`（写死 `includeHiddenAssets = false`），不允许 `options: nil`。
