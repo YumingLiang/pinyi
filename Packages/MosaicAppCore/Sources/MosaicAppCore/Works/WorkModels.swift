@@ -40,8 +40,14 @@ public enum WorkOrigin: String, Sendable, Codable, Hashable {
 /// 版本规则（升级兼容，QA「升级后重开旧作品」）：
 /// - `formatVersion` ≤ `currentFormatVersion`：照常读；后加的字段一律 `decodeIfPresent` + 默认值，旧作品不丢；
 /// - `formatVersion` > `currentFormatVersion`（新版写的、又装回旧版）：列表跳过、**不删除**，装回新版还能看到。
+///
+/// 版本历史：
+/// - v1：`fingerprint` = 整个布局 JSON（含叠加强度、seed）的 FNV-1a 64。
+/// - v2（AndyL 11-16 22:20 的作品规则）：`fingerprint` = 内容指纹 `WorkFingerprint`（格子分配 + cols/rows + targetCrop，
+///   不含叠加强度 / seed / 档位）；新增 `updatedAt`（只改叠加强度更新原作品时写，只记录、不排序、不显示）。
+///   读到 v1 时存储层按 layout.json 补算内容指纹并原子写回（见 `FileWorksStore`）。
 public struct WorkMeta: Sendable, Hashable, Codable {
-    public static let currentFormatVersion = 1
+    public static let currentFormatVersion = 2
 
     public var formatVersion: Int
     public var id: WorkID
@@ -52,17 +58,15 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public var tier: String?
     /// 不同照片数。
     public var photoCount: Int
-    /// 最近一次检查时缺失的原照片数（保存时为 0；打开 / 导出前会重新检查，见 `WorksController`）。
+    /// 最近一次检查时原照片用不了的格数（copy v1.3 起按格计；旧作品里可能是按张记的，打开时会重算覆盖）（保存时为 0；打开 / 导出前会重新检查，见 `WorksController`）。
     public var missingCount: Int
     public var overlayAlpha: Double
     /// 只用于追溯（不用于重算）。
     public var seed: UInt64?
-    /// 作品指纹（`WorkFingerprint`）：「同一张」只存一份（需求 B10 / B9-2）。
-    /// `fingerprintVersion` < `WorkFingerprint.currentVersion` 的旧作品（v1 = 整个布局 JSON 的 FNV，含叠加强度和 seed），
-    /// 由存储层读列表时按新口径补算并原子写回 meta.json（见 `FileWorksStore`）。
+    /// 内容指纹（v2 起为 `WorkFingerprint`）：「同一张」只存一份（需求 B10 / B9-2）。
     public var fingerprint: String
-    /// 指纹口径版本；旧 meta 没有这个字段 → 1。
-    public var fingerprintVersion: Int
+    /// 最近一次「只改叠加强度、更新原作品」的时间；从没更新过 / 旧数据为 nil。只记录，不参与排序，界面不显示（B10-7）。
+    public var updatedAt: Date?
     public var origin: WorkOrigin
     public var previewFile: String
     public var previewPixelWidth: Int
@@ -72,7 +76,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public init(formatVersion: Int = WorkMeta.currentFormatVersion, id: WorkID, createdAt: Date, columns: Int, rows: Int,
                 tier: String?, photoCount: Int, missingCount: Int, overlayAlpha: Double, seed: UInt64?, fingerprint: String,
                 origin: WorkOrigin, previewFile: String, previewPixelWidth: Int, previewPixelHeight: Int, targetFile: String?,
-                fingerprintVersion: Int = WorkFingerprint.currentVersion) {
+                updatedAt: Date? = nil) {
         self.formatVersion = formatVersion
         self.id = id
         self.createdAt = createdAt
@@ -84,7 +88,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         self.overlayAlpha = overlayAlpha
         self.seed = seed
         self.fingerprint = fingerprint
-        self.fingerprintVersion = fingerprintVersion
+        self.updatedAt = updatedAt
         self.origin = origin
         self.previewFile = previewFile
         self.previewPixelWidth = previewPixelWidth
@@ -94,7 +98,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case formatVersion, id, createdAt, columns, rows, tier, photoCount, missingCount, overlayAlpha, seed, fingerprint,
-             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, fingerprintVersion
+             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, updatedAt
     }
 
     public init(from decoder: any Decoder) throws {
@@ -110,7 +114,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         overlayAlpha = try c.decodeIfPresent(Double.self, forKey: .overlayAlpha) ?? 0
         seed = try c.decodeIfPresent(UInt64.self, forKey: .seed)
         fingerprint = try c.decodeIfPresent(String.self, forKey: .fingerprint) ?? ""
-        fingerprintVersion = try c.decodeIfPresent(Int.self, forKey: .fingerprintVersion) ?? 1
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
         origin = try c.decodeIfPresent(WorkOrigin.self, forKey: .origin) ?? .savedManually
         previewFile = try c.decodeIfPresent(String.self, forKey: .previewFile) ?? "preview.jpg"
         previewPixelWidth = try c.decodeIfPresent(Int.self, forKey: .previewPixelWidth) ?? 0
@@ -125,12 +129,10 @@ public struct WorkMeta: Sendable, Hashable, Codable {
 /// - 不同 seed 但格子分配恰好相同 → 同一张；
 /// - 「换一种拼法」/ 重新生成 / 改密度、裁剪、目标图、素材 → 格子分配（或网格、裁剪区）不同 → 新的一张。
 ///
+/// 导出档位不进指纹（B10-10）。旧版指纹（WorkMeta v1）见 `WorkMeta` 版本历史。
 /// 实现：对规范字节流做 FNV-1a 64（不经 JSON，1 万格也只要约 1 ms；Linux / iOS 一致）。
 /// 浮点按 1e-6 量化成整数，JSON 往返的末位差异不影响指纹。
 public enum WorkFingerprint {
-    /// v1 = 整个布局 JSON（含 params）的 FNV；v2 = 本口径。
-    public static let currentVersion = 2
-
     public static func of(_ layout: MosaicLayout) -> String {
         var h = FNV1a64()
         h.add(Array("pinyi.work.v2".utf8))
@@ -217,9 +219,26 @@ public struct WorkSummary: Sendable, Hashable, Identifiable {
     public var previewURL: URL
     public var id: WorkID { meta.id }
     public var createdAt: Date { meta.createdAt }
+    /// 最近一次保存时间：`updatedAt`，没有就用 `createdAt`（B10-12：旧数据多份同指纹时按它取最大的那份）。
+    public var lastSavedAt: Date { meta.updatedAt ?? meta.createdAt }
     public init(meta: WorkMeta, previewURL: URL) {
         self.meta = meta
         self.previewURL = previewURL
+    }
+
+    /// 保存时命中哪一份（存储层查重和结果页按钮状态共用同一口径）：
+    /// `preferred` 还在且指纹相同 → 就是它（结果页记住的作品 id，B10-13）；否则同指纹里 `lastSavedAt` 最大的那份
+    /// （B10-9/12；相同时取列表里靠前的，即 createdAt 更新的）。没有同指纹的 → nil。
+    public static func saveTarget(in list: [WorkSummary], fingerprint: String, preferred: WorkID? = nil) -> WorkSummary? {
+        if let preferred, let hit = list.first(where: { $0.id == preferred && $0.meta.fingerprint == fingerprint }) {
+            return hit
+        }
+        var best: WorkSummary?
+        for s in list where s.meta.fingerprint == fingerprint {
+            if let b = best, s.lastSavedAt <= b.lastSavedAt { continue }
+            best = s
+        }
+        return best
     }
 }
 
@@ -246,15 +265,18 @@ public struct WorkDraft: Sendable {
     public var tier: String?
     public var seed: UInt64?
     public var origin: WorkOrigin
+    /// 结果页记住的「当前结果对应的作品」（存过 / 更新过之后；经「再调一调」来回不丢）。还在且同指纹时优先命中它。
+    public var preferredWorkID: WorkID?
 
     public init(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, tier: String? = nil, seed: UInt64? = nil,
-                origin: WorkOrigin) {
+                origin: WorkOrigin, preferredWorkID: WorkID? = nil) {
         self.layout = layout
         self.target = target
         self.overlayAlpha = overlayAlpha
         self.tier = tier
         self.seed = seed
         self.origin = origin
+        self.preferredWorkID = preferredWorkID
     }
 }
 

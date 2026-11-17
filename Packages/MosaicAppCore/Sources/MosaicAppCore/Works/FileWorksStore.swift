@@ -1,5 +1,10 @@
 import Foundation
 import MosaicCore
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// 作品库（design/works-storage-v0.1.md）。
 public protocol WorksStore: Sendable {
@@ -30,8 +35,8 @@ public protocol WorksStore: Sendable {
 /// - layout.json 是不压缩的 JSON：Linux 的 Foundation 没有 `NSData.compressed(using:)`，又不允许手写 deflate；
 ///   细档 120×90 约 1 万格，JSON 约 1–2 MB，可接受。压缩（lzfse/zlib，仅 Apple）留作 formatVersion 2。
 /// - actor：保存 / 删除串行，「同一张不重复存」的查重不会被并发打穿（同指纹的保存排队，见 `inFlight`）。
-/// - 指纹口径升级（v1 → v2，AndyL 11-16 22:20）：读到 `fingerprintVersion` 旧的 meta 时，按 layout.json 补算新指纹，
-///   原子写回 meta.json（写不回去就只在内存里用，下次再试）；已经重复的旧作品不自动删。
+/// - 数据版本 v1 → v2（AndyL 11-16 22:20 的作品规则）：读到 `formatVersion == 1` 的 meta 时，按 layout.json 补算内容指纹，
+///   把 meta.json 原子写回成 v2（写不回去就只在内存里用，下次再试）；已经重复的旧作品不自动合并、不删。
 public actor FileWorksStore: WorksStore {
     public static let metaFileName = "meta.json"
     public static let layoutFileName = "layout.json"
@@ -99,7 +104,7 @@ public actor FileWorksStore: WorksStore {
             _ = try? await running.task.value
         }
         // 从这里到登记 inFlight 之间没有挂起点
-        let existing = listNow().first(where: { $0.meta.fingerprint == fingerprint })
+        let existing = WorkSummary.saveTarget(in: listNow(), fingerprint: fingerprint, preferred: draft.preferredWorkID)
         let task: Task<WorkSaveResult, any Error>
         if let existing {
             if WorkFingerprint.sameOverlay(existing.meta.overlayAlpha, draft.overlayAlpha) {
@@ -150,12 +155,12 @@ public actor FileWorksStore: WorksStore {
         }
     }
 
-    /// 只改了叠加强度（B10-3）：重画预览图、更新 layout.json 里的 `params.overlayAlpha` 和 meta 的叠加强度 / 预览图；
-    /// `id`、`createdAt`（→ 列表位置）、格子分配、目标图副本都不动。
+    /// 只改了叠加强度（B10-3、B10-8 覆盖不留历史）：重画预览图、更新 layout.json 里的 `params.overlayAlpha` 和 meta 的
+    /// 叠加强度 / 预览尺寸 / `updatedAt`；`id`、`createdAt`（→ 列表位置）、格子分配、目标图副本都不动，文件名也不变。
     ///
-    /// 原子性：新预览图先在 `.tmp-*` 里画好，再换个新文件名搬进作品目录（旧预览图还在，列表照常显示旧的）；
-    /// 然后原子写 layout.json，最后原子写 meta.json 指向新预览图（提交点），再删旧预览图。
-    /// 任何一步被杀：meta.json 要么是旧的（指向仍然存在的旧预览图），要么是新的；多出来的文件只是孤儿，不影响列表。
+    /// 原子性：新预览图先在 `.tmp-*` 里画好；确认作品目录还在后，依次 ① 原子写 layout.json ② `rename(2)` 把新预览图
+    /// 原子替换到原文件名（任何时刻预览图文件都存在，列表不会因为缺预览把作品判成损坏）③ 原子写 meta.json（提交点）。
+    /// 中途被杀最多是「预览 / layout 已是新强度、meta 还是旧强度」：作品完整可用，按钮显示「更新这张作品」，再点一次即一致。
     private func updateOverlay(_ existing: WorkSummary, with draft: WorkDraft, fingerprint: String) async throws -> WorkSaveResult {
         let fm = FileManager.default
         let id = existing.id
@@ -176,45 +181,43 @@ public actor FileWorksStore: WorksStore {
         try fm.createDirectory(at: temp, withIntermediateDirectories: true)
         let preview = try await images.writePreview(layout: layout, target: target, overlayAlpha: draft.overlayAlpha,
                                                     maxLongEdge: WorkImageLimits.previewLongEdge, into: temp)
-        // 挂起期间可能被删：作品目录不在了就不写回（不复活），按「没找到」处理
+        // 挂起期间可能被删：作品目录不在了就不写回（不复活、不换新 id），按「没找到」处理。从这里到结束没有挂起点。
         guard fm.fileExists(atPath: dir.appendingPathComponent(Self.metaFileName).path) else { throw WorksStoreError.notFound }
         var meta = try readSummary(id).meta
-        let ext = (preview.fileName as NSString).pathExtension
-        let newName = "preview-" + UUID().uuidString.prefix(8).lowercased() + (ext.isEmpty ? "" : "." + ext)
-        try fm.moveItem(at: temp.appendingPathComponent(preview.fileName), to: dir.appendingPathComponent(newName))
-        let oldPreview = meta.previewFile
-        do {
-            try Self.encoder().encode(layout).write(to: layoutURL, options: .atomic)
-            meta.overlayAlpha = draft.overlayAlpha
-            meta.previewFile = newName
-            meta.previewPixelWidth = preview.pixelWidth
-            meta.previewPixelHeight = preview.pixelHeight
-            meta.fingerprint = fingerprint
-            meta.fingerprintVersion = WorkFingerprint.currentVersion
-            try Self.encoder().encode(meta).write(to: dir.appendingPathComponent(Self.metaFileName), options: .atomic)
-        } catch {
-            try? fm.removeItem(at: dir.appendingPathComponent(newName))
-            throw error
-        }
-        if oldPreview != newName { try? fm.removeItem(at: dir.appendingPathComponent(oldPreview)) }
-        return WorkSaveResult(summary: WorkSummary(meta: meta, previewURL: dir.appendingPathComponent(newName)),
+        try Self.encoder().encode(layout).write(to: layoutURL, options: .atomic)
+        try Self.atomicReplace(temp.appendingPathComponent(preview.fileName), over: dir.appendingPathComponent(meta.previewFile))
+        meta.overlayAlpha = draft.overlayAlpha
+        meta.previewPixelWidth = preview.pixelWidth
+        meta.previewPixelHeight = preview.pixelHeight
+        meta.fingerprint = fingerprint
+        meta.formatVersion = WorkMeta.currentFormatVersion
+        meta.updatedAt = now()
+        try Self.encoder().encode(meta).write(to: dir.appendingPathComponent(Self.metaFileName), options: .atomic)
+        return WorkSaveResult(summary: WorkSummary(meta: meta, previewURL: dir.appendingPathComponent(meta.previewFile)),
                               outcome: .updatedOverlay)
     }
 
-    /// 旧作品（指纹口径 v1）按新口径补算指纹：读 layout.json 算 `WorkFingerprint`，原子写回 meta.json；
+    /// 同一卷上用 `rename(2)` 原子替换文件（目标存在就整体换掉，不会出现「没有这个文件」的瞬间）。
+    static func atomicReplace(_ source: URL, over destination: URL) throws {
+        guard rename(source.path, destination.path) == 0 else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: destination.path])
+        }
+    }
+
+    /// 旧作品（meta v1，指纹含叠加强度和 seed）按新口径补算指纹：读 layout.json 算 `WorkFingerprint`，原子写回 meta.json；
     /// 写不回去（只读卷等）就记在内存里，本进程内照样按新口径查重。layout.json 读不出来就保持原样（这种作品本来也打不开）。
     private func migrateFingerprintIfNeeded(_ meta: WorkMeta, in dir: URL) -> WorkMeta {
-        guard meta.fingerprintVersion < WorkFingerprint.currentVersion else { return meta }
+        guard meta.formatVersion < 2 else { return meta }
         var m = meta
         if let cached = migratedFingerprints[meta.id] {
             m.fingerprint = cached
-            m.fingerprintVersion = WorkFingerprint.currentVersion
+            m.formatVersion = WorkMeta.currentFormatVersion
             return m
         }
         guard let data = try? Data(contentsOf: dir.appendingPathComponent(Self.layoutFileName)),
               let layout = try? Self.decoder().decode(MosaicLayout.self, from: data) else { return meta }
         m.fingerprint = WorkFingerprint.of(layout)
-        m.fingerprintVersion = WorkFingerprint.currentVersion
+        m.formatVersion = WorkMeta.currentFormatVersion
         migratedFingerprints[meta.id] = m.fingerprint
         if let encoded = try? Self.encoder().encode(m) {
             try? encoded.write(to: dir.appendingPathComponent(Self.metaFileName), options: .atomic)
@@ -274,6 +277,9 @@ public actor FileWorksStore: WorksStore {
         d.dateDecodingStrategy = .millisecondsSince1970
         return d
     }
+
+    /// 内容指纹（= `WorkFingerprint.of`，QA works-rules 接口名 A2）：不含叠加强度、seed、档位。
+    public static func contentFingerprint(_ layout: MosaicLayout) -> String { WorkFingerprint.of(layout) }
 
     /// FNV-1a 64（不依赖 CryptoKit，Linux / iOS 一致）。v1 指纹 = 布局 JSON 的这个值；现在只给测试造旧作品用。
     static func fingerprint(_ data: Data) -> String {

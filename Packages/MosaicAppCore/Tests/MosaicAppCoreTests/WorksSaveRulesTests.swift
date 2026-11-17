@@ -12,7 +12,7 @@ private func ruleDraft(_ ids: [String], alpha: Double = 0.15, seed: UInt64 = 7, 
 
 /// 「我的作品」保存规则（AndyL 11-16 22:20 定，product/hd-export-req-v0.2.md B10，改过的 B2 / B5 / B9-2、6–9）：
 /// 指纹只看格子分配 + cols/rows + targetCrop；只改叠加强度 → 更新原作品；换拼法 → 新存；导出不自动存；
-/// 旧作品指纹按新口径补算；已有重复不自动删；按钮状态（`works.saved`）。
+/// 旧作品指纹按新口径补算；已有重复不自动删；按钮状态（`preview.saved_to_works`）。
 final class WorksSaveRulesTests: XCTestCase {
     private func makeStore(_ dir: URL, images: FakeWorkImages = FakeWorkImages(),
                            clock: FakeWallClock = FakeWallClock()) -> FileWorksStore {
@@ -24,14 +24,15 @@ final class WorksSaveRulesTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    /// 把一个已存作品改成「旧版本写的」：指纹 = 旧口径（布局 JSON 的 FNV），没有 fingerprintVersion 字段。
+    /// 把一个已存作品改成「旧版本写的」：formatVersion 1，指纹 = 旧口径（布局 JSON 的 FNV），没有 updatedAt。
     private func makeLegacy(_ dir: URL, _ id: WorkID) throws {
         let workDir = dir.appendingPathComponent(id.directoryName)
         let layoutData = try Data(contentsOf: workDir.appendingPathComponent("layout.json"))
         let metaURL = workDir.appendingPathComponent("meta.json")
         var obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)) as? [String: Any])
         obj["fingerprint"] = FileWorksStore.fingerprint(layoutData)
-        obj.removeValue(forKey: "fingerprintVersion")
+        obj["formatVersion"] = 1
+        obj.removeValue(forKey: "updatedAt")
         try JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]).write(to: metaURL)
     }
 
@@ -97,11 +98,15 @@ final class WorksSaveRulesTests: XCTestCase {
         XCTAssertEqual(list.map(\.id), [b.summary.id, a.summary.id], "列表位置不变")
         let updated = try XCTUnwrap(list.first { $0.id == a.summary.id })
         XCTAssertEqual(updated.meta.createdAt, a.summary.meta.createdAt, "日期不变")
+        XCTAssertNil(a.summary.meta.updatedAt, "新存的作品没有 updatedAt")
+        let updatedAt = try XCTUnwrap(updated.meta.updatedAt, "更新时记 updatedAt")
+        XCTAssertGreaterThan(updatedAt, b.summary.meta.createdAt, "updatedAt 只记录，不影响列表顺序")
         XCTAssertEqual(updated.meta.overlayAlpha, 0.25)
         XCTAssertEqual(updated.meta.seed, 7, "seed 只作追溯，不跟着改")
-        XCTAssertNotEqual(updated.previewURL, oldPreview, "新预览图换了文件名（列表按文件重新解码）")
+        XCTAssertEqual(updated.previewURL, oldPreview, "覆盖不留历史：原文件名原地替换（B10-8）")
         XCTAssertTrue(FileManager.default.fileExists(atPath: updated.previewURL.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: oldPreview.path), "旧预览图删掉")
+        let files = Set(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent(a.summary.id.directoryName).path))
+        XCTAssertEqual(files, ["meta.json", "layout.json", "preview.jpg", "target.jpg"], "没有多出历史预览")
 
         let work = try await store.load(a.summary.id)
         XCTAssertEqual(work.layout.params.overlayAlpha, 0.25, "layout.json 的叠加参数更新（从作品导出按新值）")
@@ -137,21 +142,21 @@ final class WorksSaveRulesTests: XCTestCase {
         XCTAssertEqual(n, 3)
     }
 
-    /// 旧作品（v1 指纹，无 fingerprintVersion）：列表时按新口径补算并原子写回 meta.json；之后同格子的保存命中它。
+    /// 旧作品（meta v1，指纹含叠加强度和 seed）：列表时按新口径补算并原子写回 meta.json；之后同格子的保存命中它。
     func testLegacyFingerprintBackfilledAndWrittenBack() async throws {
         let dir = makeTempDir().appendingPathComponent("Works")
         let images = FakeWorkImages()
         let old = try await makeStore(dir, images: images).save(ruleDraft(["a", "b", "c"], alpha: 0.15, seed: 7))
         try makeLegacy(dir, old.summary.id)
         let before = try readMetaJSON(dir, old.summary.id)
-        XCTAssertNil(before["fingerprintVersion"])
+        XCTAssertEqual(before["formatVersion"] as? Int, 1)
 
         let upgraded = makeStore(dir, images: images)   // 升级后的新进程
         let list = await upgraded.list()
         XCTAssertEqual(list.first?.meta.fingerprint, WorkFingerprint.of(sampleLayout(["a", "b", "c"])))
-        XCTAssertEqual(list.first?.meta.fingerprintVersion, WorkFingerprint.currentVersion)
+        XCTAssertEqual(list.first?.meta.formatVersion, WorkMeta.currentFormatVersion)
         let after = try readMetaJSON(dir, old.summary.id)
-        XCTAssertEqual(after["fingerprintVersion"] as? Int, WorkFingerprint.currentVersion, "写回 meta.json")
+        XCTAssertEqual(after["formatVersion"] as? Int, 2, "写回 meta.json（v2）")
         XCTAssertEqual(after["fingerprint"] as? String, WorkFingerprint.of(sampleLayout(["a", "b", "c"])))
         XCTAssertEqual(after["createdAt"] as? Double, before["createdAt"] as? Double, "其余字段不变")
 
@@ -248,6 +253,7 @@ final class WorksSaveRulesTests: XCTestCase {
         XCTAssertEqual(list.map(\.id), [a.summary.id])
         XCTAssertEqual(list.first?.meta.overlayAlpha, 0.10)
         XCTAssertEqual(list.first?.previewURL, a.summary.previewURL)
+        XCTAssertEqual(try Data(contentsOf: a.summary.previewURL), FakeWorkImages.previewBytes(sampleLayout(["a", "b", "c"])), "预览图没被动")
         let layout = try await store.load(a.summary.id).layout
         XCTAssertEqual(layout.params.overlayAlpha, 0.10)
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix(".") }
@@ -298,6 +304,7 @@ final class WorksSaveButtonStateTests: XCTestCase {
         try h.newResult(["a", "b", "c"])
         XCTAssertEqual(h.controller.state.saveStatus, .idle)
         XCTAssertTrue(h.controller.state.saveStatus.canSave)
+        XCTAssertFalse(h.controller.state.saveStatus.canUpdate)
 
         var seen: [WorkSaveStatus] = []
         let token = h.controller.observe { seen.append($0.saveStatus) }
@@ -306,12 +313,14 @@ final class WorksSaveButtonStateTests: XCTestCase {
         guard case .saved(let id) = h.controller.state.saveStatus else { return XCTFail("应已存") }
         XCTAssertTrue(seen.contains(.saving))
         XCTAssertFalse(seen.dropFirst().contains(.idle), "存完直接变已存，不闪回可存")
-        XCTAssertFalse(h.controller.state.saveStatus.canSave, "已存且没改：works.saved 不可点")
+        XCTAssertFalse(h.controller.state.saveStatus.isEnabled, "已存且没改：preview.saved_to_works 不可点")
 
         // 只改叠加强度 → 恢复可点；改回原值 → 又是已存
         h.setAlpha(0.25)
-        XCTAssertEqual(h.controller.state.saveStatus, .overlayChanged(id))
-        XCTAssertTrue(h.controller.state.saveStatus.canSave)
+        XCTAssertEqual(h.controller.state.saveStatus, .needsUpdate(id))
+        XCTAssertTrue(h.controller.state.saveStatus.canUpdate, "works.update「更新这张作品」")
+        XCTAssertFalse(h.controller.state.saveStatus.canSave, "不是新存")
+        XCTAssertTrue(h.controller.state.saveStatus.isEnabled)
         h.setAlpha(0.15)
         XCTAssertEqual(h.controller.state.saveStatus, .saved(id))
 
@@ -334,7 +343,7 @@ final class WorksSaveButtonStateTests: XCTestCase {
         try h.newResult(["a", "b", "c"], seed: 123)
         XCTAssertEqual(h.controller.state.saveStatus, .saved(id))
         h.setAlpha(0.15)
-        XCTAssertEqual(h.controller.state.saveStatus, .overlayChanged(id))
+        XCTAssertEqual(h.controller.state.saveStatus, .needsUpdate(id))
 
         // 删掉对应作品 → 回到可存
         h.controller.deleteTapped(id)
@@ -384,6 +393,63 @@ final class WorksSaveButtonStateTests: XCTestCase {
         h.controller.stop()
     }
 
+    /// B10-6：只改叠加强度点「更新这张作品」→ 轻提示 works.updated，约 2 秒（这里调短）后自动消失；新存不出提示。
+    func testUpdatedToastShownOnceAndAutoDismissed() async throws {
+        let h = H()
+        h.controller.toastDuration = .milliseconds(50)
+        await h.controller.start()
+        try h.newResult(["a", "b", "c"])
+        await h.controller.saveCurrentResultTapped()
+        XCTAssertNil(h.controller.state.toast, "新存不加提示")
+        guard case .saved(let id) = h.controller.state.saveStatus else { return XCTFail("应已存") }
+
+        h.setAlpha(0.22)
+        XCTAssertEqual(h.controller.state.saveStatus, .needsUpdate(id))
+        await h.controller.saveCurrentResultTapped()
+        XCTAssertEqual(h.controller.state.toast, .worksUpdated)
+        XCTAssertEqual(h.controller.state.saveStatus, .saved(id), "更新后回到 preview.saved_to_works 不可点")
+        await waitForWorks(h.controller, "轻提示自动消失") { $0.toast == nil }
+        XCTAssertEqual(h.controller.state.saveStatus, .saved(id))
+
+        // 已存且没改再点（按钮本来不可点）：不再出提示
+        await h.controller.saveCurrentResultTapped()
+        XCTAssertNil(h.controller.state.toast)
+        h.controller.stop()
+    }
+
+    /// B10-9：旧数据里的多份同指纹不合并；按钮状态和保存都命中 createdAt 最大的一份，更新不改列表顺序。
+    func testDuplicatesNewestIsTargetedAndOrderKept() async throws {
+        let h = H()
+        await h.controller.start()
+        try h.newResult(["a", "b", "c"])
+        await h.controller.saveCurrentResultTapped()
+        guard case .saved(let first) = h.controller.state.saveStatus else { return XCTFail("应已存") }
+        try h.newResult(["x", "y", "z"])
+        await h.controller.saveCurrentResultTapped()
+        guard case .saved(let other) = h.controller.state.saveStatus else { return XCTFail("应已存") }
+        // 造一份同格子（["a","b","c"]）但更新的重复：把 other 的布局改成同格子、强度 0.40（模拟旧版本留下的重复）
+        var dup = sampleLayout(["a", "b", "c"])
+        dup.params.overlayAlpha = 0.40
+        let otherDir = h.dir.appendingPathComponent(other.directoryName)
+        try FileWorksStore.encoder().encode(dup).write(to: otherDir.appendingPathComponent("layout.json"))
+        let metaURL = otherDir.appendingPathComponent("meta.json")
+        var obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)) as? [String: Any])
+        obj["formatVersion"] = 1
+        obj["overlayAlpha"] = 0.40
+        try JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]).write(to: metaURL)
+
+        try h.newResult(["a", "b", "c"], seed: 5)
+        await h.controller.reload()
+        XCTAssertEqual(h.controller.state.summaries.map(\.id), [other, first], "不合并，都在")
+        XCTAssertEqual(h.controller.state.saveStatus, .needsUpdate(other), "命中 createdAt 最大的一份（强度 0.40 ≠ 0.15）")
+        await h.controller.saveCurrentResultTapped()
+        XCTAssertEqual(h.controller.state.saveStatus, .saved(other))
+        XCTAssertEqual(h.controller.state.summaries.map(\.id), [other, first], "更新不改顺序")
+        XCTAssertEqual(h.controller.state.summaries.first { $0.id == first }?.meta.overlayAlpha, 0.15, "旧的那份不动")
+        XCTAssertEqual(h.controller.state.summaries.first { $0.id == other }?.meta.overlayAlpha, 0.15)
+        h.controller.stop()
+    }
+
     /// 导出成功（经中继）不进库，按钮仍可点；只改叠加后导出也不更新原作品。
     func testExportViaRelayNeverSaves() async throws {
         let h = H()
@@ -406,7 +472,7 @@ final class WorksSaveButtonStateTests: XCTestCase {
         n = await h.store.list().count
         XCTAssertEqual(n, 1)
         XCTAssertEqual(h.controller.state.summaries.first?.meta.overlayAlpha, 0.15, "导出不更新作品")
-        XCTAssertEqual(h.controller.state.saveStatus, .overlayChanged(id), "未保存的叠加改动仍待存")
+        XCTAssertEqual(h.controller.state.saveStatus, .needsUpdate(id), "未保存的叠加改动仍待更新")
         XCTAssertEqual(h.images.state.get().previews, 1)
         h.controller.stop()
     }

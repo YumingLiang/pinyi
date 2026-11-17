@@ -23,12 +23,12 @@ final class WorksModel: ObservableObject {
 
     private func stateChanged(_ s: WorksState) {
         let previousOpened = state.opened?.id
-        let previousPreview = state.opened?.summary.previewURL
+        let previousSummary = state.opened?.summary   // 更新叠加后预览文件名不变，按 meta 判断要不要重解码
         state = s
         if s.opened?.id != previousOpened {
             detailZoom.reset()
         }
-        if s.opened?.id != previousOpened || s.opened?.summary.previewURL != previousPreview {
+        if s.opened?.id != previousOpened || s.opened?.summary != previousSummary {
             openedPreview = s.opened.flatMap { ImageIOWorkImages.loadImage($0.summary.previewURL, maxPixel: WorkImageLimits.previewLongEdge) }
         }
     }

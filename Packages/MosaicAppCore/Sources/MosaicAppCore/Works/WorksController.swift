@@ -1,26 +1,55 @@
 import Foundation
 import MosaicCore
 
-/// 「存到我的作品」按钮状态（结果页，需求 B2 / B10-5）。
+/// 「存到我的作品」按钮状态（结果页，需求 B2 / B10-5、6）。
 ///
 /// 由「当前结果 vs 作品库」算出来（`WorksController.refreshSaveStatus()`），不靠记住「点过保存」：
-/// 当前结果的指纹（`WorkFingerprint`）在库里 → 已存；叠加强度也一样 → `.saved`（显示 `works.saved`，不可点），
-/// 只差叠加强度 → `.overlayChanged`（恢复可点，点了更新原作品）。所以从作品打开的结果、上次存过又重新生成出同一张的结果，规则都一样。
+/// 当前结果的内容指纹（`WorkFingerprint`）在库里 → 叠加强度也一样 `.saved`（`preview.saved_to_works`，不可点），
+/// 只差叠加强度 → `.needsUpdate`（`works.update`「更新这张作品」，点了直接覆盖原作品，不弹确认）。
+/// 所以从作品打开的结果、上次存过又重新生成出同一张的结果，规则都一样。
 public enum WorkSaveStatus: Sendable, Hashable {
-    /// 没存过：按钮「存到我的作品」可点。
+    /// 没存过：`preview.save_to_works`「存到我的作品」，点了新存一份。
     case idle
     case saving
-    /// 当前结果已存且没改动：显示「已存到我的作品」，不可点。
+    /// 当前结果已存且没改动：`preview.saved_to_works`「已存到我的作品」，不可点。
     case saved(WorkID)
-    /// 当前结果是这份作品，但叠加强度改了还没存：按钮可点，点了更新原作品（不另存）。
-    case overlayChanged(WorkID)
+    /// 当前结果就是这份作品，只改了叠加强度：`works.update`「更新这张作品」，点了更新原作品（不另存、不弹确认）。
+    case needsUpdate(WorkID)
+    /// 上次保存 / 更新失败（结果没变就一直显示 `works.save_failed`，可重试）。
     case failed
 
-    /// 按钮能不能点。
+    /// 点了会新存一份。
     public var canSave: Bool {
         switch self {
-        case .idle, .overlayChanged, .failed: return true
-        case .saving, .saved: return false
+        case .idle, .failed: return true
+        default: return false
+        }
+    }
+
+    /// 点了会更新原作品。
+    public var canUpdate: Bool {
+        if case .needsUpdate = self { return true }
+        return false
+    }
+
+    /// 按钮能不能点。
+    public var isEnabled: Bool { canSave || canUpdate }
+}
+
+/// 未保存提示的种类（B10-4 / B10-11；QA works-rules A8）。弹窗由 feat/start-new「再拼一张」接线，本分支只提供判断。
+public enum UnsavedPrompt: Sendable, Hashable {
+    /// 不用弹：没有结果，或当前结果已存且没改动。
+    case none
+    /// 当前结果没存进作品（导出过不算存过）→ `quick.unsaved.title`；「保存」= 新存。
+    case unsaved
+    /// 存过的作品只改了叠加强度还没存 → `quick.unsaved.update_title`；「保存」= 更新这份。
+    case alphaChanged(WorkID)
+
+    public var titleKey: L10nKey? {
+        switch self {
+        case .none: return nil
+        case .unsaved: return .quickUnsavedTitle
+        case .alphaChanged: return .quickUnsavedUpdateTitle
         }
     }
 }
@@ -28,7 +57,7 @@ public enum WorkSaveStatus: Sendable, Hashable {
 /// 打开中的作品（查看页）。
 public struct OpenedWork: Sendable, Hashable {
     public var summary: WorkSummary
-    /// 缺失的原照片数；nil = 还在检查。
+    /// 原照片现在用不了的格数；nil = 还在检查。
     public var missingCount: Int?
     public var id: WorkID { summary.id }
     public init(summary: WorkSummary, missingCount: Int?) {
@@ -46,8 +75,10 @@ public struct WorksState: Sendable, Hashable {
     /// 删除二次确认弹窗（`works.delete.confirm`）对应的作品。
     public var pendingDelete: WorkID?
     public var saveStatus: WorkSaveStatus = .idle
-    /// 打开 / 删除失败等一次性提示。
+    /// 打开 / 删除失败等一次性提示（需要点「好」关掉的 alert）。
     public var notice: L10nKey?
+    /// 约 2 秒自动消失的轻提示（目前只有更新成功的 `works.updated`，B10-6）。
+    public var toast: L10nKey?
 
     public init() {}
 
@@ -55,7 +86,7 @@ public struct WorksState: Sendable, Hashable {
     public var isEmpty: Bool { isLoaded && summaries.isEmpty }
     /// 列表底部常驻提示（需求 B8）。
     public static let keepHintKey = L10nKey.worksKeepHint
-    /// 查看页 / 导出前的缺失提示（`works.missing`，参数：张数）。
+    /// 查看页 / 导出前的缺失提示（`works.missing`，参数：格数）。
     public var missingLine: LocalizedLine? {
         guard let n = opened?.missingCount, n > 0 else { return nil }
         return LocalizedLine(.worksMissing, [CountFormat.grouped(n)])
@@ -134,6 +165,12 @@ public final class WorksController {
     private var fingerprintCache: (key: FingerprintKey, value: String)?
     /// 保存失败时的结果（revision + 叠加强度）：结果没变就一直显示失败，变了才回到按库计算的状态。
     private var failedKey: StatusKey?
+    /// 轻提示自动消失的时长（测试可调短）。
+    public var toastDuration: Duration = .seconds(2)
+    private var toastTask: Task<Void, Never>?
+    /// 结果页记住的「当前结果对应的作品」（B10-13）：存 / 更新成功后记下，和结果版本号绑定。
+    /// 「再调一调」只改叠加强度再回来不重新生成、版本号不变 → 一直记得；换拼法 / 重新生成（版本号变了）才清掉。
+    private var remembered: (revision: Int, id: WorkID)?
 
     private struct FingerprintKey: Equatable {
         var revision: Int
@@ -208,6 +245,7 @@ public final class WorksController {
     public func resultDidChange(revision: Int) {
         guard revision != lastRevision else { return }
         lastRevision = revision
+        if let r = remembered, r.revision != revision { remembered = nil }
         refreshSaveStatus()
     }
 
@@ -215,7 +253,7 @@ public final class WorksController {
     public func resultContextDidChange() { refreshSaveStatus() }
 
     /// 按「当前结果 vs 作品库」算按钮状态（B10-5）：
-    /// 库里有同指纹作品（多份时取最新的，和存储层查重一致）→ 叠加强度相同 `.saved`，不同 `.overlayChanged`；没有 → `.idle`。
+    /// 库里有同指纹作品（结果页记住的作品优先，否则取 updatedAt/createdAt 最新的一份，和存储层查重同一个 `WorkSummary.saveTarget`）→ 叠加强度相同 `.saved`，不同 `.needsUpdate`；没有 → `.idle`。
     /// 正在存时不动；存失败后结果没变就保持 `.failed`。
     public func refreshSaveStatus() {
         if case .saving = state.saveStatus { return }
@@ -226,11 +264,20 @@ public final class WorksController {
         state.saveStatus = computeSaveStatus(ctx)
     }
 
+    /// 当前结果记住的作品 id（只对同一结果版本号有效）。
+    public var currentWorkID: WorkID? { rememberedID(for: resultContext().resultRevision) }
+
+    private func rememberedID(for revision: Int) -> WorkID? {
+        guard let r = remembered, r.revision == revision else { return nil }
+        return r.id
+    }
+
     private func computeSaveStatus(_ ctx: WorkResultContext) -> WorkSaveStatus {
         guard let layout = ctx.layout else { return .idle }
         let fp = currentFingerprint(layout, revision: ctx.resultRevision)
-        guard let match = state.summaries.first(where: { $0.meta.fingerprint == fp }) else { return .idle }
-        return WorkFingerprint.sameOverlay(match.meta.overlayAlpha, ctx.overlayAlpha) ? .saved(match.id) : .overlayChanged(match.id)
+        guard let match = WorkSummary.saveTarget(in: state.summaries, fingerprint: fp,
+                                                 preferred: rememberedID(for: ctx.resultRevision)) else { return .idle }
+        return WorkFingerprint.sameOverlay(match.meta.overlayAlpha, ctx.overlayAlpha) ? .saved(match.id) : .needsUpdate(match.id)
     }
 
     private func currentFingerprint(_ layout: MosaicLayout, revision: Int) -> String {
@@ -245,7 +292,25 @@ public final class WorksController {
 
     // MARK: 保存
 
-    /// 结果页「存到我的作品」（B10）：没存过 → 新存一份；只改了叠加强度 → 更新原作品；已存且没改 → 什么都不写。
+    /// 现在离开结果页要不要弹未保存提示（按「当前结果 vs 作品库」算，和按钮状态同一口径；保存中按「没存」算）。
+    public var unsavedPrompt: UnsavedPrompt {
+        let ctx = resultContext()
+        guard ctx.layout != nil else { return .none }
+        switch computeSaveStatus(ctx) {
+        case .saved: return .none
+        case .needsUpdate(let id): return .alphaChanged(id)
+        default: return .unsaved
+        }
+    }
+
+    /// 叠加强度变了（QA works-rules 接口名 A6；等同 `resultContextDidChange()`，强度以 `resultContext` 为准）。
+    public func overlayAlphaDidChange(_ alpha: Double) {
+        _ = alpha
+        refreshSaveStatus()
+    }
+
+    /// 结果页「存到我的作品」/「更新这张作品」（B10）：没存过 → 新存一份；只改了叠加强度 → 更新原作品（不弹确认），
+    /// 成功后出约 2 秒的轻提示 `works.updated`；已存且没改 → 什么都不写。
     public func saveCurrentResultTapped() async {
         if case .saving = state.saveStatus { return }
         let ctx = resultContext()
@@ -253,8 +318,11 @@ public final class WorksController {
         let key = StatusKey(revision: ctx.resultRevision, overlayAlpha: ctx.overlayAlpha)
         state.saveStatus = .saving
         do {
-            _ = try await store.save(WorkDraft(layout: layout, target: ctx.target, overlayAlpha: ctx.overlayAlpha, tier: nil,
-                                               seed: layout.params.seed, origin: .savedManually))
+            let result = try await store.save(WorkDraft(layout: layout, target: ctx.target, overlayAlpha: ctx.overlayAlpha, tier: nil,
+                                                        seed: layout.params.seed, origin: .savedManually,
+                                                        preferredWorkID: rememberedID(for: ctx.resultRevision)))
+            remembered = (ctx.resultRevision, result.summary.id)
+            if result.outcome == .updatedOverlay { showToast(.worksUpdated) }
             // 刷新列表（新增 / 预览图换了），再按库重算按钮状态（期间结果可能又变了，按最新的算）
             let list = await store.list()
             state.summaries = list
@@ -308,12 +376,32 @@ public final class WorksController {
 
     public func dismissNotice() { state.notice = nil }
 
-    /// 缺失的原照片张数（去重后）。
+    /// 轻提示：显示 `toastDuration` 后自动消失；新的会顶掉旧的。
+    private func showToast(_ key: L10nKey) {
+        toastTask?.cancel()
+        state.toast = key
+        let duration = toastDuration
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled, let self else { return }
+            if self.state.toast == key { self.state.toast = nil }
+        }
+    }
+
+    public func dismissToast() {
+        toastTask?.cancel()
+        toastTask = nil
+        state.toast = nil
+    }
+
+    /// 原照片现在用不了的**格数**（copy v1.3：`works.missing` 按格计，同一张照片用在几格就算几格；空格子不算）。
     public func missingCount(_ layout: MosaicLayout) async -> Int {
         let ids = layout.uniqueAssetIDs
         guard !ids.isEmpty else { return 0 }
         let present = await existence.existingIdentifiers(among: ids)
-        return ids.reduce(0) { $0 + (present.contains($1) ? 0 : 1) }
+        return layout.cellAssignments.reduce(0) { n, cell in
+            n + (cell.localIdentifier.isEmpty || present.contains(cell.localIdentifier) ? 0 : 1)
+        }
     }
 
     // MARK: 再导出
@@ -334,7 +422,11 @@ public final class WorksController {
     public func deleteTapped(_ id: WorkID) { state.pendingDelete = id }
     public func deleteCancelled() { state.pendingDelete = nil }
 
-    public func deleteConfirmed() async {
+    @available(*, deprecated, message: "确认按钮请直接带 id 调 deleteConfirmed(_:)：弹窗收起时 pendingDelete 会先被 deleteCancelled() 清掉")
+    public func deleteConfirmed() async { await confirmPendingDelete() }
+
+    /// 按 `pendingDelete` 删除（无参旧入口的实现；没有待确认的就什么都不做）。只给测试和旧入口用，UI 不要用。
+    func confirmPendingDelete() async {
         guard let id = state.pendingDelete else { return }
         await deleteConfirmed(id)
     }
@@ -358,5 +450,7 @@ public final class WorksController {
     public func stop() {
         relayTask?.cancel()
         relayTask = nil
+        toastTask?.cancel()
+        toastTask = nil
     }
 }

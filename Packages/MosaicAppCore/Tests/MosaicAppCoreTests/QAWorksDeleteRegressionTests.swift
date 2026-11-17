@@ -71,7 +71,7 @@ final class QAWorksDeleteRegressionTests: XCTestCase {
         /// 走 controller 的二次确认删除（UI 正确接线时的调用顺序：先 tapped，再 confirmed）。
         @MainActor func delete(_ id: WorkID) async {
             controller.deleteTapped(id)
-            await controller.deleteConfirmed()
+            await controller.confirmPendingDelete()   // 原无参 deleteConfirmed() 已 deprecated（-warnings-as-errors），改调同一实现
         }
 
         func exists(_ id: WorkID) -> Bool { FileManager.default.fileExists(atPath: dir.appendingPathComponent(id.directoryName).path) }
@@ -280,14 +280,14 @@ final class QAWorksDeleteRegressionTests: XCTestCase {
 
     // MARK: B4–B6 查重口径（AndyL 11-16 22:20 定，需求 B10；原 characterize 现状记录按新规则改）
 
-    /// B4：结果页存 →「调整」改叠加滑杆 → 导出：不新增；按钮变回可点（.overlayChanged）→ 再存：仍一份，原作品叠加强度更新。
+    /// B4：结果页存 →「调整」改叠加滑杆 → 导出：不新增；按钮变「更新这张作品」（.needsUpdate）→ 再存：仍一份，原作品叠加强度更新。
     func testRule_SameCellsDifferentAlphaUpdatesOneWork() async throws {
         let h = H()
         await h.controller.start()
         let a = try await h.saveNew(["a", "b", "c"])
         h.result.update { $0.alpha = 0.25 }                       // 不换结果，revision 不变
         h.controller.resultContextDidChange()
-        XCTAssertEqual(h.controller.state.saveStatus, .overlayChanged(a))
+        XCTAssertEqual(h.controller.state.saveStatus, .needsUpdate(a))
         var l = try XCTUnwrap(h.result.get().layout); l.params.overlayAlpha = 0.25
         await h.controller.exportSucceeded(layout: l)
         XCTAssertEqual(h.controller.state.count, 1, "导出不自动存")

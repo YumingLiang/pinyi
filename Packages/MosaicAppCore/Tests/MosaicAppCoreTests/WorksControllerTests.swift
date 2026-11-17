@@ -133,16 +133,16 @@ final class WorksControllerTests: XCTestCase {
 
         h.existence.deleted.set(["a", "d", "zzz"])
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 2, "去重后按张数算：a、d")
-        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["2"]))
-        XCTAssertEqual(h.controller.state.summaries.first?.meta.missingCount, 2)
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 3, "按格算（copy v1.3）：a 两格 + d 一格")
+        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["3"]))
+        XCTAssertEqual(h.controller.state.summaries.first?.meta.missingCount, 3)
         let persisted = await FileWorksStore(directory: h.dir, images: h.images).list().first?.meta.missingCount
-        XCTAssertEqual(persisted, 2)
+        XCTAssertEqual(persisted, 3)
 
         // 导出前再查一次（期间又删了一张）；按保存的布局导出，带目标图副本
         h.existence.deleted.set(["a", "b", "d"])
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 3)
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 5, "a、b 各两格 + d 一格")
         XCTAssertEqual(h.exporter.calls.count, 1)
         XCTAssertEqual(h.exporter.calls.first?.0, sampleLayout(["a", "b", "c", "a", "b", "d"]), "导出用保存的显式布局")
         XCTAssertEqual(h.exporter.calls.first?.1, true, "目标图副本读回来做叠加")
@@ -189,11 +189,11 @@ final class WorksControllerTests: XCTestCase {
         XCTAssertNil(h.controller.state.pendingDelete)
         XCTAssertEqual(h.controller.state.count, 1)
 
-        await h.controller.deleteConfirmed()   // 没有待确认的：什么都不做
+        await h.controller.confirmPendingDelete()   // 无参旧入口（已 deprecated）的实现：没有待确认的就什么都不做
         XCTAssertEqual(h.controller.state.count, 1)
 
         h.controller.deleteTapped(id)
-        await h.controller.deleteConfirmed()
+        await h.controller.confirmPendingDelete()
         XCTAssertEqual(h.controller.state.count, 0)
         XCTAssertNil(h.controller.state.opened)
         XCTAssertNil(h.controller.openedWork)

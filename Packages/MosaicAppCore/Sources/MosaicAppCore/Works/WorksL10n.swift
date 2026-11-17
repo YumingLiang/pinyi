@@ -15,15 +15,19 @@ public extension L10nKey {
     static let worksMissing = L10nKey(rawValue: "works.missing")
     static let worksOpenFailed = L10nKey(rawValue: "works.open_failed")
     static let worksDeleteFailed = L10nKey(rawValue: "works.delete_failed")
-    /// 作品列表长按菜单唯一一项（v1.5）。
-    static let worksMenuDelete = L10nKey(rawValue: "works.menu.delete")
     /// 「存到我的作品」按钮：已存且无改动，不可点（v1.5，B10-5）。
-    static let worksSaved = L10nKey(rawValue: "works.saved")
+    /// 存过的作品只改了叠加强度时的按钮（v1.5，B10-6）。
+    static let worksUpdate = L10nKey(rawValue: "works.update")
+    /// 更新成功轻提示，约 2 秒自动消失（v1.5，B10-6）。
+    static let worksUpdated = L10nKey(rawValue: "works.updated")
+    /// 未保存提示：存过但叠加强度改了没存时的标题（v1.5，B10-11；弹窗本身由 feat/start-new 接线）。
+    /// 放在这里而不是 QuickL10n.swift：那个文件与 feat/start-new 保持逐字相同，合并时不冲突。
+    static let quickUnsavedUpdateTitle = L10nKey(rawValue: "quick.unsaved.update_title")
 
     /// 本模块用到的全部 key（`WorksL10nTests` 断言都在 Localizable.strings 里）。
     static let allWorks: [L10nKey] = [
         worksEntry, worksNavTitle, worksEmpty, worksKeepHint, previewSaveToWorks, previewSavedToWorks, worksSaveFailed,
         worksExport, worksDelete, worksDeleteConfirm, worksDeleteConfirmOK, worksMissing, worksOpenFailed, worksDeleteFailed,
-        worksMenuDelete, worksSaved,
+        worksUpdate, worksUpdated, quickUnsavedUpdateTitle,
     ]
 }
