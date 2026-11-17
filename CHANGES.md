@@ -1,5 +1,36 @@
 # CHANGES
 
+## feat/album-multiselect：相簿多选 + 记住来源（quick-start-req v1.0 §1a、§2f，验收 12；photo-picker-v0.1 §6.4）
+
+**依赖 #18（feat/start-new）和 #17（已在 app-layer 78ce569）**：本分支已 merge `origin/feat/app-layer` 和 `origin/feat/start-new`（都是 merge，没有 rebase）。
+
+- 来源页：「全部照片」/「选择相簿（可多选）」二选一。点「选择相簿」弹出相簿列表，每行右侧圆形勾选框；底部固定栏「已选 {n} 个相簿 · 共 {count} 张（去重后）」（统计中显示 `summary_pending`，没勾显示 `source.selection.none`）+「完成」（没勾不可点）。点「全部照片」清空相簿勾选；关掉列表不改来源。
+- 选择模型：`SourceSelection.albums(ids:)`（按勾选顺序、去重；只勾 1 个存成 `.album`，含全部照片 → `.allPhotos`，0 个不允许保存）。素材 = 各相簿照片按 localIdentifier 去重后的并集（`MaterialUnion`，`PhotoIndex.snapshot(for: .albums)`），200 张门槛按去重合计算。
+- 记住来源（§1a）：整组相簿 ID 以 JSON 存在 `PreferenceDataStore` 的 `source.selection`（`SourceSelectionStore`，兼容旧单选格式）；启动即恢复。相簿被删 / 打不开：静默去掉，只少这一个；全部失效回到全部照片，不提示。
+- 打不开的相簿：列表里置灰、不能勾，显示 `source.album.unreadable`。共享相簿不显示（`albumCloudShared` / `albumMyPhotoStream` 不列；`AlbumCatalog.sections(includeCloudShared:)` 默认 false）。
+- 确认页素材摘要按 1 / 2 / 3+ 个相簿三种格式（`quick.source.summary` / `summary_two` / `summary_many`）。
+- **隐藏照片 / 隐藏相簿处处排除（合并条件）**：第一层 `includeHiddenAssets = false`；第二层 isHidden 后置过滤——按集合取图（`allImages` / `images(in:)`）、相簿封面（`keyAssets`）、按 ID 取图都改走 `PhotoFetch.visible*`（`VisibleAssetFilter`，与 #15 同一份实现，原样拷贝以便无冲突合并）；网格用 `VisibleIndexMap` 跳过隐藏项。`check-photo-fetch.sh` 规则 4 卡住直接用原始结果。
+- 文案：copy_v1.1.md（onboarding.3.body、source.album.option_desc、source.album.list_title）→ gen-localizable（181 key），`L10nKey.allMultiAlbum` 进 allUsed。
+- 测试：`MultiAlbumSourceTests` +14（规范化、恢复静默去掉 / 回退、并集去重、持久化往返 + 旧格式、勾选草稿、三种摘要 / 底栏文案、VisibleAssetFilter、VisibleIndexMap、协调器：重叠并集计数与持久化、打不开不能勾、全部照片清空、删掉一个只少一个、200 门槛按并集、snapshot 跳过打不开的相簿）；`AlbumCatalogTests` 共享相关用例显式 `includeCloudShared: true` + 新增默认不列共享。
+- 不在本次：结果页缓存失效（5d/5e）；网格（§4）还没接入本轮流程。
+
+**追加（00:15 产品「2f 补充」四点，quick-start-req v1.0）**
+- 补充 1 相簿不见了一律静默：`SourcePickerState.reconcile` 不再区分本次手选的单个相簿，全部静默去掉，全去掉回「全部照片」；`notice` 字段和「相簿打不开」提示删掉（`source.album.unreadable` 只留作列表里置灰行的副文案，copy 用途说明已改）。生成前再按 ID 核对一次所选相簿（`awaitAlbumsBeforeGenerate`），刚被删 / 隐藏的也静默去掉；快照时全部打不开 → 静默回全部照片。来源标签 / 确认页摘要直接读处理后的选择。
+- 补充 2 受限访问：相簿列表顶部 `albums.limited_note` +「增加可用照片」（`source.add_photos`，调 `presentLimitedLibraryPicker`），只在 `.limited` 显示（`SourceListLogic.showsAlbumsLimitedNote`）。copy 从 /workspace/pinyi/copy_v1.1.md 同步进 §5.6，gen-localizable（182 key）。
+- 补充 3 启动时机：记住的来源是相簿时，索引加载后单独起一个任务取相簿列表（`albumsLoadTask`，不拖住扫描）；加载完之前 `AppState.isMaterialCountLoading`，来源行 / 确认页显示加载中，不显示旧数字。加载完之前点「开始拼图」/「再试一次」：`isWaitingForAlbums` 按钮显示加载状态并禁用，等失效相簿去掉后再走门槛和生成。
+- 补充 4 性能：网格的隐藏照片扫描挪到后台（`VisibleIndexMap.buildInBackground`，`Task.detached`）。表建好前网格 `count == 0`，建好后整体重载；相册变化后台建新表，回主线程一起换 fetch result 和表；连续变化只认最后一次，跳过的改整体重载。素材扫描 / 相簿计数本来就在 `PhotoKitLibrary` actor、目录在 nonisolated async 里，不在主线程。
+- 测试：`MultiAlbumSourceTests` +6（本次单选相簿消失静默 + 摘要即时更新、生成前按 ID 再核对、受限小字只在 .limited、加载完之前开始拼图先等且不拿失效选择生成、启动时全失效回全部照片、网格表在后台线程建）；`SourceAndGateTests.testSourcePickerReconcile` 改为静默。
+
+**追加（00:34–00:35，QA 复核 qa/pr19-album-multiselect-report.md + 产品「2f 补充 3a」）**
+- P1-1 本次手选的单个相簿被删：静默去掉、不弹提示；「开始拼图」前按 ID 再核对，列表还没刷新也先去掉（`awaitAlbumsBeforeGenerate` / 快照失败路径都走 `silentSelectionPruned`）。
+- P1-2 `albums.limited_note` +「增加可用照片」只在 `.limited` 显示（00:15 已做，补 QA 用例覆盖）。
+- P1-3 / 3a-5 加载完之前确认页不再出现「素材：、 · 0 张」：记住来源时同时记下相簿名（`SourceSelectionStore` 新键 `source.selection.names`），加载完之前摘要用上次的名字，张数位置显示新文案 `source.counting`「正在统计…」，如「素材：旅行 · 正在统计…」（copy 从 /workspace/pinyi/copy_v1.1.md 同步，gen-localizable 183 key；`MultiAlbumText.resolveCounting` 连同「张」一起换掉）。来源行 / 确认页去掉 ProgressView，直接显示这行字。
+- 3a-4 「再调一调」途中所选相簿被静默去掉：不算改参数，主按钮仍是「完成」（`notePrunedSelectionForProduct` 同步更新原结果的来源记录）；用户自己改组合才变「开始拼图」。
+- 3a-6「加载完」= 相簿列表加载完（是否存在 / 为空 / 共享已判断），不等全量重扫；在这一刻去掉失效相簿并写回。
+- P2 网格隐藏照片扫描不在主线程（`VisibleIndexMap.buildInBackground`，00:15 已做）。
+- P2 `check-photo-fetch.sh` 规则 4 收紧：不再整文件白名单；先把换行链式调用（下一行以 `.` 开头 / 上一行以 `.` 结尾）拼回一行、去掉整行注释，再匹配 `PhotoFetch␣*.␣*(allImages|images|keyAssets)`（空格变体、函数引用、按 ID 都算）。确有需要的原始调用在同一行写 `// photo-fetch: raw-ok <理由>`（网格 2 处、素材扫描 1 处已标）。按 ID 取图以 #15 的 PhotoFetch 为准：#15（938910c）已把 5 处收口到 `visibleImages(withLocalIdentifiers:)`，merge 后脚本里的过渡基线已删，按 ID 拿原始结果一律报红（只有 PhotoFetch.swift 内部可用）。隐藏过滤只留 #15 的一套（`VisibleAssetFilter` + `visibleImages(withLocalIdentifiers:)`），本 PR 的 visible* 都基于它。新增 `scripts/tests/check-photo-fetch-test.sh`（25 个正反例），linux-core CI 跑。
+- 测试：`MultiAlbumSourceTests` +3（静默去掉仍是「完成」、正在统计…+上次相簿名、相簿列表加载完即去掉失效相簿不等重扫）。
+
 ## feat/preview-detail-layer：隐私加固（QA 复验 ed6cce7）
 
 已 merge feat/app-layer `2b2fb93`（#18「再拼一张」；此前已含 #17 / #14 / #16）。隐藏照片任何地方都不能露出，不能只靠 PhotoFetch 取不到。

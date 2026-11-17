@@ -38,7 +38,7 @@ final class AlbumCatalogTests: XCTestCase {
                                         myAlbums: [album("A", 3)],
                                         smartAlbums: [smart(.screenshots, 2)],
                                         sharedAlbums: [shared("C", "家庭", 9)])
-        let secs = AlbumCatalog.sections(from: snap)
+        let secs = AlbumCatalog.sections(from: snap, includeCloudShared: true)
         XCTAssertEqual(secs.map(\.kind), [.allPhotos, .myAlbums, .mediaTypes, .shared])
         XCTAssertEqual(secs[0].entries, [.allPhotos(imageCount: 50_000)])
     }
@@ -162,27 +162,27 @@ final class AlbumCatalogTests: XCTestCase {
             shared("c2", "Trip 10", 1), shared("c1", "Trip 2", 1), shared("c4", "家庭", 1),
             shared("c3", "family", 1), shared("b", "同名", 1), shared("a", "同名", 1),
         ])
-        let order = ids(section(.shared, AlbumCatalog.sections(from: snap)))
+        let order = ids(section(.shared, AlbumCatalog.sections(from: snap, includeCloudShared: true)))
         // localizedStandardCompare：数字按数值比（Trip 2 < Trip 10），不区分大小写；同名按 id。
         XCTAssertLessThan(order.firstIndex(of: "c1")!, order.firstIndex(of: "c2")!)
         XCTAssertLessThan(order.firstIndex(of: "a")!, order.firstIndex(of: "b")!)
         XCTAssertEqual(order.count, 6)
         // 和自己再排一次结果一致（纯函数、稳定）。
-        XCTAssertEqual(order, ids(section(.shared, AlbumCatalog.sections(from: snap))))
+        XCTAssertEqual(order, ids(section(.shared, AlbumCatalog.sections(from: snap, includeCloudShared: true))))
     }
 
     func testSharedAlbumsHideEmptyAndDropForeignKindsAndDuplicates() {
         let snap = AlbumCatalogSnapshot(allPhotosCount: 1, sharedAlbums: [
             shared("x", "空", 0), album("A", 3), smart(.favorites, 2), shared("y", "有", 2), shared("y", "有（重复）", 5),
         ])
-        let sec = section(.shared, AlbumCatalog.sections(from: snap))
+        let sec = section(.shared, AlbumCatalog.sections(from: snap, includeCloudShared: true))
         XCTAssertEqual(ids(sec), ["y"])
         XCTAssertEqual(sec?.entries.first?.imageCount, 2)
     }
 
     func testSharedPhotosAreSeparateFromMyAlbums() {
         let snap = AlbumCatalogSnapshot(allPhotosCount: 1, myAlbums: [album("A", 1)], sharedAlbums: [shared("C", "共享", 1)])
-        let secs = AlbumCatalog.sections(from: snap)
+        let secs = AlbumCatalog.sections(from: snap, includeCloudShared: true)
         XCTAssertEqual(ids(section(.myAlbums, secs)), ["A"])
         XCTAssertEqual(ids(section(.shared, secs)), ["C"])
     }
@@ -209,7 +209,7 @@ final class AlbumCatalogTests: XCTestCase {
             allPhotosCount: 100,
             myAlbums: [folder("F", [folder("G", [album("deep", 4)]), album("empty", 0)]), album("A", 2)],
             smartAlbums: [smart(.favorites, 5), smart(.bursts, 0)],
-            sharedAlbums: [shared("C", "共享", 3)]))
+            sharedAlbums: [shared("C", "共享", 3)]), includeCloudShared: true)
     }
 
     func testEntryFindsAcrossSectionsAndFolders() {
@@ -255,5 +255,18 @@ final class AlbumCatalogTests: XCTestCase {
         let limited = AlbumCatalog.sections(from: AlbumCatalogSnapshot(allPhotosCount: 2, myAlbums: [album("T", 0, title: "旅行")]))
         XCTAssertTrue(AlbumCatalog.isSelectable(.album(id: "T"), in: full))
         XCTAssertFalse(AlbumCatalog.isSelectable(.album(id: "T"), in: limited))
+    }
+
+    // MARK: 共享相簿默认不显示（quick-start v1.0 §0 硬规则 2，design §6.4）
+
+    func testSharedAlbumsNotListedByDefault() {
+        let snap = AlbumCatalogSnapshot(allPhotosCount: 10, myAlbums: [album("A", 3)],
+                                        sharedAlbums: [shared("C", "家庭", 9)])
+        let secs = AlbumCatalog.sections(from: snap)
+        XCTAssertEqual(secs.map(\.kind), [.allPhotos, .myAlbums], "不是置灰，是不列出")
+        XCTAssertNil(AlbumCatalog.entry(id: "C", in: secs))
+        XCTAssertFalse(AlbumCatalog.isSelectable(.album(id: "C"), in: secs))
+        XCTAssertFalse(AlbumCatalog.isSelectable(.albums(ids: ["A", "C"]), in: secs), "多选里有一个不可选就不算可选")
+        XCTAssertTrue(AlbumCatalog.isSelectable(.albums(ids: ["A"]), in: secs))
     }
 }

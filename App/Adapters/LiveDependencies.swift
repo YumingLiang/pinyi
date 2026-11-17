@@ -30,7 +30,9 @@ extension AppDependencies {
             memory: PhysFootprintReader(),
             perf: perf,
             initialSeed: UInt64.random(in: 1...UInt64.max),
-            onExportSucceeded: onExportSucceeded
+            onExportSucceeded: onExportSucceeded,
+            // 记住素材来源（§1a，整组相簿）：只存相簿 ID 的 JSON，key `source.selection`
+            preferenceData: UserDefaultsPreferenceData()
         )
     }
 }

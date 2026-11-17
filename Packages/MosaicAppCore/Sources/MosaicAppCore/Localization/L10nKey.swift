@@ -191,7 +191,7 @@ public extension L10nKey {
         settingsTitle, settingsPerformance, settingsAbout, aboutTitle, aboutBody, appDisplayName,
         commonCancel, commonDone, commonBack, commonOK, commonClose, commonRetry,
         exportSizeSection, exportSizeShare, exportSizeShareDesc, exportSizeHD, exportSizeHDDesc, exportSizeUHD, exportSizeUHDDesc, exportSizeLargeHint, previewExport, exportDegraded, exportProgressTitle, exportProgressHint, exportInterrupted, exportRetry, saveSuccessTitle, saveSuccessBody, saveSuccessDone, saveSuccessShare, shareSheetTitle, shareSuggestSave, saveDiskFullTitle, saveDiskFullBody, saveDiskFullOK, saveAddDeniedTitle, saveAddDeniedBody, saveAddDeniedSettings, saveAddDeniedShare, saveFailed, saveFailedRetry,
-    ] + allWorks + allQuick
+    ] + allWorks + allQuick + allMultiAlbum
 }
 
 /// 带参数的文案（`%1$@` 占位符）：视图层用 `String(format: NSLocalizedString(key), args…)` 显示。
