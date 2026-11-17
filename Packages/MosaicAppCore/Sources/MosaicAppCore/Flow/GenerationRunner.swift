@@ -96,6 +96,18 @@ public struct GenerationRunner: Sendable {
         self.sharpness = sharpness
     }
 
+    /// App 生产环境用的生成器（`AppDependencies.live` 调它）。
+    ///
+    /// **不注入清晰度探测**（AndyL 11-16 决定取消 #5 的逐张检查）：生成只跑一次 `generateOnce`，
+    /// 不做逐张 PhotoKit 请求、不剔除重配、不做最后兜底补格，速度回到 14ac550。
+    /// `lowRes.enabled == false`，来源页「不够清楚」行 / 结果页筛选后「照片比较少」/ 进度页「检查清晰度」自然不出现。
+    /// iCloud-only / 本机小图照旧按 14ac550：照常参与匹配，导出时取不到每格像素就退回 128px 缩略图（糊格子），
+    /// 再取不到才是白格子——导出端兜底逻辑不变。
+    /// 可选的 `sharpness` 路径与 `LocalResolutionChecker` 保留（测试与作品换照片复用），但不接入生成链路。
+    public static func production(pipeline: MosaicPipeline, perf: PerfRecorder?) -> GenerationRunner {
+        GenerationRunner(pipeline: pipeline, perf: perf, sharpness: nil)
+    }
+
     /// - Parameter progress: 整体完成比例 0…1（取样 5% / 匹配 60% / 分配 35%）。
     /// - Throws: `CancellationError`（Task 取消，正常路径）或引擎错误。
     public func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
