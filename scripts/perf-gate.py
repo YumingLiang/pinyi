@@ -9,7 +9,8 @@
          取每个指标的中位数，对照基线判定；任一指标回归则退出码 1。
   update --results R1.jsonl R2.jsonl ... [--baseline perf/baseline-linux.json] [--note TEXT]
          用多份结果（建议 ≥ 5 次 CI 运行的 artifact）重算基线：每份取中位数，再取这些中位数的中位数。
-         只改 metrics 段，保留 threshold 配置；打印前后对比。
+         另按 runner CPU 型号分组，≥ --min-runs 份的型号写同机型基线（by_cpu）。
+         只改 metrics / by_cpu，保留 threshold 配置；打印前后对比。
 """
 import argparse
 import json
@@ -21,10 +22,11 @@ DEFAULT_BASELINE = "perf/baseline-linux.json"
 
 
 def load_results(paths):
-    """-> {metric: [median_of_file1, median_of_file2, ...]}，同一文件里同名指标的样本合并。"""
+    """-> [(meta, {metric: [samples...]})]，每个文件一项；同一文件里同名指标的样本合并。
+    meta 来自 CI 写入的 {"runner_cpu": "...", "nproc": N} 行。"""
     per_file = []
     for p in paths:
-        samples = {}
+        samples, meta = {}, {}
         for line in Path(p).read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("[perf] "):
@@ -32,10 +34,13 @@ def load_results(paths):
             if not line.startswith("{"):
                 continue
             rec = json.loads(line)
+            if "runner_cpu" in rec:
+                meta.update(rec)
+                continue
             if rec.get("unit", "ms") != "ms":
                 raise SystemExit(f"{p}: 只支持 unit=ms：{rec}")
             samples.setdefault(rec["metric"], []).extend(float(x) for x in rec["samples"])
-        per_file.append(samples)
+        per_file.append((meta, samples))
     return per_file
 
 
@@ -53,11 +58,20 @@ def threshold_for(base, metric):
     return t
 
 
+def cpu_key(meta):
+    cpu = (meta.get("runner_cpu") or "").strip()
+    return f"{cpu} / {meta['nproc']}c" if cpu and meta.get("nproc") else cpu
+
+
 def check(args):
     base = load_baseline(args.baseline)
-    [samples] = load_results([args.results])
+    [(meta, samples)] = load_results([args.results])
+    thr = base.get("threshold", {})
     calib = base.get("calibration_metric")
-    gate_on = base.get("threshold", {}).get("gate_on", "raw")   # raw | normalized | both
+    gate_on = thr.get("gate_on", "raw")   # 无同机型基线时的口径：raw | normalized | both
+    cpu = cpu_key(meta)
+    same = base.get("by_cpu", {}).get(cpu, {}).get("metrics", {}) if cpu else {}
+    same_ratio = thr.get("same_cpu", {}).get("ratio", 1.20)
     speed = None
     if calib and calib in samples and calib in base.get("metrics", {}):
         speed = statistics.median(samples[calib]) / base["metrics"][calib]["median_ms"]
@@ -66,43 +80,54 @@ def check(args):
     for metric in sorted(set(samples) | set(base.get("metrics", {}))):
         b = base.get("metrics", {}).get(metric)
         if metric not in samples:
-            rows.append((metric, b and b["median_ms"], None, None, None, "", "❌ 缺失（门禁指标没跑出来）"))
+            rows.append((metric, "", b and b["median_ms"], None, None, None, "", "❌ 缺失（门禁指标没跑出来）"))
             failed.append(metric)
             continue
         s = samples[metric]
         med = statistics.median(s)
         spread = (max(s) - min(s)) / med * 100 if med > 0 else 0.0
-        if b is None:
-            rows.append((metric, None, med, None, None, f"{spread:.0f}%", "🆕 无基线（不判定）"))
+        if b is None and metric not in same:
+            rows.append((metric, "", None, med, None, None, f"{spread:.0f}%", "🆕 无基线（不判定）"))
             continue
-        bm = b["median_ms"]
         t = threshold_for(base, metric)
-        ratio = med / bm
-        norm = ratio / speed if speed else None
+        if metric in same:
+            bm = same[metric]["median_ms"]
+            ratio = med / bm
+            limit = t.get("same_cpu_ratio", same_ratio)
+            norm = None
+            ref = "同机型"
+            bad = ratio > limit and (med - bm) > t["min_delta_ms"]
+        else:
+            bm = b["median_ms"]
+            ratio = med / bm
+            limit = t["ratio"]
+            norm = ratio / speed if speed else None
+            ref = "全局" + ("（归一化）" if gate_on != "raw" and norm is not None else "")
+            delta_ok = (med - bm) <= t["min_delta_ms"]
+            raw_bad = ratio > limit and not delta_ok
+            norm_bad = norm is not None and norm > limit and not delta_ok
+            bad = {"raw": raw_bad, "normalized": norm_bad if norm is not None else raw_bad,
+                   "both": raw_bad and (norm_bad if norm is not None else True)}[gate_on]
         if metric == calib:
-            rows.append((metric, bm, med, ratio, None, f"{spread:.0f}%", "ℹ️ 标定（不判定）"))
+            rows.append((metric, ref, bm, med, ratio, None, f"{spread:.0f}%", "ℹ️ 标定（不判定）"))
             continue
-        delta_ok = (med - bm) <= t["min_delta_ms"]
-        raw_bad = ratio > t["ratio"] and not delta_ok
-        norm_bad = norm is not None and norm > t["ratio"] and not delta_ok
-        bad = {"raw": raw_bad, "normalized": norm_bad if norm is not None else raw_bad,
-               "both": raw_bad and (norm_bad if norm is not None else True)}[gate_on]
-        status = f"❌ 回归（> ×{t['ratio']:.2f} 且 > +{t['min_delta_ms']:.0f} ms）" if bad else "✅"
+        status = f"❌ 回归（> ×{limit:.2f} 且 > +{t['min_delta_ms']:.0f} ms）" if bad else f"✅（限 ×{limit:.2f}）"
         if bad:
             failed.append(metric)
-        rows.append((metric, bm, med, ratio, norm, f"{spread:.0f}%", status))
+        rows.append((metric, ref, bm, med, ratio, norm, f"{spread:.0f}%", status))
 
     def f(v, fmt):
         return "—" if v is None else fmt.format(v)
 
     out = ["### Generation perf regression（Linux release，中位数 vs `" + args.baseline + "`）", ""]
-    out.append(f"判定口径：`{gate_on}`；每指标样本数见结果文件；"
-               + (f"本机标定速度 = 基线的 ×{speed:.2f}（>1 表示本 runner 更慢）" if speed else "无标定数据"))
+    out.append(f"runner：`{cpu or '未知'}`；" + ("有同机型基线，按同机型比。" if same else
+               f"无同机型基线，按全局基线、口径 `{gate_on}`。")
+               + (f" 标定速度 = 全局基线的 ×{speed:.2f}（>1 表示本 runner 更慢）。" if speed else ""))
     out.append("")
-    out.append("| 指标 | 基线 ms | 本次中位数 ms | 比值 | 标定归一化比值 | 本次极差/中位数 | 结果 |")
-    out.append("|---|---:|---:|---:|---:|---:|---|")
-    for m, bm, med, ratio, norm, spread, status in rows:
-        out.append(f"| `{m}` | {f(bm, '{:.1f}')} | {f(med, '{:.1f}')} | {f(ratio, '×{:.3f}')} | {f(norm, '×{:.3f}')} | {spread or '—'} | {status} |")
+    out.append("| 指标 | 对照 | 基线 ms | 本次中位数 ms | 比值 | 归一化比值 | 本次极差/中位数 | 结果 |")
+    out.append("|---|---|---:|---:|---:|---:|---:|---|")
+    for m, ref, bm, med, ratio, norm, spread, status in rows:
+        out.append(f"| `{m}` | {ref or '—'} | {f(bm, '{:.1f}')} | {f(med, '{:.1f}')} | {f(ratio, '×{:.3f}')} | {f(norm, '×{:.3f}')} | {spread or '—'} | {status} |")
     out.append("")
     if failed:
         out.append(f"**失败：{', '.join(failed)}**。确认是有意的变慢后，按 perf/README.md 更新基线。")
@@ -116,25 +141,43 @@ def check(args):
     return 1 if failed else 0
 
 
+def medians_of(files):
+    metrics = sorted(set().union(*[s for _, s in files]))
+    out = {}
+    for m in metrics:
+        meds = [statistics.median(s[m]) for _, s in files if m in s]
+        out[m] = {"median_ms": round(statistics.median(meds), 3), "runs": len(meds),
+                  "run_medians_ms": [round(x, 3) for x in meds]}
+    return out
+
+
 def update(args):
     base = load_baseline(args.baseline)
     per_file = load_results(args.results)
-    metrics = sorted(set().union(*per_file))
-    new = {}
-    for m in metrics:
-        meds = [statistics.median(f[m]) for f in per_file if m in f]
-        new[m] = {"median_ms": round(statistics.median(meds), 3),
-                  "runs": len(meds),
-                  "run_medians_ms": [round(x, 3) for x in meds]}
+    new = medians_of(per_file)
     old = base.get("metrics", {})
-    for m in metrics:
+    for m, v in new.items():
         o = old.get(m, {}).get("median_ms")
-        n = new[m]["median_ms"]
+        n = v["median_ms"]
         print(f"{m:45s} {('%.1f' % o) if o else '—':>10} -> {n:10.1f}" + (f"  (×{n / o:.3f})" if o else ""))
     dropped = sorted(set(old) - set(new))
     if dropped and not args.allow_drop:
         raise SystemExit(f"这些基线指标在结果里没有，拒绝删除（确认要删加 --allow-drop）：{dropped}")
     base["metrics"] = new
+    # 同机型基线：同一 CPU 型号至少 min_runs 份结果才建（GitHub ubuntu-latest 机型是混的）。
+    groups = {}
+    for meta, s in per_file:
+        k = cpu_key(meta)
+        if k:
+            groups.setdefault(k, []).append((meta, s))
+    by_cpu = {}
+    for k, files in sorted(groups.items()):
+        if len(files) >= args.min_runs:
+            by_cpu[k] = {"runs": len(files), "metrics": medians_of(files)}
+            print(f"同机型基线：{k}（{len(files)} 份）")
+        else:
+            print(f"跳过同机型基线：{k}（只有 {len(files)} 份 < {args.min_runs}，该机型按全局归一化判定）")
+    base["by_cpu"] = by_cpu
     if args.note:
         base["note"] = args.note
     Path(args.baseline).write_text(json.dumps(base, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -154,6 +197,7 @@ def main():
     u.add_argument("--baseline", default=DEFAULT_BASELINE)
     u.add_argument("--note")
     u.add_argument("--allow-drop", action="store_true")
+    u.add_argument("--min-runs", type=int, default=2, help="建同机型基线所需的最少结果份数")
     a = ap.parse_args()
     return check(a) if a.cmd == "check" else update(a)
 

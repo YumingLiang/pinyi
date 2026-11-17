@@ -1,83 +1,289 @@
 {
   "schema": 1,
   "platform": "GitHub ubuntu-latest + swift:6.3.3-noble（同 linux-core.yml 钉的 digest），swift test -c release",
+  "note": "2026-11-16 标定：run 44015619344 + 44017954339 各 attempt 1–5（共 10 份，ubuntu-latest 4 核；5 种 CPU）",
   "calibration_metric": "calib_cpu_scalar",
   "threshold": {
+    "same_cpu": {
+      "ratio": 1.2
+    },
     "gate_on": "normalized",
     "default": {
       "ratio": 1.25,
       "min_delta_ms": 10.0
     },
     "per_metric": {},
-    "why": "5 次 runner 实测：原始中位数跨机型极差 25–46%（最慢 Xeon 8370C 比中位数高到 ×1.16），按 calib_cpu_scalar 归一化后各指标 max/中位数 ≤ ×1.03；×1.25 留 ≥ 20% 余量。同一 job 内 5 次样本极差 ≤ 2%。"
+    "why": "10 次 runner 实测（5 种 CPU）：同一 job 内 5 次样本极差 ≤ 2%；同机型跨 run 中位数偏差 ≤ ×1.03 → 同机型限 ×1.20；跨机型原始中位数相差到 ×2（最快 EPYC 9V45 比最慢 Xeon 8370C 快约一半），按 calib_cpu_scalar 归一化后对基线机型 ≤ ×1.03，但快机型被低估 → 无同机型基线时退回归一化 ×1.25。"
   },
   "metrics": {
     "calib_cpu_scalar": {
-      "median_ms": 56.068,
-      "runs": 5,
+      "median_ms": 53.415,
+      "runs": 10,
       "run_medians_ms": [
         63.089,
         56.075,
         55.996,
         49.885,
-        56.068
+        56.068,
+        50.846,
+        49.077,
+        55.984,
+        49.723,
+        39.933
       ]
     },
     "gen_fine_2048x1536_50k": {
-      "median_ms": 4025.116,
-      "runs": 5,
+      "median_ms": 3647.908,
+      "runs": 10,
       "run_medians_ms": [
         4254.167,
         4024.413,
         4037.927,
         3225.417,
-        4025.116
+        4025.116,
+        3266.425,
+        3271.402,
+        4122.54,
+        3218.251,
+        2508.57
       ]
     },
     "gen_medium_2048x1536_50k": {
-      "median_ms": 1316.29,
-      "runs": 5,
+      "median_ms": 1180.571,
+      "runs": 10,
       "run_medians_ms": [
         1420.202,
         1320.352,
         1316.29,
         1026.25,
-        1314.047
+        1314.047,
+        1047.094,
+        1046.285,
+        1344.613,
+        1023.649,
+        789.506
       ]
     },
     "overlay_blend_2048x1536": {
-      "median_ms": 77.593,
-      "runs": 5,
+      "median_ms": 74.062,
+      "runs": 10,
       "run_medians_ms": [
         89.801,
         77.554,
         77.614,
         70.467,
-        77.593
+        77.593,
+        67.745,
+        67.895,
+        77.667,
+        70.57,
+        50.781
       ]
     },
     "sample_fine_2048x1536": {
-      "median_ms": 129.92,
-      "runs": 5,
+      "median_ms": 105.501,
+      "runs": 10,
       "run_medians_ms": [
         123.92,
         130.686,
         129.92,
         71.966,
-        131.93
+        131.93,
+        85.864,
+        87.081,
+        132.289,
+        71.249,
+        60.332
       ]
     },
     "worst_uniform_medium_80x60_cap1_50k": {
-      "median_ms": 1752.608,
-      "runs": 5,
+      "median_ms": 1537.489,
+      "runs": 10,
       "run_medians_ms": [
         1919.271,
         1754.199,
         1752.608,
         1319.994,
-        1748.745
+        1748.745,
+        1230.081,
+        1232.141,
+        1753.474,
+        1326.233,
+        862.783
       ]
     }
   },
-  "note": "2026-11-16 首次标定：run 44015619344 attempt 1–5（b71d8a1，ubuntu-latest 4 核；CPU 混合 Xeon 8370C / EPYC 7763 ×3 / Xeon 6975P-C）"
+  "by_cpu": {
+    "AMD EPYC 7763 64-Core Processor / 4c": {
+      "runs": 4,
+      "metrics": {
+        "calib_cpu_scalar": {
+          "median_ms": 56.032,
+          "runs": 4,
+          "run_medians_ms": [
+            56.075,
+            55.996,
+            56.068,
+            55.984
+          ]
+        },
+        "gen_fine_2048x1536_50k": {
+          "median_ms": 4031.521,
+          "runs": 4,
+          "run_medians_ms": [
+            4024.413,
+            4037.927,
+            4025.116,
+            4122.54
+          ]
+        },
+        "gen_medium_2048x1536_50k": {
+          "median_ms": 1318.321,
+          "runs": 4,
+          "run_medians_ms": [
+            1320.352,
+            1316.29,
+            1314.047,
+            1344.613
+          ]
+        },
+        "overlay_blend_2048x1536": {
+          "median_ms": 77.603,
+          "runs": 4,
+          "run_medians_ms": [
+            77.554,
+            77.614,
+            77.593,
+            77.667
+          ]
+        },
+        "sample_fine_2048x1536": {
+          "median_ms": 131.308,
+          "runs": 4,
+          "run_medians_ms": [
+            130.686,
+            129.92,
+            131.93,
+            132.289
+          ]
+        },
+        "worst_uniform_medium_80x60_cap1_50k": {
+          "median_ms": 1753.041,
+          "runs": 4,
+          "run_medians_ms": [
+            1754.199,
+            1752.608,
+            1748.745,
+            1753.474
+          ]
+        }
+      }
+    },
+    "AMD EPYC 9V74 80-Core Processor / 4c": {
+      "runs": 2,
+      "metrics": {
+        "calib_cpu_scalar": {
+          "median_ms": 49.962,
+          "runs": 2,
+          "run_medians_ms": [
+            50.846,
+            49.077
+          ]
+        },
+        "gen_fine_2048x1536_50k": {
+          "median_ms": 3268.914,
+          "runs": 2,
+          "run_medians_ms": [
+            3266.425,
+            3271.402
+          ]
+        },
+        "gen_medium_2048x1536_50k": {
+          "median_ms": 1046.689,
+          "runs": 2,
+          "run_medians_ms": [
+            1047.094,
+            1046.285
+          ]
+        },
+        "overlay_blend_2048x1536": {
+          "median_ms": 67.82,
+          "runs": 2,
+          "run_medians_ms": [
+            67.745,
+            67.895
+          ]
+        },
+        "sample_fine_2048x1536": {
+          "median_ms": 86.472,
+          "runs": 2,
+          "run_medians_ms": [
+            85.864,
+            87.081
+          ]
+        },
+        "worst_uniform_medium_80x60_cap1_50k": {
+          "median_ms": 1231.111,
+          "runs": 2,
+          "run_medians_ms": [
+            1230.081,
+            1232.141
+          ]
+        }
+      }
+    },
+    "Intel(R) Xeon(R) 6975P-C / 4c": {
+      "runs": 2,
+      "metrics": {
+        "calib_cpu_scalar": {
+          "median_ms": 49.804,
+          "runs": 2,
+          "run_medians_ms": [
+            49.885,
+            49.723
+          ]
+        },
+        "gen_fine_2048x1536_50k": {
+          "median_ms": 3221.834,
+          "runs": 2,
+          "run_medians_ms": [
+            3225.417,
+            3218.251
+          ]
+        },
+        "gen_medium_2048x1536_50k": {
+          "median_ms": 1024.949,
+          "runs": 2,
+          "run_medians_ms": [
+            1026.25,
+            1023.649
+          ]
+        },
+        "overlay_blend_2048x1536": {
+          "median_ms": 70.518,
+          "runs": 2,
+          "run_medians_ms": [
+            70.467,
+            70.57
+          ]
+        },
+        "sample_fine_2048x1536": {
+          "median_ms": 71.607,
+          "runs": 2,
+          "run_medians_ms": [
+            71.966,
+            71.249
+          ]
+        },
+        "worst_uniform_medium_80x60_cap1_50k": {
+          "median_ms": 1323.113,
+          "runs": 2,
+          "run_medians_ms": [
+            1319.994,
+            1326.233
+          ]
+        }
+      }
+    }
+  }
 }

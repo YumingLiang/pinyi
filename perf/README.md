@@ -8,14 +8,18 @@ ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --f
 ## 判定规则
 
 - 每个指标：预热 1 次，再测 `MOSAIC_PERF_REPEAT` 次（CI = 5），取**中位数**。
-- `calib_cpu_scalar` 是固定的单线程 CPU 负载，不判定，只用来算本 runner 的速度系数
-  `speed = 本次 calib 中位数 ÷ 基线 calib`（>1 = 这台 runner 更慢）。
-- 对照 `perf/baseline-linux.json`：`比值 = 本次中位数 ÷ 基线`，`归一化比值 = 比值 ÷ speed`。
-  **当前口径 `gate_on = normalized`：归一化比值 > `ratio`（1.25）且 本次中位数 − 基线 > `min_delta_ms`（10 ms）→ 失败。**
-  可选 `raw`（只看原始比值）/ `both`（两者都超才失败）；可在 `threshold.per_metric` 按指标覆盖。
-- 为什么用归一化：ubuntu-latest 的机型是混的（11-16 实测 5 次：Xeon 8370C、EPYC 7763 ×3、Xeon 6975P-C），
-  原始中位数跨机型极差 25–46%，最慢机型比中位数高到 ×1.16，离 ×1.25 只剩 8%；
-  归一化后各门禁指标 max/中位数 ≤ ×1.03，×1.25 留 ≥ 20% 余量。同一 job 内 5 次样本极差 ≤ 2%，所以 5 次足够。
+- ubuntu-latest 的机型是混的（11-16 实测 10 次碰到 5 种 CPU：Xeon 8370C、EPYC 7763、EPYC 9V74、Xeon 6975P-C、EPYC 9V45），
+  同一指标跨机型的原始中位数能差到 ×2，所以**先按机型比**：
+  1. CI 在结果文件第一行写 `{"runner_cpu": "...", "nproc": 4}`。
+  2. 基线里有该机型（`by_cpu`，≥ 2 份结果才建）→ `比值 = 本次中位数 ÷ 同机型基线`，
+     **比值 > 1.20 且 绝对差 > 10 ms → 失败**（`threshold.same_cpu.ratio`）。
+     依据：同一 job 内 5 次样本极差 ≤ 3%；同机型跨 run 的中位数偏差 ≤ ×1.03。
+  3. 没有该机型 → 对照全局基线（所有结果的中位数），用标定归一化：
+     `calib_cpu_scalar` 是固定单线程 CPU 负载（不判定），`speed = 本次 calib ÷ 基线 calib`，
+     `归一化比值 = (本次中位数 ÷ 全局基线) ÷ speed`，**归一化比值 > 1.25 且 绝对差 > 10 ms → 失败**（`gate_on = normalized`）。
+     依据：最慢的 Xeon 8370C 原始比值到 ×1.25（按原始比值必然误报），归一化后 ≤ ×1.06。
+     局限：快机型归一化后偏低（×0.75–0.92），在没有同机型基线的快机型上灵敏度下降——碰到新机型就按下面步骤补基线。
+- 可在 `threshold.per_metric` 按指标覆盖 `ratio` / `min_delta_ms` / `same_cpu_ratio`。
 - 基线里有、本次没跑出来的指标 → 失败（防止门禁被悄悄删掉）；本次有、基线没有 → 🆕 只显示不判定。
 - job summary 里有表：指标 / 基线 / 本次中位数 / 比值 / 归一化比值 / 本次极差 / 结果。
 
@@ -49,7 +53,7 @@ PhotoKit 解码、CoreGraphics 渲染、ImageIO 编码在 Linux 上跑不了，�
 ```bash
 # 1) 拿 ≥ 5 次 CI 运行的结果（同一 commit 重跑 job 即可），artifact 名 perf-results-<attempt>
 gh run download <run-id> -n perf-results-1 -D /tmp/p1   # …p2..p5（不同 run 或不同 attempt）
-# 2) 每份取中位数，再取中位数的中位数，写回基线
+# 2) 每份取中位数，再取中位数的中位数，写回全局基线；同 CPU 型号 ≥ 2 份的再写同机型基线
 python3 scripts/perf-gate.py update --results /tmp/p*/perf-results.jsonl --note "原因 + commit"
 # 3) 本地自查
 python3 scripts/perf-gate.py check --results /tmp/p1/perf-results.jsonl

@@ -160,7 +160,8 @@ jobs:
         run: |
           set -euo pipefail
           export MOSAIC_PERF_OUT="$GITHUB_WORKSPACE/perf-results.jsonl"
-          : > "$MOSAIC_PERF_OUT"
+          # 第一行记 runner 的 CPU 型号：ubuntu-latest 机型是混的，脚本按同机型基线比（没有才退回全局归一化）。
+          python3 -c 'import json,os,re; m=re.search(r"model name\s*:\s*(.*)", open("/proc/cpuinfo").read()); print(json.dumps({"runner_cpu": m.group(1).strip() if m else "", "nproc": os.cpu_count()}))' > "$MOSAIC_PERF_OUT"
           found=0
           for pkg in Packages/*/; do
             # 不用 find | grep -q：pipefail 下 find 收到 SIGPIPE 会被当成「没找到」（同 ios.yml 41dc45f 的教训）。
