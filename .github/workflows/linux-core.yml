@@ -5,7 +5,8 @@ name: linux-core
 on:
   pull_request:
   push:
-    branches: [main]
+    # feat/app-layer：合入后的树也跑一遍（含 perf-gate），见 perf/README.md「触发」。
+    branches: [main, feat/app-layer]
   workflow_dispatch:
 
 concurrency:
