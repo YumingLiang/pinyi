@@ -17,10 +17,34 @@ public enum PresetShapes {
 
     /// 已登记的形状（按实现顺序：爱心、星星、圆形、生日蛋糕、花朵，然后月亮、四叶草、小房子、对话框、圆角方块）。
     public static let registry: [Entry] = [
+        Entry(id: .heart, path: heart()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
     public static func path(for id: ShapePresetID) -> ShapePath? {
         registry.first { $0.id == id }?.path
+    }
+}
+
+// MARK: - 爱心
+
+extension ShapePresetID {
+    /// 爱心
+    public static let heart = ShapePresetID(rawValue: "heart")
+}
+
+extension PresetShapes {
+    /// 爱心：左右对称，两个圆润的上瓣 + 下尖（100 × 95 单位）。
+    static func heart() -> ShapePath {
+        var b = ShapePathBuilder()
+        b.move(50, 26)
+        b.cubic(50, 10, 62, 0, 75, 0)
+        b.cubic(90, 0, 100, 12, 100, 28)
+        b.cubic(100, 55, 70, 72, 50, 95)
+        b.cubic(30, 72, 0, 55, 0, 28)
+        b.cubic(0, 12, 10, 0, 25, 0)
+        b.cubic(38, 0, 50, 10, 50, 26)
+        b.close()
+        return b.build()
     }
 }
