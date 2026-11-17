@@ -5,7 +5,8 @@ name: linux-core
 on:
   pull_request:
   push:
-    branches: [main]
+    # ⚠️ 临时：ci/perf-regression 只为在该分支上测门禁抖动，集成进 feat/app-layer 前删掉这一项。
+    branches: [main, ci/perf-regression]
   workflow_dispatch:
 
 concurrency:
@@ -127,3 +128,59 @@ jobs:
           path: |
             Packages/MosaicCore/bench.txt
             Packages/MosaicCore/bench-summary.txt
+
+  # 生成性能回归门禁（AndyL 11-16：「性能要加入到回归中，这个太差了」）。**阻断**，没有 paths 过滤，每次都出结果，
+  # 稳定后设为 feat/app-layer 的 required check。与上面的 A-21（全量 bench，只记录）分开：这里只跑少量门禁指标。
+  # 口径：release；每指标预热 1 次 + 测 MOSAIC_PERF_REPEAT 次取中位数，对照仓库里的 perf/baseline-linux.json，
+  # 中位数 > 基线 × ratio 且绝对差 > min_delta_ms 才失败（数值与依据见 perf/README.md）。
+  # 收录规则：任何包里名为 *PerfGateTests.swift 的测试文件都会被跑（--filter PerfGateTests），QA 的端到端用例照此接入。
+  perf-gate:
+    name: Generation perf regression
+    runs-on: ubuntu-latest
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
+    timeout-minutes: 25
+    env:
+      MOSAIC_PERF_GATE: "1"
+      MOSAIC_PERF_REPEAT: "5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner info
+        run: |
+          nproc
+          grep -m1 'model name' /proc/cpuinfo || true
+          swift --version
+
+      - name: python3（门禁脚本用）
+        run: apt-get update -qq && apt-get install -y -qq python3 >/dev/null
+
+      - name: Run *PerfGateTests (release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MOSAIC_PERF_OUT="$GITHUB_WORKSPACE/perf-results.jsonl"
+          : > "$MOSAIC_PERF_OUT"
+          found=0
+          for pkg in Packages/*/; do
+            # 不用 find | grep -q：pipefail 下 find 收到 SIGPIPE 会被当成「没找到」（同 ios.yml 41dc45f 的教训）。
+            if [ -d "$pkg/Tests" ] && [ -n "$(find "$pkg/Tests" -name '*PerfGateTests.swift' -print -quit)" ]; then
+              found=1
+              echo "::group::$pkg"
+              (cd "$pkg" && swift test -c release --filter PerfGateTests 2>&1 | tee -a "$GITHUB_WORKSPACE/perf-log.txt")
+              echo "::endgroup::"
+            fi
+          done
+          [ "$found" = 1 ] || { echo "::error::没找到任何 *PerfGateTests.swift"; exit 1; }
+          cat "$MOSAIC_PERF_OUT"
+
+      - name: Compare with baseline (median, relative)
+        run: python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload perf results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results-${{ github.run_attempt }}
+          path: |
+            perf-results.jsonl
+            perf-log.txt

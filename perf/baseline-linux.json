@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "platform": "GitHub ubuntu-latest + swift:6.3.3-noble（同 linux-core.yml 钉的 digest），swift test -c release",
+  "calibration_metric": "calib_cpu_scalar",
+  "threshold": {
+    "gate_on": "raw",
+    "default": {"ratio": 1.25, "min_delta_ms": 20.0},
+    "per_metric": {}
+  },
+  "metrics": {}
+}
