@@ -60,6 +60,7 @@ final class AppModel: ObservableObject {
             return c.workResultContext
         }, relay: relay)
         worksController.exportHandler = CoordinatorWorkExporter(coordinator: coordinator)
+        coordinator.resultSaver = worksController   // 「再拼一张」未保存提示：问存没存过 / 去存（弱引用）
         self.works = WorksModel(controller: worksController)
         self.state = coordinator.state
         coordinator.systemActionHandler = { action in
@@ -72,6 +73,7 @@ final class AppModel: ObservableObject {
     }
 
     private func stateChanged(_ s: AppState) {
+        syncTargetPreview(old: state, new: s)
         state = s
         works.controller.resultDidChange(revision: s.resultRevision)
         // 「存到我的作品」按钮按当前结果 vs 作品库算（B10-5）：叠加强度变了 / 进出结果页时重算
@@ -88,6 +90,12 @@ final class AppModel: ObservableObject {
         } else {
             // 离开结果页就丢掉预览位图（长边约 4096 时 RGBA 约 64 MB），换新结果时也会先走这里再重画。
             releasePreviewImage()
+        }
+        if !s.hasResult, resultImage != nil || previewTask != nil {
+            // 结果被丢弃（「再拼一张」开始生成新图 / 返回首页）：取消在途绘制，释放预览位图（可能约 48 MB）。
+            previewTask?.cancel()
+            previewTask = nil
+            resultImage = nil
         }
         if case .main = s.route, changeObserver == nil {
             changeObserver = LibraryChangeObserver { [weak self] in
@@ -154,6 +162,31 @@ final class AppModel: ObservableObject {
     /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
     func retryTapped() { Task { await coordinator.retryTapped() } }
 
+    // MARK: 再拼一张（需求 v1.0 §2e；判断全在 AppCoordinator+QuickAgain）
+
+    var canStartNewMosaic: Bool { state.canStartNewMosaic }
+    var unsavedPrompt: UnsavedResultPrompt? { state.unsavedPrompt }
+    /// 未保存提示是不是「存过但强度改了」那种（标题 `quick.unsaved.update_title`）。
+    var unsavedPromptIsUpdate: Bool { state.unsavedPromptIsUpdate }
+    /// 每次从作品查看页「再拼一张」+1：主流程导航栈按它重建，退回主流程。
+    @Published private(set) var navigationResetToken = 0
+    /// 作品查看页「再拼一张」（quick-start v1.0 §2a）：退回主流程，再走和预览页一样的「再拼一张」。
+    func startNewFromWork() {
+        guard !state.isGenerating, !state.export.isBusy else { return }
+        coordinator.startNewFromWorkTapped()
+        navigationResetToken += 1
+    }
+    func startNewMosaicTapped() { coordinator.startNewMosaicTapped() }
+    func leaveResultTapped() { coordinator.leaveResultTapped() }
+    func unsavedPromptSave() { coordinator.unsavedPromptSaveTapped() }
+    func unsavedPromptDismissed() { coordinator.unsavedPromptDismissed() }
+    func unsavedPromptDiscard() { coordinator.unsavedPromptDiscard() }
+    func unsavedPromptCancel() { coordinator.unsavedPromptCancel() }
+    /// 确认页「素材：{name} · {count} 张」。
+    var materialSummary: LocalizedLine {
+        state.materialSummary(allPhotosTitle: (allPhotosRow.titleKey ?? .sourceListAll).localized)
+    }
+
     // MARK: 导出（紧急版：只保存到相册；失败/重试走协调器，作品页再导出才能保留 exportSource）
 
     var exportPhase: ExportPhase { state.export }
@@ -169,15 +202,43 @@ final class AppModel: ObservableObject {
 
     // MARK: 平台专属：目标图 / 预览
 
-    func loadTarget(data: Data?) {
+    // MARK: 系统选择器选的照片用不了（copy v1.6，判断在 AppCoordinator+PickerUnavailable）
+
+    var showsPickerUnavailable: Bool { state.showsPickerUnavailable }
+    var pickerUnavailableShowsAddAccess: Bool { state.pickerUnavailableShowsAddAccess }
+    var targetPickerReopenRequest: Int { state.targetPickerReopenRequest }
+    func pickedTargetUnavailable() { coordinator.pickedTargetUnavailable() }
+    func pickerUnavailableChange() { coordinator.pickerUnavailableChangeTapped() }
+    func pickerUnavailableCancel() { coordinator.pickerUnavailableCancelTapped() }
+    func pickerUnavailableAddAccess() { coordinator.pickerUnavailableAddAccessTapped() }
+    func pickerUnavailableDismissed() { coordinator.pickerUnavailableDismissed() }
+
+    /// 系统选择器选好、已过 PickedTargetGate：解码失败同样弹 picker.unavailable（不区分原因）。
+    func loadPickedTarget(data: Data?) {
         let t0 = perf.clock.now()
         guard let data, let pb = ImagePixels.downsampledTarget(from: data) else {
-            coordinator.setTarget(nil)
+            coordinator.pickedTargetUnavailable()
             return
         }
         perf.record(.targetDecode, seconds: perf.clock.now() - t0, items: pb.width * pb.height)
         targetPreview = ImagePixels.cgImage(pb)
         coordinator.setTarget(pb)
+    }
+
+    /// 「再拼一张」开始前的目标图缩略图：返回预览页时换回来；开始生成新图后丢掉。
+    private var previousTargetPreview: CGImage?
+
+    /// 「再拼一张」状态变化时同步目标图缩略图（选图页只显示新选的那张）。
+    private func syncTargetPreview(old: AppState, new: AppState) {
+        if !old.flow.isQuickAgain, new.flow.isQuickAgain {
+            previousTargetPreview = targetPreview
+            targetPreview = nil
+        } else if old.flow.isQuickAgain, !new.flow.isQuickAgain {
+            if new.flow.step == .result {
+                targetPreview = previousTargetPreview   // 返回原预览页
+            }
+            previousTargetPreview = nil
+        }
     }
 
     /// 取消未完成的缩略图绘制，并释放 `resultImage`。

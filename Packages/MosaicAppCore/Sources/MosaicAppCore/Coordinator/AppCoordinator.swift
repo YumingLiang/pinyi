@@ -14,15 +14,27 @@ public final class AppCoordinator {
     public let index: PhotoIndex
     public let memory: PeakMemoryTracker
 
-    public private(set) var state: AppState {
+    public internal(set) var state: AppState {
         didSet { if state != oldValue { notify() } }
     }
     /// 最近一次生成结果（不放进 `state`：体积大且不是 Hashable）。
-    public private(set) var product: GenerationProduct?
-    /// 当前目标图（平台层解码后交进来）。
-    public private(set) var target: PixelBuffer?
+    public internal(set) var product: GenerationProduct? {
+        didSet { if (product != nil) != state.hasResult { state.hasResult = product != nil } }
+    }
+    /// 当前目标图（平台层解码后交进来）。「再拼一张」期间这是**上一张结果**的目标图（预览叠加 / 存作品要用），
+    /// 新选的目标图先放在 `pendingTarget`，开始生成新图时才换进来。
+    public internal(set) var target: PixelBuffer?
+    /// 「再拼一张」新选的目标图（开始生成时才替换 `target`）。
+    public internal(set) var pendingTarget: PixelBuffer?
+    /// 未保存提示每弹一次 +1：收起弹窗时用来确认收的还是同一个提示（`unsavedPromptDismissed`）。不放进 AppState（不是界面状态）。
+    var unsavedPromptID = 0
+    /// 「再拼一张」开始时的设置和素材来源：确认页上的改动只作用于新图（#18 QA P2-b），返回预览页时恢复，旧结果和
+    /// 「已存」按钮状态不受影响。开始生成新图时丢掉（新图就用确认页上的值）。
+    var settingsBeforeQuickAgain: (settings: GenerationSettings, selection: SourceSelection)?
+    /// 「存到我的作品」（`WorksController`）：未保存提示要问它当前结果存没存过、以及「保存」按钮去存。弱引用，不成环。
+    public weak var resultSaver: (any CurrentResultSaving)?
     /// 每换一次目标图 +1（PixelBuffer 不做内容比较，用代次判断「目标图换没换」）。
-    private var targetGeneration = 0
+    var targetGeneration = 0
     /// `product` 是用哪组输入生成的（不含叠加强度）。设置页点「开始拼图」时若和当前输入一样，
     /// 说明「再调一调」只改了叠加强度：直接回到上一次结果，不重新生成（B10 第 3/13 条）。
     private var productInputs: ProductInputs?
@@ -300,14 +312,20 @@ public final class AppCoordinator {
 
     /// 目标图解码结果（平台层解码 + 降采样后交进来；nil = 读不出来）。
     public func setTarget(_ pixels: PixelBuffer?) {
-        target = pixels
-        targetGeneration += 1
+        if state.flow.isQuickAgain {
+            pendingTarget = pixels   // 上一张结果还在，它的目标图不能动；开始生成新图时才换进来（commitQuickAgain，代次 +1）
+        } else {
+            target = pixels
+            targetGeneration += 1
+        }
         state.flow.send(pixels == nil ? .targetFailed : .targetLoaded)
     }
 
     public func flowSend(_ e: MainFlow.Event) {
         guard !state.export.isBusy else { return }
+        let wasQuickAgain = state.flow.isQuickAgain
         state.flow.send(e)
+        if wasQuickAgain, !state.flow.isQuickAgain, state.flow.step == .result { quickAgainCancelled() }
     }
     public func selectSource(_ s: SourceSelection) { state.flow.source.select(s) }
     public func setDensity(_ d: DensityChoice) { state.flow.settings.density = d }
@@ -342,6 +360,8 @@ public final class AppCoordinator {
     /// 「再调一调」回来只改了叠加强度时，设置页主按钮是「完成」（`settingsPrimaryAction == .done`），走 `adjustDoneTapped()`。
     public func generateTapped() async {
         guard !generateGatePending, !state.export.isBusy, !state.isGenerating else { return }
+        // 结果页上（phase 仍是 `.result`）只有「再拼一张」的确认页能开始新图。
+        if case .result = state.flow.generation.phase, !state.flow.isQuickAgain { return }
         generateGatePending = true
         defer { generateGatePending = false }
         if let load = loadTask { await load.value }
@@ -410,6 +430,12 @@ public final class AppCoordinator {
             }
         }
         let effects = state.flow.generation.send(e)
+        // 「再拼一张」：真正开始生成新图（有 `.run`）时才丢弃上一张没存的结果和预览位图，换上新目标图。
+        let starts = effects.contains(where: { if case .run = $0 { return true }; return false })
+        if state.flow.isQuickAgain, starts {
+            commitQuickAgain()
+        }
+        if state.flow.isFreshQuickStart, starts { state.flow.endFreshQuickStart() }
         state.flow.syncWithGeneration()
         for eff in effects {
             switch eff {
