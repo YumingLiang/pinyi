@@ -31,6 +31,8 @@ struct MainFlowView: View {
                 }
             }
         }
+        // 作品查看页「再拼一张」：整个导航栈退回主流程（换 id = 重建栈，弹掉作品列表 / 查看页）。
+        .id(model.navigationResetToken)
         .sheet(isPresented: $model.showScanSheet) { ScanView() }
         .fullScreenCover(isPresented: .constant(model.flow.generation.showsProgress)) { GenerationProgressView() }
         .sheet(item: Binding(get: { model.presentedEmptyState.map(EmptyBox.init) },
@@ -71,7 +73,7 @@ struct TargetStepView: View {
         .navigationTitle(Text(L10nKey.targetNavTitle))
         .onAppear {
             // TODO(需求 v0.4 §4)：自做选图页（记住浏览位置）接入主流程后改为打开它；目前主流程仍是系统 PhotosPicker。
-            if model.flow.isQuickAgain && !model.flow.hasTarget { showPicker = true }
+            if model.flow.autoOpensTargetPicker { showPicker = true }
         }
         .onChange(of: item) { newItem in
             Task {
@@ -173,7 +175,11 @@ struct SettingsStepView: View {
                 } minimumValueLabel: { Text(L10nKey.overlayLeft).font(.caption2) } maximumValueLabel: { Text(L10nKey.overlayRight).font(.caption2) }
             }
             Section(footer: Text(L10nKey.generatePrivacyHint)) {
-                Button { model.generateTapped() } label: { Text(L10nKey.generateCTA).frame(maxWidth: .infinity) }
+                // B10.14：「再调一调」进来只动了叠加强度 →「完成」回原结果（不重新生成）；否则「开始拼图」
+                let action = model.settingsPrimaryAction
+                Button {
+                    if action == .done { model.adjustDoneTapped() } else { model.generateTapped() }
+                } label: { Text(action == .done ? L10nKey.commonDone : L10nKey.generateCTA).frame(maxWidth: .infinity) }
                     .buttonStyle(.borderedProminent).controlSize(.large)
             }
         }
@@ -243,7 +249,7 @@ struct ResultView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!model.canExport)
-            SaveToWorksButton()   // 需求 B2：次按钮「存到我的作品」（导出成功也会自动存一份）
+            SaveToWorksButton()   // 需求 B2 / B10：次按钮「存到我的作品」（导出不自动存）
             // 需求 v0.4 §2e：第三级文字按钮，紧挨「存到我的作品」下面，不和「再调一调」「换一种拼法」同排。
             // 生成中 / 导出中 / 提示弹着时不可点（判断在 AppState.canStartNewMosaic）。
             Button { model.startNewMosaicTapped() } label: {
@@ -263,8 +269,10 @@ struct ResultView: View {
             if model.exportPhase.isBusy { ExportBusyOverlay() }
         }
         .modifier(ExportResultAlerts())
-        // 未保存提示（quick.unsaved.*）：只在当前结果既没导出过也没存过时由协调器弹出。isPresented 只读，按钮各自调协调器。
-        .confirmationDialog(Text(L10nKey.quickUnsavedTitle), isPresented: .constant(model.unsavedPrompt != nil),
+        // 未保存提示（quick.unsaved.*）：当前结果没存进作品（导出过不算存过）时由协调器弹出；存过但只改了叠加强度时
+        // 标题换成 quick.unsaved.update_title，「保存」= 更新原作品（hd-export B10-4/11）。isPresented 只读，按钮各自调协调器。
+        .confirmationDialog(Text(model.unsavedPromptIsUpdate ? L10nKey.quickUnsavedUpdateTitle : L10nKey.quickUnsavedTitle),
+                            isPresented: .constant(model.unsavedPrompt != nil),
                             titleVisibility: .visible) {
             Button { model.unsavedPromptSave() } label: { Text(L10nKey.quickUnsavedSave) }
             Button(role: .destructive) { model.unsavedPromptDiscard() } label: { Text(L10nKey.quickUnsavedDiscard) }

@@ -3,18 +3,24 @@ import XCTest
 import MosaicCore
 @testable import MosaicAppCore
 
-/// 「存到我的作品」的替身：可设「已存」、可让保存失败、记录调用次数。
+/// 「存到我的作品」的替身：可设「已存」/「存过但强度改了」、可让保存失败、记录调用次数。
 @MainActor
 final class FakeResultSaver: CurrentResultSaving {
     var savedRevision: Int?
+    /// 存过的作品只改了叠加强度还没存（B10-11）。
+    var alphaChangedWork: WorkID?
     var saveSucceeds = true
     var saveCalls = 0
     weak var coordinator: AppCoordinator?
-    func isCurrentResultSaved(revision: Int) -> Bool { savedRevision == revision }
+    var unsavedPrompt: UnsavedPrompt {
+        guard let rev = coordinator?.state.resultRevision, savedRevision == rev else { return .unsaved }
+        return alphaChangedWork.map { .alphaChanged($0) } ?? .none
+    }
     func saveCurrentResult() async -> Bool {
         saveCalls += 1
         guard saveSucceeds else { return false }
         savedRevision = coordinator?.state.resultRevision
+        alphaChangedWork = nil
         return true
     }
 }
@@ -76,7 +82,8 @@ final class QuickAgainTests: XCTestCase {
         c.stop()
     }
 
-    func testExportedResultDoesNotPrompt() async throws {
+    /// 导出过不算存过（AndyL 22:20、hd-export B10-4）：导出成功后点「再拼一张」照样弹 `quick.unsaved.title`。
+    func testExportedButUnsavedResultStillPrompts() async throws {
         let h = CoordinatorHarness(assets: 300)
         let c = h.coordinator
         _ = saver(c)
@@ -85,10 +92,11 @@ final class QuickAgainTests: XCTestCase {
         await c.settle()
         XCTAssertEqual(c.state.export, .saved)
         c.dismissExportResult()
-        XCTAssertEqual(c.state.resultExportedRevision, c.state.resultRevision)
         c.startNewMosaicTapped()
-        XCTAssertNil(c.state.unsavedPrompt, "导出过的结果不弹提示")
-        XCTAssertEqual(c.state.flow.step, .target)
+        XCTAssertEqual(c.state.unsavedPrompt, .startNew, "导出过不算存过，照样弹")
+        XCTAssertFalse(c.state.unsavedPromptIsUpdate)
+        XCTAssertEqual(c.state.unsavedPromptTitle, .quickUnsavedTitle)
+        XCTAssertEqual(c.state.flow.step, .result)
         c.stop()
     }
 
@@ -252,7 +260,6 @@ final class QuickAgainTests: XCTestCase {
         XCTAssertEqual(c.target?.width, 40)
         XCTAssertNil(c.pendingTarget)
         XCTAssertGreaterThan(c.state.resultRevision, rev)
-        XCTAssertNil(c.state.resultExportedRevision)
         XCTAssertFalse(c.isCurrentResultKept, "新结果出来前「已存」状态作废")
         XCTAssertFalse(c.state.canStartNewMosaic, "生成中不能点")
         c.startNewMosaicTapped()

@@ -28,6 +28,20 @@ public final class AppCoordinator {
     public internal(set) var pendingTarget: PixelBuffer?
     /// 「存到我的作品」（`WorksController`）：未保存提示要问它当前结果存没存过、以及「保存」按钮去存。弱引用，不成环。
     public weak var resultSaver: (any CurrentResultSaving)?
+    /// 每换一次目标图 +1（PixelBuffer 不做内容比较，用代次判断「目标图换没换」）。
+    var targetGeneration = 0
+    /// `product` 是用哪组输入生成的（不含叠加强度）。设置页点「开始拼图」时若和当前输入一样，
+    /// 说明「再调一调」只改了叠加强度：直接回到上一次结果，不重新生成（B10 第 3/13 条）。
+    private var productInputs: ProductInputs?
+    private struct ProductInputs: Equatable {
+        var targetGeneration: Int
+        var selection: SourceSelection
+        var density: DensityChoice
+    }
+    private var currentInputs: ProductInputs {
+        ProductInputs(targetGeneration: targetGeneration, selection: state.flow.source.selection,
+                      density: state.flow.settings.density)
+    }
     /// 平台层执行系统动作（打开设置、受限选择器）。
     public var systemActionHandler: (@MainActor (SystemAction) -> Void)?
 
@@ -41,8 +55,6 @@ public final class AppCoordinator {
     private var exportTask: Task<Void, Never>?
     private var lastExportPurpose: ExportPurpose = .save
     private var exportSource: ExportSource?
-    /// 本次导出的是不是结果页上的当前结果（作品页再导出不算）。
-    private var exportSourceIsCurrentResult = false
     private var lifecycleTask: Task<Void, Never>?
     private var memorySamplingTask: Task<Void, Never>?
     /// 被取消、尚未结束的任务（`settle()` 等它们收尾）。
@@ -296,9 +308,10 @@ public final class AppCoordinator {
     /// 目标图解码结果（平台层解码 + 降采样后交进来；nil = 读不出来）。
     public func setTarget(_ pixels: PixelBuffer?) {
         if state.flow.isQuickAgain {
-            pendingTarget = pixels   // 上一张结果还在，它的目标图不能动
+            pendingTarget = pixels   // 上一张结果还在，它的目标图不能动；开始生成新图时才换进来（commitQuickAgain，代次 +1）
         } else {
             target = pixels
+            targetGeneration += 1
         }
         state.flow.send(pixels == nil ? .targetFailed : .targetLoaded)
     }
@@ -319,7 +332,25 @@ public final class AppCoordinator {
 
     // MARK: - 生成
 
-    /// 「开始拼图」。并发点击只处理第一次（互斥）；导出进行中忽略。
+    /// 设置页主按钮（B10.14）：「再调一调」进来后，和当前结果相比只动了叠加强度（或什么都没动）→ `.done`「完成」
+    /// （`common.done`）：回到原结果，格子 / 种子不变，只按新强度重画；动了密度、来源、目标图（含裁剪，换图即换代次）→
+    /// `.generate`「开始拼图」，重新生成，算新的一张。没有可回去的结果（首次进设置页、失败后结果已丢）也是 `.generate`。
+    public var settingsPrimaryAction: SettingsPrimaryAction {
+        guard product != nil, target != nil, let inputs = productInputs, inputs == currentInputs,
+              state.flow.generation.lastOutcome != nil, case .idle = state.flow.generation.phase else { return .generate }
+        return .done
+    }
+
+    /// 设置页「完成」：回到上一次结果，不跑生成；`resultRevision` 不变（作品 id 保留，存过且强度变了 → `works.update`）。
+    /// 平台层回到结果页时按新强度重画预览（AppModel 进结果页时重画）。不是 `.done` 时忽略。
+    public func adjustDoneTapped() async {
+        guard settingsPrimaryAction == .done, !state.export.isBusy else { return }
+        send(.restoreLastResult)
+    }
+
+
+    /// 「开始拼图」。并发点击只处理第一次（互斥）；导出进行中忽略。总是重新生成：
+    /// 「再调一调」回来只改了叠加强度时，设置页主按钮是「完成」（`settingsPrimaryAction == .done`），走 `adjustDoneTapped()`。
     public func generateTapped() async {
         guard !generateGatePending, !state.export.isBusy, !state.isGenerating else { return }
         // 结果页上（phase 仍是 `.result`）只有「再拼一张」的确认页能开始新图。
@@ -387,15 +418,17 @@ public final class AppCoordinator {
     public func send(_ e: GenerationMachine.Event) {
         if state.export.isBusy {
             switch e {
-            case .startTapped, .retryTapped, .reshuffleTapped, .backToSettings: return   // 导出期间不动结果
+            case .startTapped, .retryTapped, .reshuffleTapped, .backToSettings, .restoreLastResult: return   // 导出期间不动结果
             default: break
             }
         }
         let effects = state.flow.generation.send(e)
         // 「再拼一张」：真正开始生成新图（有 `.run`）时才丢弃上一张没存的结果和预览位图，换上新目标图。
-        if state.flow.isQuickAgain, effects.contains(where: { if case .run = $0 { return true }; return false }) {
+        let starts = effects.contains(where: { if case .run = $0 { return true }; return false })
+        if state.flow.isQuickAgain, starts {
             commitQuickAgain()
         }
+        if state.flow.isFreshQuickStart, starts { state.flow.endFreshQuickStart() }
         state.flow.syncWithGeneration()
         for eff in effects {
             switch eff {
@@ -421,6 +454,7 @@ public final class AppCoordinator {
         guard let target else { send(.finishedWithError(runID: id, failure: .other)); return }
         let settings = state.flow.settings
         let selection = state.flow.source.selection
+        let inputs = currentInputs
         let previous = state.flow.generation.phase.isReshuffle ? product : nil
         let generator = dependencies.generator
         let index = self.index
@@ -458,6 +492,7 @@ public final class AppCoordinator {
                 guard let self else { return }
                 if self.state.flow.generation.currentRunID == id {
                     self.product = p
+                    self.productInputs = inputs
                     self.state.resultRevision += 1
                     if p.lowRes.enabled {
                         self.state.lowResExclusion = LowResExclusion(selection: selection, assetIDs: p.lowRes.excludedAssetIDs)
@@ -502,7 +537,6 @@ public final class AppCoordinator {
     public func saveTapped() async {
         guard canExport, let layout = currentLayout() else { return }
         exportSource = ExportSource(layout: layout, target: target)
-        exportSourceIsCurrentResult = true
         await startSave()
     }
 
@@ -510,7 +544,6 @@ public final class AppCoordinator {
     public func shareTapped() {
         guard canExport, let layout = currentLayout() else { return }
         exportSource = ExportSource(layout: layout, target: target)
-        exportSourceIsCurrentResult = true
         startShare()
     }
 
@@ -518,7 +551,6 @@ public final class AppCoordinator {
     public func export(layout: MosaicLayout, target: PixelBuffer?, purpose: ExportPurpose) async {
         guard !state.export.isBusy, !state.isGenerating, layout.isValid else { return }
         exportSource = ExportSource(layout: layout, target: target)
-        exportSourceIsCurrentResult = false
         switch purpose {
         case .save: await startSave()
         case .share: startShare()
@@ -584,7 +616,6 @@ public final class AppCoordinator {
         let exporter = dependencies.exporter
         let library = dependencies.library
         let onSucceeded = dependencies.onExportSucceeded
-        let exportedRevision = exportSourceIsCurrentResult ? state.resultRevision : nil
         let request = ExportRequest(layout: source.layout, target: source.target,
                                     overlayAlpha: source.target == nil ? 0 : source.layout.params.overlayAlpha,
                                     tier: state.exportTier)
@@ -602,18 +633,18 @@ public final class AppCoordinator {
         }
         exportTask = Task { [weak self] in
             let outcome: ExportPhase
-            var exportedOK = false
             do {
                 let url = try await exporter.export(request, progress: progress)
-                await onSucceeded(source.layout, url)
-                // 导出成功（存相册 / 分享任一）：当前结果算「已导出」，「再拼一张」不再弹未保存提示（需求 v0.4 §2e）。
-                exportedOK = true
+                // 「导出成功」通知只在真正成功后发（原来在写相册之前就发，写相册失败也会触发，QA works-rules 规则 3）。
+                // 「我的作品」那边只用它刷新按钮，不再自动存（AndyL 11-16 22:20，B10-1）。
                 switch purpose {
                 case .share:
+                    await onSucceeded(source.layout, url)
                     outcome = .sharing(url)
                 case .save:
                     do {
                         try await library.saveImageToLibrary(fileURL: url)
+                        await onSucceeded(source.layout, url)
                         outcome = .saved
                     } catch {
                         outcome = .failed(SaveFailure.classify(error, addOnlyAuthorization: library.addOnlyAuthorizationStatus()))
@@ -631,7 +662,6 @@ public final class AppCoordinator {
             await consumer.value
             guard let self else { return }
             self.state.export = outcome
-            if exportedOK, let rev = exportedRevision { self.state.resultExportedRevision = rev }
             self.endMemory(token)
             self.dependencies.lifecycle.endBackgroundWork(.export)
             self.exportTask = nil

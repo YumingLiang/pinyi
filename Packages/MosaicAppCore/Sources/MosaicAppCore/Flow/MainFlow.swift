@@ -18,6 +18,11 @@ public struct MainFlow: Sendable, Hashable {
     public private(set) var isQuickAgain = false
     /// 进入「再拼一张」前是否已有目标图（返回预览页时恢复）。
     private var hasTargetBeforeQuickAgain = false
+    /// 从作品查看页点「再拼一张」、而主流程当时没有停在结果页（quick-start v1.0 §2a）：同样「选一张 → 确认页（素材沿用）→
+    /// 开始拼图」，只是没有可返回的预览页。开始生成时结束（`endFreshQuickStart`）。
+    public private(set) var isFreshQuickStart = false
+    /// 选图页一出现就自动弹出选图（再拼一张 → 选一张 → 开始拼图，≤ 3 次点击）。
+    public var autoOpensTargetPicker: Bool { (isQuickAgain || isFreshQuickStart) && step == .target && !hasTarget }
 
     public init(initialSeed: UInt64) { generation = GenerationMachine(initialSeed: initialSeed) }
 
@@ -30,6 +35,8 @@ public struct MainFlow: Sendable, Hashable {
         case quickAgainStarted
         /// 确认页「换素材」：去来源页，选完回确认页。
         case changeSource
+        /// 作品查看页「再拼一张」、主流程没有停在结果页：去选目标图，选好直接进确认页。
+        case freshQuickStartStarted
     }
 
     public mutating func send(_ e: Event) {
@@ -38,13 +45,13 @@ public struct MainFlow: Sendable, Hashable {
             hasTarget = true
             targetNotice = nil
             // 2b：再拼一张选好照片直接进确认页（素材沿用上次），保证 ≤ 3 次点击。
-            if isQuickAgain, step == .target { step = .settings }
+            if isQuickAgain || isFreshQuickStart, step == .target { step = .settings }
         case .targetFailed:
             hasTarget = false
             targetNotice = .targetUnreadable
         case .next:
             switch step {
-            case .target where hasTarget: step = isQuickAgain ? .settings : .source
+            case .target where hasTarget: step = (isQuickAgain || isFreshQuickStart) ? .settings : .source
             case .source: step = .settings
             default: break
             }
@@ -63,6 +70,14 @@ public struct MainFlow: Sendable, Hashable {
                 }
                 return
             }
+            if isFreshQuickStart {
+                switch step {
+                case .settings: step = .target
+                case .source: step = .settings
+                case .target, .result: break
+                }
+                return
+            }
             switch step {
             case .source: step = .target
             case .settings: step = .source
@@ -78,6 +93,13 @@ public struct MainFlow: Sendable, Hashable {
             step = .target
         case .changeSource:
             if step == .settings { step = .source }
+        case .freshQuickStartStarted:
+            guard !isQuickAgain else { return }
+            if case .result = generation.phase { return }   // 停在结果页时走 quickAgainStarted
+            isFreshQuickStart = true
+            hasTarget = false
+            targetNotice = nil
+            step = .target
         }
     }
 
@@ -86,9 +108,15 @@ public struct MainFlow: Sendable, Hashable {
         isQuickAgain = false
     }
 
+    /// 作品页进来的「再拼一张」开始生成了（之后和普通流程一样）。
+    public mutating func endFreshQuickStart() {
+        isFreshQuickStart = false
+    }
+
     /// 离开结果页、回到首页（选目标图）：旧结果已由协调器丢弃。
     public mutating func returnToStart() {
         isQuickAgain = false
+        isFreshQuickStart = false
         hasTarget = false
         targetNotice = nil
         step = .target

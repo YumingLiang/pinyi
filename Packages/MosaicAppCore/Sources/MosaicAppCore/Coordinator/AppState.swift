@@ -101,10 +101,13 @@ public struct AppState: Sendable, Hashable {
     public var postFilterShortageNotice = false
     /// 有没有结果（`AppCoordinator.product != nil`）。变成 false 时平台层释放预览位图（约 48 MB）。
     public var hasResult = false
-    /// 哪一版结果（`resultRevision`）在结果页导出成功过（存相册或分享）。「再拼一张」据此判断要不要弹未保存提示。
-    public var resultExportedRevision: Int?
-    /// 未保存提示（`quick.unsaved.*`）：只在当前结果既没导出过、也没存到我的作品时弹。
+    /// 未保存提示（`quick.unsaved.*`）是因为哪种离开方式弹的；nil = 没弹。当前结果没存进作品就弹（导出过不算存过，
+    /// hd-export B10-4）；存过但只改了叠加强度还没存也弹，标题换成 `quick.unsaved.update_title`（B10-11）。
     public var unsavedPrompt: UnsavedResultPrompt?
+    /// 弹着的提示是不是「存过但强度改了」那种（标题 `quick.unsaved.update_title`，「保存」= 更新原作品）。
+    public var unsavedPromptIsUpdate = false
+    /// 未保存提示标题 key。
+    public var unsavedPromptTitle: L10nKey { unsavedPromptIsUpdate ? .quickUnsavedUpdateTitle : .quickUnsavedTitle }
     /// 未保存提示里点了「保存」，正在存。
     public var isSavingBeforeLeaving = false
 
