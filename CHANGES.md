@@ -1,5 +1,17 @@
 # CHANGES
 
+## feat/picker-t0：选图页 P0 T0「定接口」（photo-picker-v0.1 §3、§5）
+
+只定接口和数据类型，不做实现逻辑；T1–T4 按这里的协议并行实现。占位函数体是 `fatalError("Tn: …")`，谁实现谁替换。
+
+- **MosaicAppCore `Picker/AlbumCatalog.swift`**：`SmartAlbumKind`（8 个智能相簿白名单，类型上就没有「已隐藏」）、`AlbumKind`（全部照片 / 用户相簿 / 文件夹 / 智能相簿 / 共享相簿）、`AlbumEntry`（localIdentifier、标题、种类、图片数、文件夹子项、对应的 `SourceSelection`）、`AlbumCatalogSnapshot`（数据源读出的原始列表）、`AlbumCatalogProviding`（App 层数据源协议，**T3**）、`AlbumSection` 和 `AlbumCatalog.sections / isSelectable / entry`（空相簿隐藏、排序、白名单，**T1**；`filter` 留给 P1）。
+- **MosaicAppCore `Picker/BrowsePosition.swift`**：`BrowsePage`（source / target，偏好 key `browse.position.<page>`）、`BrowsePosition`（相簿 + 锚点照片 + 锚点偏移 pt + 版本号，Codable）、`BrowseFallbackReason`、`BrowseRestoreResult`（回到锚点 / 回到「全部照片」顶部及原因）、`PreferenceDataStore`（偏好里存 Data；`PreferenceStore` 只存布尔）、`BrowsePositionStoring` 和 `BrowsePositionStore`（**T2**）。
+- **MosaicAppCore `Picker/AssetGrid.swift`**：`AssetGridDataSource`（count、按下标取 assetID、是否实况、按 ID 找下标、变化通知；按创建时间倒序）、`AssetGridChange`（增量删 / 插 / 改 / 移，或整体 reload）、`AssetGridSourceProviding`（按来源打开数据源）、`GridThumbnailLoading<Image>`（request / cancel / startCaching / stopCaching / stopCachingAll）、`ThumbnailCacheWindow`（缓存窗口纯逻辑，**T4**）。数据源与加载器 **T3** 用 PhotoKit 实现，**T4** 的网格只依赖协议。
+- **App `Adapters/PhotoFetch.swift`**：唯一取照片入口 `PhotoFetch.options(imagesOnly:sources:order:)`，`includeHiddenAssets = false` 显式写死，`includeAllBurstAssets = false`，`imagesOnly` 时加 `mediaType == image` 谓词，`includeAssetSourceTypes` 按场景显式传（`Sources.library = [.typeUserLibrary, .typeiTunesSynced]` / `cloudShared` / `any`）；附 `allImages`、`images(in:)`、`images(withLocalIdentifiers:)` 三个包装和 `SmartAlbumKind` ↔ `PHAssetCollectionSubtype` 映射（白名单外含 `.smartAlbumAllHidden` 一律丢弃）。**T0 不改现有调用点**，由 T3 改。
+- **App `Adapters/UserDefaultsPreferenceData.swift`**：`PreferenceDataStore` 的 `UserDefaults` 实现（尚未注入，T5 接）。
+- **测试**：`PickerInterfaceTests` 11 个（白名单正好 8 个且不含 hidden、相簿条目构造与 `selection`、条目树和位置值 Codable 往返、偏好 key、假数据源 / 假加载器能符合协议）。测试替身 `InMemoryPreferenceData`、`FakeGridDataSource`、`FakeGridLoader` 给 T2 / T4 复用。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`PhotoFetch.swift`、`UserDefaultsPreferenceData.swift`。
+
 ## feat/sharp-filter：「不能略糊」——生成时只用本机有 ≥ 256 px 版本的照片（hd-export-req-v0.2 F5 / hd-default-and-sharpness-v0.1 方案 1）
 
 - **做法（不重扫全库）**：照常匹配 → 只探测**实际分到格子上**的照片（去重）→ 不合格的从候选掩码里剔掉 → 用原有匹配器（含放宽链）整图重配 → 再探测新出现的照片，最多重配 3 轮。生成前先把本会话缓存里已知不合格的剔掉，第二次生成通常 0 轮重配、0 次探测。
