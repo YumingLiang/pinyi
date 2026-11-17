@@ -23,7 +23,7 @@ public struct ShapePath: Codable, Sendable, Equatable {
     public var aspect: Double          // 外接框 宽/高
 }
 public enum ShapeSource: Codable, Sendable, Equatable {
-    case preset(ShapePresetID)         // 10 个
+    case preset(ShapePresetID)         // 10 个；rawValue 写进 manifest，定稿后不可改
     case text(lines: [String])         // 1–2 行，已过滤
 }
 public enum ShapePalette: String, Codable, Sendable { case auto, warmRed, pink, blue, gold }
@@ -35,13 +35,14 @@ public struct ShapeSpec: Codable, Sendable, Equatable {
 }
 ```
 - `PresetShapes.path(for:) -> ShapePath`：10 个形状用代码写贝塞尔，纯数据。设计约束：最细处 ≥ 外接框短边的 7%（粗档 40 格时约 2.8 格），避免断开；内部不留小于 10% 的孔。
-- `TextOutlineProviding`（协议，App 层实现 `CoreTextOutline`）：`func outline(lines: [String]) -> ShapePath?`。
+- `ShapePresetID` 的 rawValue（v0.1.1 定稿，写进 manifest `source.preset`，也是文案 key `shape.preset.<id>` 的后缀；一旦有作品存盘就不能改，要有测试锁定）：`heart`、`star`、`circle`、`birthdayCake`、`flower`、`moon`、`fourLeafClover`、`house`、`speechBubble`、`roundedSquare`。解码到未登记的 preset 时报错，S5 把这个错误映射成「需要新版本打开」。
+- `TextOutlineProviding`（协议，App 层实现 `CoreTextOutline`）：`func outline(lines: [String]) -> TextOutline?`，其中 `TextOutline { path: ShapePath, widthEm, heightEm }`（v0.1.1：多带 em 尺寸，用来校验「每字 ≥ 24 格」；`cellsPerEm` 按实际光栅化的缩放 `min(fitW / widthEm, fitH / heightEm)` 算，已扣掉边距）。
   - 字体：`UIFont.systemFont(ofSize: 100, weight: .heavy)`，中文由系统回退到苹方（最粗 Semibold），不指定字体名。
   - 用 CTLine 排版（自动回退字体），逐 glyph `CTFontCreatePathForGlyph`，转成 `ShapePath`；多行居中，行距 1.15 em。
   - 归一化后的路径就是形状的唯一事实来源；之后全部走同一个光栅化器。
 
 ## 2. 光栅化和 50% 判定（`PathRasterizer`）
-- 输入 `ShapePath`、`columns × rows`；先把路径等比放进网格，四周留 0.5 格边距（文字留 1 格）。
+- 输入 `ShapePath`、`columns × rows`；先把路径等比放进网格，四周留 1 格边距（预设和文字一样；v0.1.1 从 0.5 格改为 1 格，因为 0.5 格时形状最宽处的边格覆盖率正好 32/64 会被点亮，形状会贴到图边）。
 - 贝塞尔按 0.05 格容差拆成线段；对 `rows × 8` 条采样扫描线（采样点 y = (j+0.5)/8 格）求与所有边的交点，按非零环绕填充区间；每条扫描线上 x 方向同样 8 个采样点/格，累计到 `coverage[cell]`（0…64）。
 - 形状内 ⇔ coverage ≥ 32。复杂度 O(扫描线 × 边数)，120×120 格、几百条边 < 10 ms。
 - 输出 `CellMask { columns, rows, bits: BitMask }`。
@@ -70,9 +71,11 @@ public struct ShapeSpec: Codable, Sendable, Equatable {
   | gold 金 | #B98A3A | #E6C478 |
   选值原则：饱和度比纯色低一档，照片的平均色很少能到高饱和；两端拉开明度，渐变看得出来。
 - **按相册取色（auto）**：用快照里每张照片特征的 OKLab 均值。
-  1. 去掉 chroma < 0.03 的近灰照片后，按色相分 12 桶；
-  2. 取照片数最多、且彼此相隔 ≥ 2 桶的 2–3 个桶，按色相排序；每桶取 L、a、b 中位数作为色标；
-  3. 有彩照片不到 30%（相册偏灰）时，改成按明度的渐变：取 L 的 20% 和 80% 分位，对应中性色；
+  1. 「有彩照片」的定义：照片特征的 OKLab 均值色度 `sqrt(a² + b²) ≥ 0.03`，否则算近灰。去掉近灰照片后，按色相分 12 桶；
+  2. 取照片数最多、且彼此相隔 ≥ 2 桶的 2–3 个桶，按色相排序；每桶取 L、a、b 中位数作为色标。一个桶的照片至少要占有彩照片的 10%，才能当色标（`minStopShare = 0.10`）；
+     - 符合条件的桶只有 1 个时（单主色）：用这个桶自己做深浅渐变，a、b 取该桶中位数，两端 L 取该桶照片 L 值的 20% 和 80% 分位；两端明度差不到 0.1 时，以中点为中心拉开到 0.2；
+  3. `有彩张数 / 全部张数 < 0.30`（严格小于，30% 整走第 1、2 步）时，改成按明度的渐变：取全部照片 L 的 20% 和 80% 分位，a = b = 0 的中性色；
+     - 没有可用颜色（快照为空等）：中性灰 L 0.45 → 0.80，不报错；
   4. 色标同种子无关，「换一种拼法」不变色。
 - **素材不足检测（固定配色）**：某张照片均值到渐变上最近点的 OKLab 距离 ≤ 0.10 算「近色」。
   `近色张数 < max(50, ceil(形状内格数 / 单张上限))` 时出 `shape.color.shortage`，不拦截。单张上限用 `AssignmentConfiguration.cap.resolve` 同一套。auto 不做此检测，照常走 200 张门槛。
@@ -151,7 +154,7 @@ public struct CellMask: Sendable, Hashable { public let columns: Int; public let
 
 ## 10. 测试要点
 - 光栅化：方块、圆、带孔字形（「口」「回」）的覆盖率和 50% 边界；同输入结果稳定。
-- 文字规则：过滤 emoji、计数、四组验收文字在三档下的可用性表。
+- 文字规则：过滤 emoji、计数、四组验收文字在细档（120 列）下的每字格数（文字固定细档，以需求 1c 为准，不测三档）。
 - 引擎：activeCells=nil 回归逐字节一致；形状外全 -1；邻域不重复；单张上限按形状内格数。
 - 配色：auto 在偏灰相册里退化为明度渐变；不足检测阈值。
 - manifest：v1 解码、v2 往返、未知版本不崩溃；再导出像素一致。
