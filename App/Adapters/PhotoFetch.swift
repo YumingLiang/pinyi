@@ -11,8 +11,8 @@ import MosaicAppCore
 /// - `includeAssetSourceTypes` 按场景显式传（见 `Sources`），不留默认。
 /// - 调用方只可以再改 `fetchLimit`（例如判断空相簿用 1）。
 ///
-/// T0 只加入口；现有调用点改走这里、以及 CI 检查（`App/Adapters` 里出现 `fetchAssets(` 而没走 PhotoFetch 就失败，
-/// InternalTools 除外）由 T3 做。
+/// T0 加入口；T3 已把现有调用点改走这里，并加了 CI 检查：`scripts/check-photo-fetch.sh`（`App/` 下除本文件和
+/// InternalTools 外出现 `fetchAssets(` 就失败）和 `AppTests/PhotoFetchTests.swift`（断言 `includeHiddenAssets == false`）。
 /// ⚠️ 盲写（Linux 上无法编译验证，只做 `swiftc -parse`）。
 enum PhotoFetch {
     /// 资产来源类型的场景预设。
@@ -67,6 +67,12 @@ enum PhotoFetch {
     static func images(in collection: PHAssetCollection, sources: PHAssetSourceType,
                        order: Order) -> PHFetchResult<PHAsset> {
         PHAsset.fetchAssets(in: collection, options: options(imagesOnly: true, sources: sources, order: order))
+    }
+
+    /// 选图页 / 相簿列表里，某个集合取照片该用的来源：iCloud 共享相簿用 `Sources.cloudShared`，其余用 `Sources.library`
+    /// （T3）。共享相簿里的照片来源类型是 `.typeCloudShared`，用 `.library` 去取会是 0 张。
+    static func pickerSources(forSubtype subtype: PHAssetCollectionSubtype) -> PHAssetSourceType {
+        subtype == .albumCloudShared ? Sources.cloudShared : Sources.library
     }
 
     /// 按 localIdentifier 取回图片。被隐藏 / 删除 / 受限访问移出的照片取不到（调用方当缺图处理）。
