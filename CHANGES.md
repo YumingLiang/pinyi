@@ -1,5 +1,13 @@
 # CHANGES
 
+## fix/works-delete：作品详情页删除不生效（P1）
+
+- **根因**：确认弹窗收起时 SwiftUI 先调 `isPresented` 的 `set(false)` → `deleteCancelled()` 清掉 `pendingDelete`；按钮里的 `Task { await controller.deleteConfirmed() }` 更晚执行，取不到 id 直接 return，删除被静默吞掉。从 PR #6 上线起就存在，不是 #11 / #15 引入的回归。
+- **修法**：新增 `WorksController.deleteConfirmed(_ id: WorkID)`，不依赖共享的 `pendingDelete`；`WorksModel.deleteConfirmed(_:)` 转发；弹窗「删除」按钮直接传当前作品 id。旧的无参入口保留并转调新入口。
+- **测试**：MosaicAppCoreTests 新增 `QAWorksDeleteRegressionTests`（14 条：删后列表、重启、目录清理、打开中删除、并发保存、连删、删后再存、防重复保存及查重口径现状）和 `QAWorksDeleteFixContractTests`（3 条：UI 时序下带 id 删除、交错删除、取消不删）。MosaicAppCore `swift test` 327 个，0 失败，3 跳过。
+- 未做：列表页长按删除（等 AndyL 决定）；查重口径（overlayAlpha/seed 不同算两份）维持现状，等产品决定。
+
+
 ## feat/picker-t3：`fetchKeyAssets` 纳入隐藏照片检查（QA #9 补丁）
 
 - **iOS 编译修复**：`PHAsset.fetchKeyAssets(in:options:)` 返回可选，`PhotoFetch.keyAssets(in:)` / `keyAssets(in:sources:)` 改为返回 `PHFetchResult<PHAsset>?`（nil 时调用方按无封面处理）。目前没有调用点。
