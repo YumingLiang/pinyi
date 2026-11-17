@@ -13,9 +13,12 @@ public protocol WorksStore: Sendable {
     func delete(_ id: WorkID) async throws
     /// 记下最近一次检查到的缺失原照片数（列表 / 查看页提示用）。
     func setMissingCount(_ count: Int, for id: WorkID) async throws
-    /// 写回一次补格结果（4b）：新布局、重画预览，累计 `replacedCellCount` / `droppedPhotoCount`。
+    /// 写回一次补格结果（4b）：新布局、预览兜底图、重画预览，累计 `replacedCellCount` / `fallbackCellCount` / `droppedPhotoCount`。
     /// 磁盘上的布局已经不是 `base`（期间别处已经处理过）或结果没有改动时，什么都不写，返回磁盘上的现状。
     func applyRematch(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID) async throws -> Work
+    /// 导出用的格子兜底图：布局里已标记兜底的格子（存盘的兜底图）+ `transientCells`（还没处理的缺失格，
+    /// 受限访问 / 索引未就绪时从当前预览临时裁出，**不**存盘）。读不到时缺的格子不在结果里（导出留白）。
+    func fallbackTiles(for id: WorkID, transientCells: Set<Int>) async -> [Int: PixelBuffer]
     /// 启动时清理上次被杀留下的临时目录 / 待删目录。
     func removeIncomplete() async
 }
@@ -108,9 +111,10 @@ public actor FileWorksStore: WorksStore {
         do {
             try fm.createDirectory(at: temp, withIntermediateDirectories: true)
             try layoutData.write(to: temp.appendingPathComponent(Self.layoutFileName), options: .atomic)
+            // 新存的作品不带兜底图（结果页的布局没有兜底格；万一带了标记，按缺图画）
             let preview = try await images.writePreview(layout: draft.layout, target: draft.target,
                                                         overlayAlpha: draft.overlayAlpha,
-                                                        maxLongEdge: WorkImageLimits.previewLongEdge, into: temp)
+                                                        maxLongEdge: WorkImageLimits.previewLongEdge, fallbacks: [:], into: temp)
             var targetFile: String?
             if let t = draft.target {
                 targetFile = try await images.writeTarget(t, maxLongEdge: WorkImageLimits.targetLongEdge, into: temp).fileName
@@ -162,17 +166,19 @@ public actor FileWorksStore: WorksStore {
     }
 
     /// 补格结果的写回。原子性（单个作品目录内，不整目录替换——整目录 rename 两步之间被杀会丢作品）：
-    /// 1. 新预览先写进 `.tmp-*`（启动时清），再 rename 成作品目录里的**新文件名** `preview-<随机>.jpg`；
-    /// 2. meta.json 原子替换（指向新预览、新指纹、累计去掉张数）——从这一刻起列表 / 查看页只认新预览；
-    /// 3. layout.json 原子替换；4. 删旧预览。
-    /// 任一步被杀：1 后只多一个没人引用的文件；2 后布局还是旧的，下次打开会再查到缺失、重做一遍（幂等，只是
-    /// 去掉张数可能多算一次）；不会出现「新布局 + 旧预览（还看得到隐藏照片）」。
+    /// 0. 找不到替代的格子（本次新出现的）**先**从旧预览裁出兜底图（`WorkFallbackImages.crop`，去掉叠加）；之前就兜底、这次仍没补上的
+    ///    直接搬旧兜底图；补上了照片的格子丢掉兜底图（升级）。没有旧预览（读不出 / 尺寸不对）的格子才留白。
+    /// 1. 新兜底图、新预览先写进 `.tmp-*`（启动时清），再 rename 成作品目录里的**新文件名** `fallback-<随机>.png` / `preview-<随机>.jpg`；
+    /// 2. meta.json 原子替换（指向新预览 / 新兜底图、新指纹、累计计数）——从这一刻起列表 / 查看页只认新文件；
+    /// 3. layout.json 原子替换；4. 删旧预览、旧兜底图。
+    /// 任一步被杀：1 后只多没人引用的文件；2 后布局还是旧的，下次打开会再查到缺失、重做一遍（幂等，只是累计数可能多算一次）；
+    /// 不会出现「新布局 + 旧预览（还看得到隐藏照片）」。
     /// 指纹随新布局更新：从作品再导出成功后自动保存仍能查重命中，不会多出一份。
     public func applyRematch(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID) async throws -> Work {
         try await serialized(id) { try await self.performApply(result, base: base, for: id) }
     }
 
-    /// 不补格、全部留白（测试 / 没有补格器时）。
+    /// 不补格、全部兜底 / 留白（测试 / 没有补格器时）。
     public func dropMissingPhotos(_ assetIDs: Set<String>, for id: WorkID) async throws -> Work {
         try await serialized(id) {
             let work = try await self.load(id)
@@ -193,45 +199,106 @@ public actor FileWorksStore: WorksStore {
         return try await task.value
     }
 
+    private func readOverlayTarget(_ work: Work) async -> PixelBuffer? {
+        guard work.meta.overlayAlpha > 0, let url = work.targetURL else { return nil }
+        return try? await images.readTarget(at: url)
+    }
+
+    /// 存盘的兜底图（按格）。
+    private func storedFallbacks(_ work: Work, cells: [Int]) async -> [Int: PixelBuffer] {
+        guard !cells.isEmpty, let name = work.meta.fallbackFile,
+              let atlas = try? await images.readImage(at: workDirectory(work.id).appendingPathComponent(name)) else { return [:] }
+        return WorkFallbackImages.split(atlas, cells: cells, layout: work.layout)
+    }
+
+    public func fallbackTiles(for id: WorkID, transientCells: Set<Int>) async -> [Int: PixelBuffer] {
+        guard let work = try? await load(id) else { return [:] }
+        let marked = work.layout.cellAssignments.indices.filter { work.layout.cellAssignments[$0].fallback }
+        var tiles = await storedFallbacks(work, cells: marked)
+        let extra = transientCells.filter { tiles[$0] == nil && $0 < work.layout.cellAssignments.count }.sorted()
+        if !extra.isEmpty, let preview = try? await images.readImage(at: work.summary.previewURL) {
+            let target = await readOverlayTarget(work)
+            for (cell, tile) in WorkFallbackImages.crop(from: preview, cells: extra, layout: work.layout, target: target,
+                                                        overlayAlpha: work.meta.overlayAlpha) {
+                tiles[cell] = tile
+            }
+        }
+        return tiles
+    }
+
     private func performApply(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID) async throws -> Work {
         let work = try await load(id)
-        let layout = result.layout
-        guard work.layout == base, layout != base, layout.cols == base.cols, layout.rows == base.rows,
+        var layout = result.layout
+        guard work.layout == base, layout.cols == base.cols, layout.rows == base.rows,
               layout.cellAssignments.count == base.cellAssignments.count else { return work }
+        // 兜底标记由这里决定：空格子里，之前就兜底的、或本次新空出来（原来有照片）且旧预览能裁出的，标兜底
+        let cells = base.cellAssignments.indices
+        let newlyEmpty = cells.filter { !base.cellAssignments[$0].localIdentifier.isEmpty && layout.cellAssignments[$0].localIdentifier.isEmpty }
+        let keptFallback = cells.filter { base.cellAssignments[$0].fallback && layout.cellAssignments[$0].localIdentifier.isEmpty }
+        for i in cells where layout.cellAssignments[i].fallback { layout.cellAssignments[i].fallback = false }
+        var tiles = await storedFallbacks(work, cells: keptFallback)
+        let target = await readOverlayTarget(work)
+        if !newlyEmpty.isEmpty, let old = try? await images.readImage(at: work.summary.previewURL) {
+            for (cell, tile) in WorkFallbackImages.crop(from: old, cells: newlyEmpty, layout: base, target: target,
+                                                        overlayAlpha: work.meta.overlayAlpha) {
+                tiles[cell] = tile
+            }
+        }
+        for cell in tiles.keys { layout.cellAssignments[cell].fallback = true }
+        guard layout != base else { return work }
+
         let fm = FileManager.default
         let dir = workDirectory(id)
         let temp = directory.appendingPathComponent(Self.tempPrefix + "preview-" + UUID().uuidString, isDirectory: true)
         defer { try? fm.removeItem(at: temp) }
         try fm.createDirectory(at: temp, withIntermediateDirectories: true)
         var meta = work.meta
-        var target: PixelBuffer?
-        if meta.overlayAlpha > 0, let url = work.targetURL { target = try? await images.readTarget(at: url) }
         let preview = try await images.writePreview(layout: layout, target: target, overlayAlpha: meta.overlayAlpha,
-                                                    maxLongEdge: WorkImageLimits.previewLongEdge, into: temp)
-        let ext = (preview.fileName as NSString).pathExtension
-        let newName = "preview-" + UUID().uuidString.prefix(8).lowercased() + (ext.isEmpty ? "" : "." + ext)
-        try fm.moveItem(at: temp.appendingPathComponent(preview.fileName), to: dir.appendingPathComponent(newName))
-
-        let layoutData = try Self.encoder().encode(layout)
-        let oldPreview = meta.previewFile
-        meta.previewFile = newName
-        meta.previewPixelWidth = preview.pixelWidth
-        meta.previewPixelHeight = preview.pixelHeight
-        meta.fingerprint = Self.fingerprint(layoutData)
-        meta.photoCount = layout.uniqueAssetIDs.count
-        meta.droppedPhotoCount += result.droppedPhotos
-        meta.replacedCellCount += result.replacedCells
-        meta.missingCount = 0   // 都处理过了（替换或留白），没有待处理的缺失
+                                                    maxLongEdge: WorkImageLimits.previewLongEdge, fallbacks: tiles, into: temp)
+        var fallbackName: String?
+        var moved: [URL] = []
+        func unique(_ prefix: String, _ file: String) -> String {
+            let ext = (file as NSString).pathExtension
+            return prefix + UUID().uuidString.prefix(8).lowercased() + (ext.isEmpty ? "" : "." + ext)
+        }
         do {
+            // 兜底图尺寸按格子小图算（= 预览每格像素 × 列 / 行），与预览文件解码与否无关
+            let tw = tiles.values.map(\.width).max() ?? 0, th = tiles.values.map(\.height).max() ?? 0
+            if let atlas = WorkFallbackImages.atlas(tiles, layout: layout, width: layout.cols * tw, height: layout.rows * th) {
+                let f = try await images.writeFallback(atlas, into: temp)
+                let name = unique("fallback-", f.fileName)
+                try fm.moveItem(at: temp.appendingPathComponent(f.fileName), to: dir.appendingPathComponent(name))
+                moved.append(dir.appendingPathComponent(name))
+                fallbackName = name
+            }
+            let newName = unique("preview-", preview.fileName)
+            try fm.moveItem(at: temp.appendingPathComponent(preview.fileName), to: dir.appendingPathComponent(newName))
+            moved.append(dir.appendingPathComponent(newName))
+
+            let layoutData = try Self.encoder().encode(layout)
+            let oldPreview = meta.previewFile
+            let oldFallback = meta.fallbackFile
+            meta.previewFile = newName
+            meta.previewPixelWidth = preview.pixelWidth
+            meta.previewPixelHeight = preview.pixelHeight
+            meta.fallbackFile = fallbackName
+            meta.fingerprint = Self.fingerprint(layoutData)
+            meta.photoCount = layout.uniqueAssetIDs.count
+            meta.droppedPhotoCount += result.droppedPhotos
+            meta.replacedCellCount += result.replacedCells
+            meta.fallbackCellCount += newlyEmpty.count
+            meta.missingCount = 0   // 都处理过了（替换 / 兜底 / 留白），没有待处理的缺失
             try Self.encoder().encode(meta).write(to: dir.appendingPathComponent(Self.metaFileName), options: .atomic)
+            moved = []   // meta 已指向新文件：之后失败也不删它们
+            try layoutData.write(to: dir.appendingPathComponent(Self.layoutFileName), options: .atomic)
+            if oldPreview != newName { try? fm.removeItem(at: dir.appendingPathComponent(oldPreview)) }
+            if let oldFallback, oldFallback != fallbackName { try? fm.removeItem(at: dir.appendingPathComponent(oldFallback)) }
+            return Work(summary: WorkSummary(meta: meta, previewURL: dir.appendingPathComponent(newName)), layout: layout,
+                        targetURL: work.targetURL)
         } catch {
-            try? fm.removeItem(at: dir.appendingPathComponent(newName))
+            for url in moved { try? fm.removeItem(at: url) }
             throw error
         }
-        try layoutData.write(to: dir.appendingPathComponent(Self.layoutFileName), options: .atomic)
-        if oldPreview != newName { try? fm.removeItem(at: dir.appendingPathComponent(oldPreview)) }
-        return Work(summary: WorkSummary(meta: meta, previewURL: dir.appendingPathComponent(newName)), layout: layout,
-                    targetURL: work.targetURL)
     }
 
     public func removeIncomplete() async {

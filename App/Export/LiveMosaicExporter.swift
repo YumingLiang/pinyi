@@ -13,6 +13,8 @@ import MosaicAppCore
 /// - 取图：按行优先顺序，最多 4 张在飞；取到一张立刻画进位图并释放（autoreleasepool），不先取全再画。
 ///   峰值 ≈ 位图 + 4 张缩略图。PhotoKit 请求 targetSize = 每格像素、highQualityFormat、`isNetworkAccessAllowed = false`。
 /// - 编码：CGImageDestination 写 JPEG（质量 0.9）到 `tmp/export/`；保存 / 分享结束后删除，启动时清空目录（B-27）。
+/// - 「我的作品」兜底格（`request.cellFallbacks`，旧预览裁出的小图）：不取照片，`.high` 插值放大填满该格（不用最近邻），
+///   计入「糊格子」。
 /// - 实际每格像素、尺寸、上限、可用内存、用时、文件大小，以及退回 128px 缩略图（糊格子）和完全空白（白格子）的数量，写 os_log（subsystem 同 Bundle ID，category "export"）和内测性能页。
 /// - 不做（紧急版范围外）：取消、后台续跑、降档提示、存储预检。作品自动保存由协调器 `onExportSucceeded` 接入。
 /// ⚠️ 盲写（Linux 上无法编译 CG / ImageIO / PhotoKit）。
@@ -65,6 +67,7 @@ struct LiveMosaicExporter: MosaicExporting {
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .high
 
+        let fallbacks = request.cellFallbacks
         let ids = request.layout.cellAssignments.map { $0.localIdentifier.isEmpty ? nil : $0.localIdentifier }
         let thumbs = thumbnails
         let hq: ThumbnailRequest = {
@@ -85,6 +88,17 @@ struct LiveMosaicExporter: MosaicExporting {
                 while next < ids.count {
                     let i = next
                     next += 1
+                    if let tile = fallbacks[i] {
+                        let drawn: Bool = autoreleasepool {
+                            guard let img = ImagePixels.cgImage(tile) else { return false }
+                            let col = i % columns, row = i / columns
+                            ctx.draw(img, in: CGRect(x: col * cp, y: h - (row + 1) * cp, width: cp, height: cp))
+                            return true
+                        }
+                        fills.add(drawn ? .blurryFallback : .blank)
+                        done += 1
+                        continue
+                    }
                     guard let id = ids[i] else { fills.add(.blank); done += 1; continue }
                     group.addTask {
                         if case .image(let pb) = await thumbs.thumbnail(for: id, request: hq) {

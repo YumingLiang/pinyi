@@ -5,30 +5,110 @@ import MosaicCore
 
 /// 假图片编解码：预览 / 目标图写成小文件，内容由布局 / 尺寸决定（可逐字节比较）；可在指定步骤失败或卡住。
 final class FakeWorkImages: WorkImageEncoding, Sendable {
-    enum Step: Sendable, Hashable { case preview, target }
+    enum Step: Sendable, Hashable { case preview, target, fallback }
     struct State: Sendable {
         var failAt: Step?
         var previews = 0
         var targets = 0
         var reads = 0
+        var imageReads = 0
+        var fallbackWrites = 0
+        /// 最近一次 writePreview 收到的兜底格（下标 → 小图平均色）。
+        var lastFallbacks: [Int: RGB8] = [:]
     }
+    struct RGB8: Sendable, Hashable { var r, g, b: UInt8 }
     let state = Locked(State())
     let gate: Locked<GatePoint?>
     init(gate: GatePoint? = nil) { self.gate = Locked(gate) }
 
-    static func previewBytes(_ layout: MosaicLayout) -> Data {
-        Data("PREVIEW:\(layout.cols)x\(layout.rows):\(layout.cellAssignments.map(\.localIdentifier).joined(separator: ","))".utf8)
+    /// 假预览每格像素（预览文件里存真像素，裁兜底格时能读回）。
+    static let cellPixels = 4
+
+    /// 预览文件的第一行（布局摘要）：照片 ID；兜底格写成 `fb#rrggbb`（兜底小图的平均色）。
+    static func previewBytes(_ layout: MosaicLayout, fallbacks: [Int: RGB8] = [:]) -> Data {
+        let cells = layout.cellAssignments.enumerated().map { i, c -> String in
+            if let f = fallbacks[i] { return String(format: "fb#%02x%02x%02x", f.r, f.g, f.b) }
+            return c.localIdentifier
+        }
+        return Data("PREVIEW:\(layout.cols)x\(layout.rows):\(cells.joined(separator: ","))".utf8)
+    }
+
+    /// 读预览文件的第一行（与 `previewBytes` 比较）。
+    static func previewHeader(_ url: URL) throws -> Data {
+        let d = try Data(contentsOf: url)
+        return d.firstIndex(of: 0x0A).map { d[..<$0] } ?? d
+    }
+
+    /// 一张「照片」的颜色（按 ID 定，测试里可预期）。
+    static func color(of id: String) -> RGB8 {
+        var h: UInt32 = 2_166_136_261
+        for b in id.utf8 { h = (h ^ UInt32(b)) &* 16_777_619 }
+        return RGB8(r: UInt8(40 + h % 170), g: UInt8(40 + (h >> 8) % 170), b: UInt8(40 + (h >> 16) % 170))
+    }
+
+    static func average(_ p: PixelBuffer) -> RGB8 {
+        var r = 0, g = 0, b = 0
+        for y in 0..<p.height { for x in 0..<p.width { let c = p.rgb(x: x, y: y); r += Int(c.r); g += Int(c.g); b += Int(c.b) } }
+        let n = p.width * p.height
+        return RGB8(r: UInt8((r + n / 2) / n), g: UInt8((g + n / 2) / n), b: UInt8((b + n / 2) / n))
+    }
+
+    static func raw(_ p: PixelBuffer) -> Data {
+        var d = Data("RAWIMG \(p.width) \(p.height)\n".utf8)
+        var bytes = [UInt8](); bytes.reserveCapacity(p.width * p.height * 4)
+        for y in 0..<p.height { for x in 0..<p.width { let c = p.rgb(x: x, y: y); bytes += [c.r, c.g, c.b, 255] } }
+        d.append(contentsOf: bytes)
+        return d
+    }
+
+    static func decodeRaw(_ d: Data) -> PixelBuffer? {
+        guard let start = d.range(of: Data("RAWIMG ".utf8)) else { return nil }
+        guard let nl = d[start.upperBound...].firstIndex(of: 0x0A),
+              let header = String(data: d[start.upperBound..<nl], encoding: .utf8) else { return nil }
+        let parts = header.split(separator: " ").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        let bytes = [UInt8](d[(nl + 1)...])
+        return try? PixelBuffer(width: parts[0], height: parts[1], bytes: bytes)
+    }
+
+    /// 按布局「画」预览：每格纯色（照片色 / 兜底小图平均色 / 白），再按 α 叠加目标图（与 App 同一换算），存真像素。
+    static func render(_ layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, fallbacks: [Int: RGB8]) -> PixelBuffer {
+        let cp = cellPixels, w = layout.cols * cp, h = layout.rows * cp
+        let alpha = target == nil ? 0 : OverlayBlendLimits.clamp(overlayAlpha)
+        let crop = target.map { WorkFallbackImages.scaledCrop(layout, width: $0.width, height: $0.height) }
+        var bytes = [UInt8](repeating: 255, count: w * h * 4)
+        for py in 0..<h {
+            for px in 0..<w {
+                let cell = (py / cp) * layout.cols + px / cp
+                let id = layout.cellAssignments[cell].localIdentifier
+                let c = fallbacks[cell] ?? (id.isEmpty ? RGB8(r: 255, g: 255, b: 255) : color(of: id))
+                var v = (Double(c.r), Double(c.g), Double(c.b))
+                if alpha > 0, let target, let crop {
+                    let t = WorkFallbackImages.bilinear(target, crop.x + (Double(px) + 0.5) * crop.width / Double(w) - 0.5,
+                                                        crop.y + (Double(py) + 0.5) * crop.height / Double(h) - 0.5)
+                    v = ((1 - alpha) * v.0 + alpha * t.0, (1 - alpha) * v.1 + alpha * t.1, (1 - alpha) * v.2 + alpha * t.2)
+                }
+                let o = (py * w + px) * 4
+                bytes[o] = WorkFallbackImages.byte(v.0); bytes[o + 1] = WorkFallbackImages.byte(v.1); bytes[o + 2] = WorkFallbackImages.byte(v.2)
+            }
+        }
+        return try! PixelBuffer(width: w, height: h, bytes: bytes)
     }
 
     func writePreview(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, maxLongEdge: Int,
-                      into directory: URL) async throws -> WorkImageFile {
+                      fallbacks: [Int: PixelBuffer], into directory: URL) async throws -> WorkImageFile {
         state.update { $0.previews += 1 }
         if let g = gate.get() {
             await g.reached.open()
             await g.release.wait()
         }
         if state.get().failAt == .preview { throw ExportError.encodingFailed }
-        try Self.previewBytes(layout).write(to: directory.appendingPathComponent("preview.jpg"))
+        let avg = fallbacks.mapValues(Self.average)
+        state.update { $0.lastFallbacks = avg }
+        var data = Self.previewBytes(layout, fallbacks: avg)
+        data.append(0x0A)
+        data.append(Self.raw(Self.render(layout, target: target, overlayAlpha: overlayAlpha, fallbacks: avg)))
+        try data.write(to: directory.appendingPathComponent("preview.jpg"))
         let scale = Double(maxLongEdge) / Double(max(layout.cols, layout.rows))
         return WorkImageFile(fileName: "preview.jpg", pixelWidth: Int(Double(layout.cols) * scale),
                              pixelHeight: Int(Double(layout.rows) * scale))
@@ -37,14 +117,29 @@ final class FakeWorkImages: WorkImageEncoding, Sendable {
     func writeTarget(_ target: PixelBuffer, maxLongEdge: Int, into directory: URL) async throws -> WorkImageFile {
         state.update { $0.targets += 1 }
         if state.get().failAt == .target { throw CocoaError(.fileWriteOutOfSpace) }
-        try Data("TARGET:\(target.width)x\(target.height)".utf8).write(to: directory.appendingPathComponent("target.jpg"))
+        var data = Data("TARGET:\(target.width)x\(target.height)\n".utf8)
+        data.append(Self.raw(target))
+        try data.write(to: directory.appendingPathComponent("target.jpg"))
         return WorkImageFile(fileName: "target.jpg", pixelWidth: target.width, pixelHeight: target.height)
     }
 
     func readTarget(at url: URL) async throws -> PixelBuffer {
         state.update { $0.reads += 1 }
-        _ = try Data(contentsOf: url)
-        return try PixelBuffer(width: 2, height: 2, bytes: [UInt8](repeating: 128, count: 16))
+        let d = try Data(contentsOf: url)
+        return try Self.decodeRaw(d) ?? PixelBuffer(width: 2, height: 2, bytes: [UInt8](repeating: 128, count: 16))
+    }
+
+    func readImage(at url: URL) async throws -> PixelBuffer {
+        state.update { $0.imageReads += 1 }
+        guard let p = Self.decodeRaw(try Data(contentsOf: url)) else { throw ExportError.encodingFailed }
+        return p
+    }
+
+    func writeFallback(_ image: PixelBuffer, into directory: URL) async throws -> WorkImageFile {
+        state.update { $0.fallbackWrites += 1 }
+        if state.get().failAt == .fallback { throw CocoaError(.fileWriteOutOfSpace) }
+        try Self.raw(image).write(to: directory.appendingPathComponent("fallback.png"))
+        return WorkImageFile(fileName: "fallback.png", pixelWidth: image.width, pixelHeight: image.height)
     }
 }
 
@@ -79,8 +174,11 @@ final class FakeWallClock: Sendable {
 @MainActor
 final class RecordingWorkExporter: WorkExportHandling {
     var calls: [(MosaicLayout, Bool, ExportPurpose)] = []
-    func exportWork(layout: MosaicLayout, target: PixelBuffer?, purpose: ExportPurpose) async {
+    /// 每次导出收到的兜底格（下标 → 小图平均色）。
+    var fallbacks: [[Int: FakeWorkImages.RGB8]] = []
+    func exportWork(layout: MosaicLayout, target: PixelBuffer?, fallbacks: [Int: PixelBuffer], purpose: ExportPurpose) async {
         calls.append((layout, target != nil, purpose))
+        self.fallbacks.append(fallbacks.mapValues(FakeWorkImages.average))
     }
 }
 
@@ -89,6 +187,13 @@ func sampleLayout(_ ids: [String], cols: Int = 3, seed: UInt64 = 7) -> MosaicLay
     return MosaicLayout(cols: cols, rows: rows, cellAssignments: ids.map { MosaicLayout.CellAssignment(localIdentifier: $0) },
                         targetSize: .init(width: 300, height: 200), targetCrop: CropRect(x: 0, y: 0, width: 300, height: 200),
                         params: .init(overlayAlpha: 0.15, density: "coarse", seed: seed))
+}
+
+/// 同 `sampleLayout`，空串格子标成预览兜底格（`fallback == true`）：原照片取不到、找不到替代、用旧预览裁切填充。
+func sampleFallbackLayout(_ ids: [String], cols: Int = 3, seed: UInt64 = 7) -> MosaicLayout {
+    var l = sampleLayout(ids, cols: cols, seed: seed)
+    for i in l.cellAssignments.indices where l.cellAssignments[i].localIdentifier.isEmpty { l.cellAssignments[i].fallback = true }
+    return l
 }
 
 func smallTarget() throws -> PixelBuffer {

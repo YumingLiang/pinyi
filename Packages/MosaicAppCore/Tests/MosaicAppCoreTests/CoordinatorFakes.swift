@@ -154,6 +154,8 @@ final class FakeExporter: MosaicExporting, Sendable {
         var exports = 0
         var discarded: [String] = []
         var staleRemovals = 0
+        /// 每次导出请求里带的兜底格下标（「我的作品」兜底格）。
+        var fallbackCells: [Set<Int>] = []
     }
     let state = Locked(State())
     let gate: Locked<GatePoint?>
@@ -165,7 +167,7 @@ final class FakeExporter: MosaicExporting, Sendable {
     func estimatedBytes(for request: ExportRequest) -> Int64 { state.get().estimate }
     func availableBytes() -> Int64? { state.get().available }
     func export(_ request: ExportRequest, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
-        state.update { $0.exports += 1 }
+        state.update { $0.exports += 1; $0.fallbackCells.append(Set(request.cellFallbacks.keys)) }
         progress(0.5)
         if let g = gate.get() {
             await g.reached.open()

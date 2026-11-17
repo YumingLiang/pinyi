@@ -44,8 +44,13 @@ final class WorksRematchTests: XCTestCase {
         let target: Locked<PixelBuffer?>
         init(target: PixelBuffer?) { self.target = Locked(target) }
         func writePreview(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, maxLongEdge: Int,
-                          into directory: URL) async throws -> WorkImageFile {
-            try await inner.writePreview(layout: layout, target: target, overlayAlpha: overlayAlpha, maxLongEdge: maxLongEdge, into: directory)
+                          fallbacks: [Int: PixelBuffer], into directory: URL) async throws -> WorkImageFile {
+            try await inner.writePreview(layout: layout, target: target, overlayAlpha: overlayAlpha, maxLongEdge: maxLongEdge,
+                                         fallbacks: fallbacks, into: directory)
+        }
+        func readImage(at url: URL) async throws -> PixelBuffer { try await inner.readImage(at: url) }
+        func writeFallback(_ image: PixelBuffer, into directory: URL) async throws -> WorkImageFile {
+            try await inner.writeFallback(image, into: directory)
         }
         func writeTarget(_ t: PixelBuffer, maxLongEdge: Int, into directory: URL) async throws -> WorkImageFile {
             try await inner.writeTarget(t, maxLongEdge: maxLongEdge, into: directory)
@@ -104,7 +109,8 @@ final class WorksRematchTests: XCTestCase {
         }
 
         func save(target: Bool = true) async throws -> WorkID {
-            let t = try PixelBuffer(width: 300, height: 200, bytes: [UInt8](repeating: 0, count: 300 * 200 * 4))
+            // 与作品里存的目标图副本一致（App 里预览就是用它叠加的）
+            let t = try images.target.get() ?? PixelBuffer(width: 300, height: 200, bytes: [UInt8](repeating: 0, count: 300 * 200 * 4))
             return try await store.save(WorkDraft(layout: sampleLayout(ids, cols: cols), target: target ? t : nil,
                                                   overlayAlpha: 0.15, tier: "uhd", seed: 7, origin: .savedManually)).summary.id
         }
@@ -134,8 +140,9 @@ final class WorksRematchTests: XCTestCase {
         XCTAssertTrue(h.probe.calls.contains("red2"))
         XCTAssertEqual(h.images.inner.state.get().previews, 2, "预览重新生成")
         XCTAssertNotEqual(h.controller.state.opened?.summary.previewURL, before.previewURL)
-        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(h.controller.state.opened?.summary.previewURL)),
+        XCTAssertEqual(try FakeWorkImages.previewHeader(XCTUnwrap(h.controller.state.opened?.summary.previewURL)),
                        FakeWorkImages.previewBytes(expected))
+        XCTAssertNil(h.controller.state.opened?.summary.meta.fallbackFile, "都补上了，没有兜底图")
         XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]))
         XCTAssertNil(h.controller.state.missingLine, "都补上了，不提示缺失")
         XCTAssertEqual(h.images.inner.state.get().targets, 1, "目标图副本不重写")
@@ -184,7 +191,7 @@ final class WorksRematchTests: XCTestCase {
         h.controller.stop()
     }
 
-    /// 找不到替代（候选只有隐藏的和糊的）才留白，并计入 droppedPhotoCount；`works.missing` 显示。
+    /// 找不到替代（候选只有隐藏的和糊的）才兜底（旧预览裁切），按格计入 fallbackCellCount（droppedPhotoCount 照旧）；`works.missing` 显示。
     func testNoAcceptableCandidateLeavesBlankAndCounts() async throws {
         let index = Self.workPhotos.filter { $0.0 != "a" && $0.0 != "c" } + [("hiddenRed", (200, 30, 30)), ("blurryRed", (204, 30, 30))]
         // 索引里能选的只有：隐藏的 hiddenRed、糊的 blurryRed，以及作品里的 d e f（也设成糊的）→ 没有一张合格。
@@ -194,14 +201,15 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b", "hiddenRed")
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "", "c", "d", "e", "f"], cols: 3))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c", "d", "e", "f"], cols: 3))
         XCTAssertEqual(h.controller.state.opened?.missingCount, 1)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         XCTAssertNil(h.controller.state.replacedLine)
         let meta = try await h.store.load(id).meta
         XCTAssertEqual(meta.droppedPhotoCount, 1)
         XCTAssertEqual(meta.replacedCellCount, 0)
-        XCTAssertEqual(h.images.inner.state.get().previews, 2, "留白也要重画预览，隐藏照片不能留在旧预览里")
+        XCTAssertEqual(meta.fallbackCellCount, 1)
+        XCTAssertEqual(h.images.inner.state.get().previews, 2, "兜底也要重画预览（兜底格不再按 ID 取图）")
         h.controller.stop()
     }
 
@@ -212,13 +220,13 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b")
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "", "c"], cols: 3))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"], cols: 3))
         let meta = try await h.store.load(id).meta
         XCTAssertEqual(meta.droppedPhotoCount, 1)
         h.controller.stop()
     }
 
-    /// 索引暂时取不到（还没加载完）：不写回、不留白，只计数；下次打开索引好了再补上。
+    /// 索引暂时取不到（还没加载完）：不写回、不兜底、不提示，只在 meta 记数；下次打开索引好了再补上（提示一次）。
     func testIndexUnavailableDoesNotRewrite() async throws {
         let h = Harness(ids: ["a", "b", "c", "d", "e", "f"], cols: 3, colors: Self.cellColors,
                         index: Self.workPhotos + [("red2", (212, 34, 30))])
@@ -229,11 +237,19 @@ final class WorksRematchTests: XCTestCase {
         h.existence.hide("b")
         await h.controller.open(id)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "b", "c", "d", "e", "f"], cols: 3))
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 1)
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 0, "作品没改写，不提示")
+        XCTAssertNil(h.controller.state.missingLine)
         XCTAssertEqual(h.images.inner.state.get().previews, 1)
+        h.controller.close()
+        await h.controller.open(id)
+        XCTAssertNil(h.controller.state.missingLine, "再开一次也不重复提示")
+        let pendingMeta = try await h.store.load(id).meta
+        XCTAssertEqual(pendingMeta.missingCount, 1, "没处理的记着（性能页）")
         h.snap.set(saved)
+        h.controller.close()
         await h.controller.open(id)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "red2", "c", "d", "e", "f"], cols: 3))
+        XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]))
         h.controller.stop()
     }
 
@@ -254,7 +270,7 @@ final class WorksRematchTests: XCTestCase {
         h.controller.stop()
     }
 
-    /// 受限访问：不补格、不改写（只计数）。
+    /// 受限访问：不补格、不改写、不提示（只在 meta 记数）。
     func testLimitedAccessDoesNotRematch() async throws {
         let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)),
                         index: Self.workPhotos + [("red2", (212, 34, 30))])
@@ -264,7 +280,8 @@ final class WorksRematchTests: XCTestCase {
         h.existence.hide("b")
         await h.controller.open(id)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "b", "c"], cols: 3))
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 1)
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 0)
+        XCTAssertNil(h.controller.state.missingLine)
         XCTAssertEqual(h.snapshotCalls.get(), 0)
         XCTAssertEqual(h.images.inner.state.get().previews, 1)
         h.controller.stop()
@@ -367,7 +384,7 @@ final class WorksRematchTests: XCTestCase {
         XCTAssertNil(h.controller.state.missingLine, "第二次打开：不出（留白格重找了一次，仍没有，不写回）")
         await h.controller.exportOpenedTapped(purpose: .save)
         XCTAssertNil(h.controller.state.missingLine, "再导出：不出")
-        XCTAssertEqual(h.exporter.calls.last?.0, sampleLayout(["a", "", "c"], cols: 3))
+        XCTAssertEqual(h.exporter.calls.last?.0, sampleFallbackLayout(["a", "", "c"], cols: 3))
         h.controller.stop()
 
         let c2 = h.relaunched()
@@ -388,8 +405,10 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b")
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "", "c"], cols: 3))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"], cols: 3))
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
+        let firstFallback = try XCTUnwrap(h.controller.state.opened?.summary.meta.fallbackFile)
+        let workDir = h.dir.appendingPathComponent(id.directoryName)
 
         h.snap.set(Self.snapshot(base + [("red2", (212, 34, 30))]))   // 用户新拍了一张、扫描进了索引
         h.controller.close()
@@ -400,6 +419,9 @@ final class WorksRematchTests: XCTestCase {
         let meta = try await h.store.load(id).meta
         XCTAssertEqual(meta.replacedCellCount, 1)
         XCTAssertEqual(meta.droppedPhotoCount, 1, "历史累计，不回退")
+        XCTAssertEqual(meta.fallbackCellCount, 1, "历史累计，不回退")
+        XCTAssertNil(meta.fallbackFile, "升级后没有兜底格了，兜底图删掉")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: workDir.appendingPathComponent(firstFallback).path))
         XCTAssertEqual(h.images.inner.state.get().previews, 3)
 
         h.controller.close()

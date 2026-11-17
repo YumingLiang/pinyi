@@ -25,7 +25,7 @@ public struct WorkRematchResult: Sendable, Equatable {
         self.note = note
     }
 
-    /// 没有补格器 / 索引不可用：全部留白（f02fb99 的行为）。
+    /// 没有补格器 / 补格出错：全部清成空格子（写回时用旧预览兜底）。
     public static func allBlank(_ layout: MosaicLayout, missing: Set<String>) -> WorkRematchResult {
         let cells = layout.cellAssignments.reduce(0) { $0 + (missing.contains($1.localIdentifier) ? 1 : 0) }
         let (out, dropped) = layout.clearingAssets(missing)
@@ -65,7 +65,8 @@ public protocol MissingCellRematching: Sendable {
 /// 2. 只探测**选中的**照片：先查可见（`PhotoExistenceChecking`，不含隐藏照片——索引里可能还留着后来被隐藏的照片），
 ///    再用 `LocalResolutionChecker` 查本机版本 ≥ 256 px；不合格的从候选掩码里去掉，只为这些格子重选，最多 `maxRematchRounds` 轮。
 /// 3. 轮数用完仍有格子没合格的：最后兜底只在「本次已确认可见且清晰」的照片里取最近的（忽略单张上限，与 `MosaicPipeline.refill` 一致）。
-/// 4. 仍然没有（索引里没有可用照片、特征口径对不上、候选全不合格、算不出目标特征）才留白。
+/// 4. 仍然没有（索引里没有可用照片、特征口径对不上、候选全不合格、算不出目标特征）才清成空格子；
+///    写回时由存储层用旧预览裁切兜底（`FileWorksStore.applyRematch` / `WorkFallbackImages`），没有旧预览才真的留白。
 ///    索引暂时取不到（`snapshot()` 抛错）不算：抛 `WorkRematchError.indexUnavailable`，作品不动。
 public struct IndexWorkRematcher: MissingCellRematching {
     public var snapshot: @Sendable () async throws -> IndexSnapshot

@@ -15,7 +15,8 @@ public enum WorkSaveStatus: Sendable, Hashable {
 /// 提示只在**本次**处理时真的发生了新替换 / 留白才出一次（QA H8 / H8b）：同一作品第二次打开、再导出、杀掉 App 重开都不再出。
 public struct OpenedWork: Sendable, Hashable {
     public var summary: WorkSummary
-    /// `works.missing` 的张数：本次新留白的原照片 + 本次查到但没能处理的（受限访问 / 索引未就绪 / 写回失败）；nil = 还在检查。
+    /// `works.missing` 的格数：本次新出现的、找不到合格相近照片的格子（用旧预览兜底，没有旧预览时留白）；nil = 还在检查。
+    /// 受限访问 / 索引未就绪 / 写回失败时作品没改写，这里是 0（不提示；没处理的缺失数只记在 meta.missingCount，性能页显示）。
     public var missingCount: Int?
     /// `works.replaced` 的格数：本次新换成相近照片的格子（含之前留白、这次补上的）。
     public var replacedCount: Int
@@ -45,7 +46,7 @@ public struct WorksState: Sendable, Hashable {
     public var isEmpty: Bool { isLoaded && summaries.isEmpty }
     /// 列表底部常驻提示（需求 B8）。
     public static let keepHintKey = L10nKey.worksKeepHint
-    /// 查看页 / 导出前的缺失提示（`works.missing`，参数：张数）。
+    /// 查看页的兜底提示（`works.missing`，参数：格数；只出一次）。
     public var missingLine: LocalizedLine? {
         guard let n = opened?.missingCount, n > 0 else { return nil }
         return LocalizedLine(.worksMissing, [CountFormat.grouped(n)])
@@ -96,7 +97,8 @@ public struct WorkResultContext: Sendable {
 /// 从作品再导出：由导出线（`AppCoordinator`）实现——按保存的显式布局导出，不重跑匹配。
 @MainActor
 public protocol WorkExportHandling: AnyObject {
-    func exportWork(layout: MosaicLayout, target: PixelBuffer?, purpose: ExportPurpose) async
+    /// `fallbacks`：格子下标 → 兜底图（存盘的预览兜底 + 没处理的缺失格临时从预览裁的），导出时放大填充这些格子。
+    func exportWork(layout: MosaicLayout, target: PixelBuffer?, fallbacks: [Int: PixelBuffer], purpose: ExportPurpose) async
 }
 
 /// 「我的作品」编排（需求 B / F1-3；design/works-storage-v0.1）：自动保存、手动保存、列表、打开、缺失检测、删除确认、再导出。
@@ -105,7 +107,8 @@ public protocol WorkExportHandling: AnyObject {
 ///   按钮状态回到 `.idle`）。
 /// - 同一布局只存一份：存储层按布局指纹查重；从作品再导出成功后再次触发自动保存也不会重复。
 /// - 缺失原照片（删除或后来被隐藏）：打开 / 导出前批量查一次，用本机相近照片补格（4b，`MissingCellRematching`）并重画预览
-///   （`reconcileMissing`），提示 `works.replaced`；找不到替代的留白，提示 `works.missing`。不用预览图放大补（F 节作废）。
+///   （`reconcileMissing`），提示 `works.replaced`；找不到替代的格子用旧预览裁切放大兜底（`WorkFallbackImages`），提示 `works.missing`。
+///   两种提示都按格计、只在本次真的发生时出一次。
 @MainActor
 public final class WorksController {
     public let store: any WorksStore
@@ -274,34 +277,39 @@ public final class WorksController {
     /// 缺图处理（photo-picker-v0.1 §5.1「我的作品」；需求 v0.4 §4.8 5a / 5b；hd-export-req-v0.2 F2 / F5「4b」）：
     /// - 没有缺失：什么都不动（不重画预览）。
     /// - 有缺失且能确认（完整相册权限）：交给 `rematcher` 换成本机、可见、清晰的相近照片（`IndexWorkRematcher`），
-    ///   实在找不到的留白；然后**重新生成预览**并原子写回（`applyRematch`）。之后再导出用写回的布局。
-    ///   照片恢复 / 取消隐藏后不改回去（5b）。没有注入 `rematcher` 或补格出错时全部留白（不是失败）。
-    /// - 受限访问 / 无权限（`canConfirmMissing == false`）或写回失败：只计数提示，不改作品。
+    ///   实在找不到的用旧预览裁切兜底（没有旧预览才留白）；然后**重新生成预览**并原子写回（`applyRematch`）。之后再导出用写回的布局。
+    ///   照片恢复 / 取消隐藏后不改回去（5b）。没有注入 `rematcher` 或补格出错时全部兜底（不是失败）。
+    /// - 之前兜底 / 留白的格子：有补格器时每次打开再找一次，补上了按 `works.replaced` 提示一次（兜底图随之删掉）。
+    /// - 受限访问 / 无权限（`canConfirmMissing == false`）、索引未就绪或写回失败：不改作品、**不提示**，
+    ///   只把没处理的缺失数记进 meta.missingCount（性能页）；导出时这些格子临时用当前预览裁切放大（不存盘）。
     /// - Task 被取消（关掉查看页）：不写回任何东西，返回 nil；下次打开再做。
-    /// 目标图副本只读（算格子的目标特征），不改、不删（5c 待定）。
-    /// 返回处理后的作品和 `works.missing` 用的张数（留白的 + 这次查到还没处理的）。
+    /// 目标图副本只读（算格子的目标特征、去掉预览里的叠加），不改、不删（5c 定为不处理）。
     /// 一次缺图处理的结果。
     struct ReconcileOutcome {
         var work: Work
         /// 本次新替换的格数（`works.replaced`）。
         var replaced: Int
-        /// 本次要提示的缺失张数（`works.missing`）：新留白的原照片 + 没能处理的。
+        /// 本次新兜底 / 留白的格数（`works.missing`）。
         var missingShown: Int
-        /// 写进 meta.missingCount 的「还没处理的缺失数」。
+        /// 写进 meta.missingCount 的「还没处理的缺失原照片数」。
         var pending: Int
+        /// 还没处理的缺失格（导出时临时从预览裁切兜底）。
+        var pendingCells: Set<Int> = []
     }
 
     func reconcileMissing(_ work: Work) async -> ReconcileOutcome? {
         let missing = await missingAssetIDs(work.layout)
         if Task.isCancelled { return nil }
-        // 之前留白的格子（找不到替代）：有补格器时每次打开再试一次，补上了按 works.replaced 提示一次
-        let retryBlanks = rematcher != nil && work.meta.droppedPhotoCount > 0
+        // 之前兜底 / 留白的格子（找不到替代）：有补格器时每次打开再试一次，补上了按 works.replaced 提示一次
+        let retryBlanks = rematcher != nil && (work.meta.droppedPhotoCount > 0 || work.meta.fallbackCellCount > 0)
             && work.layout.cellAssignments.contains { $0.localIdentifier.isEmpty }
-        let unchanged = ReconcileOutcome(work: work, replaced: 0, missingShown: missing.count, pending: missing.count)
-        guard !missing.isEmpty || retryBlanks else { return unchanged }
+        let pendingCells = Set(work.layout.cellAssignments.indices.filter { missing.contains(work.layout.cellAssignments[$0].localIdentifier) })
+        let unchanged = ReconcileOutcome(work: work, replaced: 0, missingShown: 0, pending: missing.count, pendingCells: pendingCells)
+        let nothingToDo = ReconcileOutcome(work: work, replaced: 0, missingShown: 0, pending: 0)
+        guard !missing.isEmpty || retryBlanks else { return nothingToDo }
         guard await existence.canConfirmMissing() else { return unchanged }
         var targets = missing
-        if retryBlanks { targets.insert("") }   // "" = 留白格，一起重新找
+        if retryBlanks { targets.insert("") }   // "" = 兜底 / 留白格，一起重新找
         var result = WorkRematchResult.allBlank(work.layout, missing: missing)
         if let rematcher {
             var target: PixelBuffer?
@@ -313,15 +321,20 @@ public final class WorksController {
             } catch WorkRematchError.indexUnavailable {
                 return unchanged   // 索引还没好：不改作品，下次打开再补
             } catch {
-                // 补格本身出错：退回留白（隐藏照片照样不会再出现）
+                // 补格本身出错：退回兜底（隐藏照片照样不会再出现）
             }
             lastRematchNote = result.note
         }
         if Task.isCancelled { return nil }   // 取消：不写回半成品
         do {
             let updated = try await store.applyRematch(result, base: work.layout, for: work.id)
-            guard updated.layout != work.layout else { return unchanged }   // 没有改动 / 已被别处处理
-            return ReconcileOutcome(work: updated, replaced: result.replacedCells, missingShown: result.droppedPhotos, pending: 0)
+            guard updated.layout != work.layout else {
+                // 没有改动（之前兜底的这次仍没补上）/ 已被别处处理
+                return missing.isEmpty ? nothingToDo : unchanged
+            }
+            let base = work.layout.cellAssignments, now = updated.layout.cellAssignments
+            let newlyUnfilled = base.indices.filter { !base[$0].localIdentifier.isEmpty && now[$0].localIdentifier.isEmpty }.count
+            return ReconcileOutcome(work: updated, replaced: result.replacedCells, missingShown: newlyUnfilled, pending: 0)
         } catch {
             return unchanged
         }
@@ -354,7 +367,11 @@ public final class WorksController {
         let updated = outcome.work
         var target: PixelBuffer?
         if let url = updated.targetURL { target = try? await images.readTarget(at: url) }
-        await handler.exportWork(layout: updated.layout, target: target, purpose: purpose)
+        // 兜底格（存盘的）+ 没处理的缺失格（受限访问等，临时从预览裁）：导出放大填充，不出白格
+        let hasFallback = updated.layout.cellAssignments.contains { $0.fallback }
+        let fallbacks = hasFallback || !outcome.pendingCells.isEmpty
+            ? await store.fallbackTiles(for: updated.id, transientCells: outcome.pendingCells) : [:]
+        await handler.exportWork(layout: updated.layout, target: target, fallbacks: fallbacks, purpose: purpose)
     }
 
     // MARK: 删除（二次确认）

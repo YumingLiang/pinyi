@@ -11,9 +11,9 @@ public extension L10nKey {
     static let worksDelete = L10nKey(rawValue: "works.delete")
     static let worksDeleteConfirm = L10nKey(rawValue: "works.delete.confirm")
     static let worksDeleteConfirmOK = L10nKey(rawValue: "works.delete.confirm.ok")
-    /// 参数：张数（`%1$@`）。
+    /// 参数：格数（`%1$@`）：本次找不到合格相近照片、用旧预览兜底的格子。
     static let worksMissing = L10nKey(rawValue: "works.missing")
-    /// 参数：格数（`%1$@`）。⚠️ 占位文案，待产品确认。
+    /// 参数：格数（`%1$@`）：本次换成相近照片的格子。
     static let worksReplaced = L10nKey(rawValue: "works.replaced")
     static let worksOpenFailed = L10nKey(rawValue: "works.open_failed")
     static let worksDeleteFailed = L10nKey(rawValue: "works.delete_failed")

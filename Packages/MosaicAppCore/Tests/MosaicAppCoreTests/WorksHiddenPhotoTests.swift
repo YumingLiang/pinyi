@@ -51,23 +51,26 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.existence.hide("b")
         await h.controller.open(id)
-        let cleared = sampleLayout(["a", "", "c", "a", "", "d"])
-        XCTAssertEqual(h.controller.openedWork?.layout, cleared, "用到 b 的两格按缺图处理")
+        let cleared = sampleFallbackLayout(["a", "", "c", "a", "", "d"])
+        XCTAssertEqual(h.controller.openedWork?.layout, cleared, "用到 b 的两格按缺图处理（旧预览兜底）")
         XCTAssertEqual(h.images.state.get().previews, 2, "预览重新生成了一次")
         XCTAssertEqual(h.images.state.get().reads, 1, "重画预览时读回目标图副本做叠加")
 
         // 新预览：内容不含 b，文件名换了，旧预览删掉；查看页和列表都指向新预览（列表缩略图按 previewURL 刷新）
         let opened = try XCTUnwrap(h.controller.state.opened)
         XCTAssertNotEqual(opened.summary.previewURL, before.previewURL)
-        let previewData = try Data(contentsOf: opened.summary.previewURL)
-        XCTAssertEqual(previewData, FakeWorkImages.previewBytes(cleared))
-        XCTAssertFalse(String(decoding: previewData, as: UTF8.self).contains("b"))
+        let previewData = try FakeWorkImages.previewHeader(opened.summary.previewURL)
+        let bColor = FakeWorkImages.color(of: "b")
+        XCTAssertEqual(previewData, FakeWorkImages.previewBytes(cleared, fallbacks: [1: bColor, 4: bColor]),
+                       "b 的两格用旧预览裁出的小图填充（叠加已去掉，颜色与原来一致）")
+        XCTAssertFalse(String(decoding: previewData, as: UTF8.self).contains(",b,"), "新预览不再按 ID 取 b")
         XCTAssertFalse(FileManager.default.fileExists(atPath: before.previewURL.path), "旧预览（还看得到 b）已删")
         XCTAssertEqual(h.controller.state.summaries.first?.previewURL, opened.summary.previewURL)
-        XCTAssertEqual(opened.missingCount, 1)
-        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
+        XCTAssertEqual(opened.missingCount, 2, "按格算")
+        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["2"]))
+        let fallbackFile = try XCTUnwrap(opened.summary.meta.fallbackFile)
         XCTAssertEqual(try h.files(id), [FileWorksStore.metaFileName, FileWorksStore.layoutFileName, "target.jpg",
-                                         opened.summary.previewURL.lastPathComponent])
+                                         opened.summary.previewURL.lastPathComponent, fallbackFile])
         XCTAssertEqual(try h.tempLeftovers(), [], "临时目录清掉了")
 
         // 写回磁盘：新进程重开也是处理后的布局、新预览、新指纹
@@ -85,6 +88,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
         XCTAssertEqual(exported, cleared)
         XCTAssertFalse(exported.cellAssignments.contains { $0.localIdentifier == "b" })
         XCTAssertEqual(h.exporter.calls.last?.1, true)
+        XCTAssertEqual(h.exporter.fallbacks.last, [1: bColor, 4: bColor], "重导出用存盘的兜底图")
         XCTAssertEqual(h.images.state.get().previews, 2)
 
         // 再导出成功 → 自动保存按新指纹查重命中
@@ -126,13 +130,13 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.existence.hide("c")   // 查看页开着时去「照片」App 隐藏
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.exporter.calls.last?.0, sampleLayout(["a", "b", ""]))
+        XCTAssertEqual(h.exporter.calls.last?.0, sampleFallbackLayout(["a", "b", ""]))
         XCTAssertEqual(h.images.state.get().previews, 2)
 
         h.existence.unhide("c")
         h.controller.close()
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "b", ""]), "取消隐藏后不改回去")
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "b", ""]), "取消隐藏后不改回去")
         XCTAssertEqual(h.controller.state.opened?.missingCount, 0, "没有新变化，不再提示")
         XCTAssertEqual(h.images.state.get().previews, 2)
         h.controller.stop()
@@ -152,27 +156,44 @@ final class WorksHiddenPhotoTests: XCTestCase {
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["x", "y", "z"]))
         await h.controller.open(withB)
         XCTAssertEqual(h.images.state.get().previews, 4)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "", "c"]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"]))
         let untouched = try await h.store.load(alsoB)
         XCTAssertEqual(untouched.layout, sampleLayout(["b", "q", "r"]))
         h.controller.stop()
     }
 
-    /// 受限访问 / 无权限：没选进来的照片也取不到，不能当成被删 / 被隐藏——只计数提示，不改作品
-    /// （导出时按 ID 取图同样取不到，那几格是白格）。
+    /// 受限访问 / 无权限：没选进来的照片也取不到，不能当成被删 / 被隐藏——不改作品、**不提示**（每次打开都不出），
+    /// 没处理的缺失数只记在 meta.missingCount（性能页）；导出时这些格子临时从当前预览裁切放大，不出白格、不存盘。
     func testLimitedAccessOnlyCountsAndDoesNotRewrite() async throws {
         let h = Harness()
         let id = try await h.saveWork(["a", "b", "c"])
         await h.controller.start()
         h.existence.fullAccess.set(false)
         h.existence.hide("a", "b", "c")
+        for _ in 0..<2 {
+            await h.controller.open(id)
+            XCTAssertEqual(h.controller.state.opened?.missingCount, 0, "作品没改写，不提示")
+            XCTAssertNil(h.controller.state.missingLine)
+            XCTAssertNil(h.controller.state.replacedLine)
+            h.controller.close()
+        }
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 3)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "b", "c"]))
         XCTAssertEqual(h.images.state.get().previews, 1)
         let onDisk = try await h.store.load(id)
         XCTAssertEqual(onDisk.layout, sampleLayout(["a", "b", "c"]))
         XCTAssertEqual(onDisk.meta.droppedPhotoCount, 0)
+        XCTAssertEqual(onDisk.meta.missingCount, 3, "没处理的缺失数记着（性能页）")
+        let filesBefore = try h.files(id)
+
+        await h.controller.exportOpenedTapped(purpose: .save)
+        XCTAssertEqual(h.exporter.calls.last?.0, sampleLayout(["a", "b", "c"]), "布局不改（自动保存查重照样命中）")
+        XCTAssertEqual(h.exporter.fallbacks.last,
+                       [0: FakeWorkImages.color(of: "a"), 1: FakeWorkImages.color(of: "b"), 2: FakeWorkImages.color(of: "c")],
+                       "导出时临时从当前预览裁切放大")
+        XCTAssertNil(h.controller.state.missingLine)
+        XCTAssertEqual(try h.files(id), filesBefore, "临时兜底不存盘")
+        XCTAssertEqual(h.images.state.get().fallbackWrites, 0)
         h.controller.stop()
     }
 
@@ -185,7 +206,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
         h.images.state.update { $0.failAt = .preview }
         h.existence.hide("b")
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 1)
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 0, "没写回成功，作品没变，不提示")
         let after = try await h.store.load(id)
         XCTAssertEqual(after.layout, before.layout)
         XCTAssertEqual(after.summary.previewURL, before.summary.previewURL)
@@ -194,8 +215,8 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.images.state.update { $0.failAt = nil }
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "", "c"]))
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 1, "失败那次没有累计")
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"]))
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 1, "这次真的兜底了，提示一次")
         h.controller.stop()
     }
 
@@ -207,8 +228,8 @@ final class WorksHiddenPhotoTests: XCTestCase {
         async let first = store.dropMissingPhotos(["b"], for: id)
         async let second = store.dropMissingPhotos(["b"], for: id)
         let (w1, w2) = try await (first, second)
-        XCTAssertEqual(w1.layout, sampleLayout(["a", "", "c"]))
-        XCTAssertEqual(w2.layout, sampleLayout(["a", "", "c"]))
+        XCTAssertEqual(w1.layout, sampleFallbackLayout(["a", "", "c"]))
+        XCTAssertEqual(w2.layout, sampleFallbackLayout(["a", "", "c"]))
         XCTAssertEqual(h.images.state.get().previews, 2, "第二次发现没东西可去，不再重画")
         let meta = try await store.load(id).meta
         XCTAssertEqual(meta.droppedPhotoCount, 1)

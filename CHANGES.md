@@ -1,5 +1,31 @@
 # CHANGES
 
+## feat/works-hidden（追加 2）：找不到替代的格子用旧预览兜底；文案定稿、按格计；受限访问不再反复提示
+
+依据：hd-export-req-v0.2 F 节（`works.missing`「这几格会稍模糊」）；AndyL 17:23 要求。
+
+- **预览兜底**（`Works/WorkFallbackImages.swift`，纯 Swift）：找不到合格相近照片的格子，在重画预览**之前**从旧预览裁出该格区域，
+  按「预览 = (1 − α)·格子 + α·目标」按位置去掉叠加（否则重画 / 导出会叠两次），存进作品目录 `fallback-<随机>.png`（按格拼成一张，无损）。
+  - 布局：`CellAssignment.fallback`（JSON 可选字段 `"fb": true`，只在兜底格写出；旧版布局照常解码，普通格子编码逐字节不变、指纹不变）。
+  - meta：`fallbackFile: String?`（指向兜底图）、`fallbackCellCount: Int`（按格累计，`works.missing`；旧作品缺省 0）；`droppedPhotoCount` 保留（按张，兼容）。
+  - 预览重画（`WorkImageEncoding.writePreview(..., fallbacks:)`）与高清导出（`ExportRequest.cellFallbacks` → `LiveMosaicExporter`）都把小图
+    `.high` 插值放大填满该格（不用最近邻），兜底格不再按 ID 取图；导出计入「糊格子」。
+  - 已经兜底、这次仍没补上的格子直接搬旧兜底图（不从新预览二次裁，不会一代代变糊）；**升级成照片**的格子丢掉兜底图，全部升级后兜底图文件删除。
+  - **没有旧预览**（读不出 / 尺寸不对）的格子才真的留白。
+  - 原子写回顺序：兜底图、新预览先写 `.tmp-*` 再 rename 成新文件名 → meta.json → layout.json → 删旧预览 / 旧兜底图；任一步失败都不留孤儿文件；
+    取消（关掉查看页）不写回。
+- **文案定稿**（copy_v1.1.md → gen-localizable.py）：`works.replaced`「有 {count} 格原来的照片现在用不了，已换成相近的照片」、
+  `works.missing`「有 {count} 格原来的照片现在用不了，这几格会稍模糊」，两者都**按格**计（`works.missing` 原来按张）。仓库只有 zh-Hans。
+- **受限访问 / 索引未就绪 / 写回失败**：作品没改写，**不提示**（每次打开都不出）；没处理的缺失数记在 meta.missingCount，只在性能页显示（`pendingMissing=`）。
+  导出时这些格子临时从当前预览裁切放大（`WorksStore.fallbackTiles(transientCells:)`，不存盘、布局不变，自动保存查重照样命中）。
+- **5c 已定为不处理**（AndyL）：目标图副本和叠加层保持不变。
+- 协议改动：`WorkImageEncoding` 加 `readImage(at:)`、`writeFallback(_:into:)`，`writePreview` 加 `fallbacks:`；`WorkExportHandling.exportWork` 加 `fallbacks:`；
+  `AppCoordinator.export(layout:target:fallbacks:purpose:)`（`fallbacks` 默认空，结果页导出不变）。
+- 性能页 manifest 行：`replaced= fallback= dropped= pendingMissing=`。
+- 测试：新增 `WorksFallbackTests` 11 个（文案与按格计数、兜底图生成并持久、重导出（含重开后）用兜底图、兜底保留 / 搬移 / 升级、没有旧预览才留白、
+  写兜底图失败作品不变、按位置去叠加、拼图往返、旧版 layout / meta 解码、旧版留白作品安静打开），`WorksCoordinatorIntegrationTests` +1（兜底格经协调器交给导出器）；
+  已有用例按兜底 / 按格 / 受限访问不提示更新。
+
 ## feat/works-hidden（追加）：4b 缺图补格——换成本机、可见、清晰的相近照片
 
 依据：hd-export-req-v0.2 F2 第 2 条 / F5「N 格已替换」；quick-start-req-v0.4 §4.8 5a / 5b、验收 8 / 9；协调人 17:00 要求（白格不接受）。
@@ -10,17 +36,17 @@
   - 候选：`AppCoordinator.worksRematchSnapshot()`（`index.snapshot(for: .allPhotos)`），去掉缺失照片和清晰度缓存里已知不合格的。
   - 选法：top‑16（`MosaicPipeline.refillCandidateCount`）里按「不在作品里也不在相邻格」→「不在相邻格」→「最近」选，逐格选（补上的格也算邻居）；
     只探测选中的：先查可见（不含隐藏照片，索引里可能还有后来被隐藏的），再 `LocalResolutionChecker` ≥ 256 px；不合格剔除重选，最多 3 轮；
-    最后兜底只在本次已确认可见且清晰的照片里取最近（同 `refill`，忽略单张上限）。仍没有才留白。
+    最后兜底只在本次已确认可见且清晰的照片里取最近（同 `refill`，忽略单张上限）。仍没有才清成空格子（写回时用旧预览兜底，见「追加 2」）。
   - 索引暂时不可用（还没加载完）：抛 `WorkRematchError.indexUnavailable`，作品不动，下次打开再补（不当成留白）。
 - **写回**：`FileWorksStore.applyRematch`（原 `dropMissingPhotos` 的原子写回顺序不变；磁盘上的布局已不是计算时那份就不写）。
   meta 新增 `replacedCellCount`（累计格数，`works.replaced`），`droppedPhotoCount` 改为「至少一格留白的原照片数」（`works.missing`）。
 - **取消**：补格在打开作品的 Task 里跑，关掉查看页即取消；取消时不写回任何东西（探测结果也不入缓存），下次打开重做。
-- 目标图副本只读，不改、不删；叠加层不动（5c 待 AndyL 定）。受限访问只计数不改写、`droppedPhotoCount` 保留。
-- 文案：新增 `works.replaced`（⚠️ 占位，待产品确认）「有 {count} 格的原照片不在了，已换成相近的照片」，只改 copy_v1.1.md 再生成。
+- 目标图副本只读，不改、不删；叠加层不动（5c 已定为不处理）。受限访问不改写、`droppedPhotoCount` 保留。
+- 文案：新增 `works.replaced`，只改 copy_v1.1.md 再生成（定稿见「追加 2」）。
 - App：`AppModel` 注入补格器（复用生成用的 `GenerationRunner.pipeline` 与 `sharpness` 缓存）；查看页显示 `works.replaced`；性能页显示最近一次补格附注与 `replaced=`。
 - **提示只出一次（QA H8 / H8b）**：`works.replaced` / `works.missing` 只在本次处理真的发生了新替换 / 新留白时出一次
   （`OpenedWork.replacedCount` / `missingCount` 是本次的数，不是累计数）；同一作品第二次打开、再导出、杀掉 App 重开都不再出。
-  受限访问 / 索引未就绪 / 写回失败时没处理的缺失照常提示（作品没变，导出会是白格）。meta.missingCount 只记「还没处理的」。
+  meta.missingCount 只记「还没处理的」（受限访问等情况见「追加 2」：不提示）。
 - **留白格之后再试**：有补格器、作品有留白记录（`droppedPhotoCount > 0`）时，每次打开把留白格一起重新找；补上了写回并按 `works.replaced` 出一次，
   仍没有就不写回、不提示。`droppedPhotoCount` 是历史累计，不回退。
 - 测试：`WorksRematchTests`（13 个，含 H8：替换 / 留白各自的第二次打开、再导出、重开不再提示；留白格后来升级成照片提示一次）。
@@ -46,8 +72,8 @@
   降级系数不在这里算（OverlayDegrade 另一条线）。
 - **内部工具 TestAlbumWriter**：「隐藏一张测试照片（优先最新作品里用到的）」（`PHAssetChangeRequest.isHidden = true`，只动「马赛克测试」相簿）、
   「取消隐藏全部测试照片」。
-- **4b 还没做**：缺失格子现在是缺图格（白格），不是「本机相近照片重新匹配」，也没有 `works.replaced` 文案；`MissingCellRematching` 仍只是协议。
-- **没做**：5c（目标图本身被隐藏 / 删除时去掉叠加层）。
+- 4b（相近照片补格）与预览兜底见上面两节「追加」。
+- 5c（目标图本身被隐藏 / 删除时去掉叠加层）：已定为不处理。
 - 测试：`WorksHiddenPhotoTests`（11 个），`WorksControllerTests` 缺失用例按新行为更新 + 新增 1 个。
 
 ## feat/works：去掉旧 render-export 带进来的非作品改动

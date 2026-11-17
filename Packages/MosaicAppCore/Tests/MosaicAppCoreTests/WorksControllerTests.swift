@@ -117,8 +117,8 @@ final class WorksControllerTests: XCTestCase {
         h.controller.stop()
     }
 
-    /// B7 / B9-3 + 需求 v0.4 §4.8 5a：打开时批量查一次原照片，取不到的格子按缺图处理（清成缺图格、重画预览），
-    /// 计数写回 meta；不用预览图放大补。照片恢复后不改回去（5b），提示张数也不减。
+    /// B7 / B9-3 + 需求 v0.4 §4.8 5a：打开时批量查一次原照片，取不到的格子按缺图处理（没有补格器：全部用旧预览裁切兜底、
+    /// 重画预览），按格计数提示一次；照片恢复后不改回去（5b）。
     func testMissingPhotosCountedOnOpenAndBeforeExport() async throws {
         let h = Harness()
         await h.controller.start()
@@ -128,20 +128,22 @@ final class WorksControllerTests: XCTestCase {
 
         h.existence.deleted.set(["a", "d", "zzz"])
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 2, "去重后按张数算：a、d")
-        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["2"]))
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 3, "按格算：a 两格 + d 一格")
+        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["3"]))
         XCTAssertEqual(h.controller.state.summaries.first?.meta.missingCount, 0, "都处理过了，没有待处理的")
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["", "b", "c", "", "b", ""]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["", "b", "c", "", "b", ""]))
         let persisted = await FileWorksStore(directory: h.dir, images: h.images).list().first?.meta
         XCTAssertEqual(persisted?.missingCount, 0)
         XCTAssertEqual(persisted?.droppedPhotoCount, 2)
+        XCTAssertEqual(persisted?.fallbackCellCount, 3)
 
         // 导出前再查一次（期间又删了一张）；按处理后的布局导出，带目标图副本
         h.existence.deleted.set(["a", "b", "d"])
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.controller.state.opened?.missingCount, 1, "只提示这次新留白的 b")
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 2, "只提示这次新兜底的 b 两格")
         XCTAssertEqual(h.exporter.calls.count, 1)
-        XCTAssertEqual(h.exporter.calls.first?.0, sampleLayout(["", "", "c", "", "", ""]), "导出用处理后的显式布局")
+        XCTAssertEqual(h.exporter.calls.first?.0, sampleFallbackLayout(["", "", "c", "", "", ""]), "导出用处理后的显式布局")
+        XCTAssertEqual(h.exporter.fallbacks.first.map { Set($0.keys) }, [0, 1, 3, 4, 5], "兜底格都带上兜底图，不出白格")
         XCTAssertEqual(h.exporter.calls.first?.1, true, "目标图副本读回来做叠加")
         XCTAssertEqual(h.exporter.calls.first?.2, .save)
 
@@ -150,7 +152,7 @@ final class WorksControllerTests: XCTestCase {
         await h.controller.open(id)
         XCTAssertEqual(h.controller.state.opened?.missingCount, 0)
         XCTAssertNil(h.controller.state.missingLine)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["", "", "c", "", "", ""]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["", "", "c", "", "", ""]))
         h.controller.stop()
     }
 

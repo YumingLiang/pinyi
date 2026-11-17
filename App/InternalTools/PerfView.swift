@@ -97,7 +97,7 @@ struct PerfView: View {
     static func manifestLine(_ m: WorkMeta) -> String {
         let side = m.targetLocalLongSide.map(String.init) ?? "-"
         let k = m.overlayDegradeFactor.map { String(format: "%.3f", $0) } ?? "-"
-        return "\(m.id.directoryName.prefix(8)) targetLocalLongSide=\(side) overlayDegradeFactor=\(k) replaced=\(m.replacedCellCount) dropped=\(m.droppedPhotoCount) missing=\(m.missingCount)"
+        return "\(m.id.directoryName.prefix(8)) targetLocalLongSide=\(side) overlayDegradeFactor=\(k) replaced=\(m.replacedCellCount) fallback=\(m.fallbackCellCount) dropped=\(m.droppedPhotoCount) pendingMissing=\(m.missingCount)"
     }
 
     private var deviceNote: String {

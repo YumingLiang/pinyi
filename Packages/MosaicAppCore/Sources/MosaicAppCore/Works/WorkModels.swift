@@ -51,7 +51,8 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public var tier: String?
     /// 不同照片数。
     public var photoCount: Int
-    /// 最近一次检查时缺失的原照片数（保存时为 0；打开 / 导出前会重新检查，见 `WorksController`）。
+    /// 最近一次检查到、但**还没处理**的缺失原照片数（受限访问 / 索引未就绪 / 写回失败时；保存时为 0；处理过即归 0）。
+    /// 只在内部性能页显示，不再用于提示（提示只在本次真的发生替换 / 兜底时出一次，见 `WorksController`）。
     public var missingCount: Int
     public var overlayAlpha: Double
     /// 只用于追溯（不用于重算）。
@@ -68,6 +69,12 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public var droppedPhotoCount: Int
     /// 换成本机相近照片的格子数（4b，累计；`works.replaced`）。旧作品缺省 0。
     public var replacedCellCount: Int
+    /// 找不到合格相近照片的格子数（按格，累计；`works.missing`）：用旧预览裁切兜底的，加上没有旧预览只能留白的。
+    /// 兜底格后来升级成照片也不回退（与 `droppedPhotoCount` 一样只增）。旧作品缺省 0。
+    public var fallbackCellCount: Int
+    /// 预览兜底图（作品目录内，PNG，无损；按格拼成一张、每格与预览每格同像素，只有兜底格位置有像素，其余为 0）。布局里 `fallback == true` 的格子
+    /// 从这里按格裁出、放大填充。没有兜底格时为 nil。旧作品缺省 nil。
+    public var fallbackFile: String?
     /// 目标图本机版本的有效长边（px，photo-picker-v0.1 §6.1；内部性能页显示）。旧作品 / 未记录为 nil。
     public var targetLocalLongSide: Int?
     /// 叠加降级系数 k（`OverlayDegrade`，另一条线计算；内部性能页显示）。旧作品 / 未记录为 nil。
@@ -76,7 +83,8 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public init(formatVersion: Int = WorkMeta.currentFormatVersion, id: WorkID, createdAt: Date, columns: Int, rows: Int,
                 tier: String?, photoCount: Int, missingCount: Int, overlayAlpha: Double, seed: UInt64?, fingerprint: String,
                 origin: WorkOrigin, previewFile: String, previewPixelWidth: Int, previewPixelHeight: Int, targetFile: String?,
-                droppedPhotoCount: Int = 0, replacedCellCount: Int = 0, targetLocalLongSide: Int? = nil, overlayDegradeFactor: Double? = nil) {
+                droppedPhotoCount: Int = 0, replacedCellCount: Int = 0, fallbackCellCount: Int = 0, fallbackFile: String? = nil,
+                targetLocalLongSide: Int? = nil, overlayDegradeFactor: Double? = nil) {
         self.formatVersion = formatVersion
         self.id = id
         self.createdAt = createdAt
@@ -95,13 +103,16 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         self.targetFile = targetFile
         self.droppedPhotoCount = droppedPhotoCount
         self.replacedCellCount = replacedCellCount
+        self.fallbackCellCount = fallbackCellCount
+        self.fallbackFile = fallbackFile
         self.targetLocalLongSide = targetLocalLongSide
         self.overlayDegradeFactor = overlayDegradeFactor
     }
 
     enum CodingKeys: String, CodingKey {
         case formatVersion, id, createdAt, columns, rows, tier, photoCount, missingCount, overlayAlpha, seed, fingerprint,
-             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, droppedPhotoCount, replacedCellCount, targetLocalLongSide,
+             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, droppedPhotoCount, replacedCellCount, fallbackCellCount, fallbackFile,
+             targetLocalLongSide,
              overlayDegradeFactor
     }
 
@@ -125,6 +136,8 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         targetFile = try c.decodeIfPresent(String.self, forKey: .targetFile)
         droppedPhotoCount = try c.decodeIfPresent(Int.self, forKey: .droppedPhotoCount) ?? 0
         replacedCellCount = try c.decodeIfPresent(Int.self, forKey: .replacedCellCount) ?? 0
+        fallbackCellCount = try c.decodeIfPresent(Int.self, forKey: .fallbackCellCount) ?? 0
+        fallbackFile = try c.decodeIfPresent(String.self, forKey: .fallbackFile)
         targetLocalLongSide = try c.decodeIfPresent(Int.self, forKey: .targetLocalLongSide)
         overlayDegradeFactor = try c.decodeIfPresent(Double.self, forKey: .overlayDegradeFactor)
     }
@@ -202,13 +215,18 @@ public struct WorkImageFile: Sendable, Hashable {
 /// 实现约定：只往给定的 `directory`（作品的临时目录）里写，文件名自定（如 `preview.jpg`）；
 /// 失败就抛错——存储层会把整个临时目录删掉，不留半个作品。
 public protocol WorkImageEncoding: Sendable {
-    /// 按布局渲染预览图（长边 ≤ `maxLongEdge`）。
+    /// 按布局渲染预览图（长边 ≤ `maxLongEdge`）。`fallbacks`：格子下标 → 预览兜底图（`WorkFallbackImages`），
+    /// 这些格子不取照片，把兜底图放大填满该格（双线性 / `.high`，不用最近邻），再照常叠加目标图。
     func writePreview(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, maxLongEdge: Int,
-                      into directory: URL) async throws -> WorkImageFile
+                      fallbacks: [Int: PixelBuffer], into directory: URL) async throws -> WorkImageFile
     /// 写目标图副本（长边 ≤ `maxLongEdge`，原图更小就不放大）。
     func writeTarget(_ target: PixelBuffer, maxLongEdge: Int, into directory: URL) async throws -> WorkImageFile
     /// 读回目标图副本（从作品再导出时做叠加用）。
     func readTarget(at url: URL) async throws -> PixelBuffer
+    /// 读回作品目录里的预览图 / 兜底图（原尺寸，不降采样；裁兜底格用）。
+    func readImage(at url: URL) async throws -> PixelBuffer
+    /// 写预览兜底图（无损 PNG；只往 `directory` 里写）。
+    func writeFallback(_ image: PixelBuffer, into directory: URL) async throws -> WorkImageFile
 }
 
 /// 原照片还在不在（App 里是 `PHAsset.fetchAssets(withLocalIdentifiers:)`，一次批量查）。
@@ -236,6 +254,7 @@ extension MosaicLayout {
         for i in out.cellAssignments.indices where !out.cellAssignments[i].localIdentifier.isEmpty
             && assetIDs.contains(out.cellAssignments[i].localIdentifier) {
             dropped.insert(out.cellAssignments[i].localIdentifier)
+            // 兜底标记由存储层写回时按「有没有旧预览」决定（`FileWorksStore.applyRematch`）
             out.cellAssignments[i] = CellAssignment(localIdentifier: "", crop: out.cellAssignments[i].crop)
         }
         return (out, dropped.count)

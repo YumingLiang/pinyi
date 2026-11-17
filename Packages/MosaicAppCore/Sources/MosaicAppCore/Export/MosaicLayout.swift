@@ -17,26 +17,32 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
         public var localIdentifier: String
         /// 归一化裁剪框（0…1），相对于照片**居中最大正方形**；当前生成器都是 (0, 0, 1, 1)，照样显式存下来。
         public var crop: CropRect
+        /// 「我的作品」预览兜底格（`localIdentifier` 为空、找不到合格相近照片）：渲染 / 导出时用作品目录里存的旧预览裁切放大填充
+        /// （`WorkMeta.fallbackFile`）。可选字段：只在为 true 时写出 `"fb": true`，旧版布局、普通格子的 JSON 与指纹都不变。
+        public var fallback: Bool
 
         public static let fullSquare = CropRect(x: 0, y: 0, width: 1, height: 1)
 
-        public init(localIdentifier: String, crop: CropRect = CellAssignment.fullSquare) {
+        public init(localIdentifier: String, crop: CropRect = CellAssignment.fullSquare, fallback: Bool = false) {
             self.localIdentifier = localIdentifier
             self.crop = crop
+            self.fallback = fallback
         }
 
-        private enum CodingKeys: String, CodingKey { case id, crop }
+        private enum CodingKeys: String, CodingKey { case id, crop, fb }
 
         public init(from decoder: any Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             localIdentifier = try c.decode(String.self, forKey: .id)
             crop = try MosaicLayout.decodeRect(c.decode([Double].self, forKey: .crop))
+            fallback = try c.decodeIfPresent(Bool.self, forKey: .fb) ?? false
         }
 
         public func encode(to encoder: any Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(localIdentifier, forKey: .id)
             try c.encode(MosaicLayout.encodeRect(crop), forKey: .crop)
+            if fallback { try c.encode(true, forKey: .fb) }
         }
     }
 

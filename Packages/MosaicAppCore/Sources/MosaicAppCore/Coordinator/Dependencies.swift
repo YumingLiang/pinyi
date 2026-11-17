@@ -140,12 +140,17 @@ public struct ExportRequest: Sendable {
     public var target: PixelBuffer?
     public var overlayAlpha: Double
     public var tier: ExportTier
+    /// 「我的作品」兜底格：格子下标 → 小图（旧预览裁出的那一格）。这些格子不取照片，把小图放大填满
+    /// （`.high` 插值，不用最近邻），再照常叠加。结果页导出为空。
+    public var cellFallbacks: [Int: PixelBuffer]
 
-    public init(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double? = nil, tier: ExportTier) {
+    public init(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double? = nil, tier: ExportTier,
+                cellFallbacks: [Int: PixelBuffer] = [:]) {
         self.layout = layout
         self.target = target
         self.overlayAlpha = target == nil ? 0 : (overlayAlpha ?? layout.params.overlayAlpha)
         self.tier = tier
+        self.cellFallbacks = cellFallbacks
     }
 
     public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, tier: ExportTier) {
