@@ -46,10 +46,22 @@ final class AppModel: ObservableObject {
         let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
                                                              onExportSucceeded: relay.handler))
         self.coordinator = coordinator
+        // 4b 补格：索引快照 + 生成用的同一套匹配器和清晰度缓存（取不到时各自新建，零网络）
+        let runner = coordinator.dependencies.generator as? GenerationRunner
+        let existence = PhotoKitExistenceChecker()
+        let rematcher = IndexWorkRematcher(
+            snapshot: { [weak coordinator] in
+                guard let coordinator else { throw WorkRematchError.indexUnavailable }
+                return try await coordinator.worksRematchSnapshot()
+            },
+            existence: existence,
+            sharpness: runner?.sharpness ?? LocalResolutionChecker(probe: PhotoKitResolutionProbe()),
+            pipeline: runner?.pipeline ?? MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())))
         let worksController = WorksController(store: FileWorksStore(directory: WorksLocation.directory,
                                                                     images: ImageIOWorkImages(thumbnails: thumbnails)),
-                                              existence: PhotoKitExistenceChecker(),
-                                              images: ImageIOWorkImages(thumbnails: thumbnails))
+                                              existence: existence,
+                                              images: ImageIOWorkImages(thumbnails: thumbnails),
+                                              rematcher: rematcher)
         worksController.attach(resultContext: { [weak coordinator] in
             guard let c = coordinator else {
                 return WorkResultContext(layout: nil, target: nil, overlayAlpha: 0, tier: nil, resultRevision: 0)

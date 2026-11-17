@@ -126,6 +126,9 @@ struct WorkDetailView: View {
                 ProgressView()
                 Spacer()
             }
+            if let line = works.state.replacedLine {   // 4b：已换成相近照片的格数
+                Text(line).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
             if let line = works.state.missingLine {
                 Text(line).font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center)
             }

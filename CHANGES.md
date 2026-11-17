@@ -1,5 +1,25 @@
 # CHANGES
 
+## feat/works-hidden（追加）：4b 缺图补格——换成本机、可见、清晰的相近照片
+
+依据：hd-export-req-v0.2 F2 第 2 条 / F5「N 格已替换」；quick-start-req-v0.4 §4.8 5a / 5b、验收 8 / 9；协调人 17:00 要求（白格不接受）。
+
+- **`IndexWorkRematcher`**（`Works/WorkCellRematcher.swift`，实现 `MissingCellRematching`）：
+  - 目标特征：作品里存了 `layout.json`（每格 ID + 裁剪、`targetSize`、`targetCrop`）和 `target.jpg`（目标图副本）；没存每格特征和索引行号。
+    有副本时按 `targetCrop` 换算到副本尺寸取该格区域，用生成同一个 `FeatureExtractor` 提特征；没有副本时取相邻 8 格（仍在索引里）照片特征的平均。
+  - 候选：`AppCoordinator.worksRematchSnapshot()`（`index.snapshot(for: .allPhotos)`），去掉缺失照片和清晰度缓存里已知不合格的。
+  - 选法：top‑16（`MosaicPipeline.refillCandidateCount`）里按「不在作品里也不在相邻格」→「不在相邻格」→「最近」选，逐格选（补上的格也算邻居）；
+    只探测选中的：先查可见（不含隐藏照片，索引里可能还有后来被隐藏的），再 `LocalResolutionChecker` ≥ 256 px；不合格剔除重选，最多 3 轮；
+    最后兜底只在本次已确认可见且清晰的照片里取最近（同 `refill`，忽略单张上限）。仍没有才留白。
+  - 索引暂时不可用（还没加载完）：抛 `WorkRematchError.indexUnavailable`，作品不动，下次打开再补（不当成留白）。
+- **写回**：`FileWorksStore.applyRematch`（原 `dropMissingPhotos` 的原子写回顺序不变；磁盘上的布局已不是计算时那份就不写）。
+  meta 新增 `replacedCellCount`（累计格数，`works.replaced`），`droppedPhotoCount` 改为「至少一格留白的原照片数」（`works.missing`）。
+- **取消**：补格在打开作品的 Task 里跑，关掉查看页即取消；取消时不写回任何东西（探测结果也不入缓存），下次打开重做。
+- 目标图副本只读，不改、不删；叠加层不动（5c 待 AndyL 定）。受限访问只计数不改写、`droppedPhotoCount` 保留。
+- 文案：新增 `works.replaced`（⚠️ 占位，待产品确认）「有 {count} 格的原照片不在了，已换成相近的照片」，只改 copy_v1.1.md 再生成。
+- App：`AppModel` 注入补格器（复用生成用的 `GenerationRunner.pipeline` 与 `sharpness` 缓存）；查看页显示 `works.replaced`；性能页显示最近一次补格附注与 `replaced=`。
+- 测试：`WorksRematchTests`（10 个）。
+
 ## feat/works-hidden：「我的作品」里后来被隐藏的照片按缺图处理 + 重画预览；manifest 加两个可选字段
 
 依据：photo-picker-v0.1 §5.1「我的作品」、§6.1（最后两条）、§6.2；quick-start-req-v0.4 §4.8 5a / 5b、验收 8 / 9。

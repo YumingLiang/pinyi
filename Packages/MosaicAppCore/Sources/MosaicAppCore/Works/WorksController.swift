@@ -45,6 +45,11 @@ public struct WorksState: Sendable, Hashable {
         guard let n = opened?.missingCount, n > 0 else { return nil }
         return LocalizedLine(.worksMissing, [CountFormat.grouped(n)])
     }
+    /// 查看页 / 导出前：原照片不在了、已换成相近照片的格数（`works.replaced`，参数：格数；累计，检查完才显示）。
+    public var replacedLine: LocalizedLine? {
+        guard let o = opened, o.missingCount != nil, o.summary.meta.replacedCellCount > 0 else { return nil }
+        return LocalizedLine(.worksReplaced, [CountFormat.grouped(o.summary.meta.replacedCellCount)])
+    }
 }
 
 /// 导出成功事件中继：`AppDependencies.onExportSucceeded` 在协调器之前就要给出，用它把事件转给 `WorksController`。
@@ -94,13 +99,17 @@ public protocol WorkExportHandling: AnyObject {
 /// - 自动保存只由「导出成功」触发（`ExportSuccessRelay`）；「换一种拼法」不触发保存（它只出新结果，`resultRevision` 变了，
 ///   按钮状态回到 `.idle`）。
 /// - 同一布局只存一份：存储层按布局指纹查重；从作品再导出成功后再次触发自动保存也不会重复。
-/// - 缺失原照片（删除或后来被隐藏）：打开 / 导出前批量查一次，按缺图处理并重画预览（`reconcileMissing`），提示 `works.missing`。
-///   缺失格子**不**用预览图放大补（F 节作废）；本机相近照片重新匹配（4b）还没做，接口是 `MissingCellRematching`。
+/// - 缺失原照片（删除或后来被隐藏）：打开 / 导出前批量查一次，用本机相近照片补格（4b，`MissingCellRematching`）并重画预览
+///   （`reconcileMissing`），提示 `works.replaced`；找不到替代的留白，提示 `works.missing`。不用预览图放大补（F 节作废）。
 @MainActor
 public final class WorksController {
     public let store: any WorksStore
     public let existence: any PhotoExistenceChecking
     public let images: any WorkImageEncoding
+    /// 4b 补格（App 里是 `IndexWorkRematcher`）；nil = 缺图格留白。
+    public let rematcher: (any MissingCellRematching)?
+    /// 最近一次补格的附注（内部性能页；不含照片 ID）。
+    public private(set) var lastRematchNote: String?
     /// 从作品再导出的执行方（App 里是包着 AppCoordinator 的桥，桥内弱引用协调器，这里强持有不成环）。
     public var exportHandler: (any WorkExportHandling)?
 
@@ -117,12 +126,14 @@ public final class WorksController {
     private var openToken = 0
 
     public init(store: any WorksStore, existence: any PhotoExistenceChecking, images: any WorkImageEncoding,
+                rematcher: (any MissingCellRematching)? = nil,
                 resultContext: @escaping @MainActor () -> WorkResultContext = {
                     WorkResultContext(layout: nil, target: nil, overlayAlpha: 0, tier: nil, resultRevision: 0)
                 }) {
         self.store = store
         self.existence = existence
         self.images = images
+        self.rematcher = rematcher
         self.resultContext = resultContext
     }
 
@@ -223,7 +234,7 @@ public final class WorksController {
             guard token == openToken else { return }
             openedWork = work
             state.opened = OpenedWork(summary: work.summary, missingCount: nil)
-            let (updated, missing) = await reconcileMissing(work)
+            guard let (updated, missing) = await reconcileMissing(work) else { return }
             guard token == openToken, state.opened?.id == id else { return }
             await apply(updated, missing: missing)
         } catch {
@@ -255,23 +266,42 @@ public final class WorksController {
         return Set(ids.filter { !present.contains($0) })
     }
 
-    /// 缺图处理（photo-picker-v0.1 §5.1「我的作品」；需求 v0.4 §4.8 5a / 5b）：
+    /// 缺图处理（photo-picker-v0.1 §5.1「我的作品」；需求 v0.4 §4.8 5a / 5b；hd-export-req-v0.2 F2 / F5「4b」）：
     /// - 没有缺失：什么都不动（不重画预览）。
-    /// - 有缺失且能确认（完整相册权限）：用到这些照片的格子清成缺图格，**重新生成预览**并原子写回（`dropMissingPhotos`）；
-    ///   之后再导出也不会再去取它们。照片恢复 / 取消隐藏后不改回去（5b）。
-    ///   4b「本机相近照片重新匹配」还没实现（`MissingCellRematching` 只有协议），所以现在是缺图格（白格），不是替换。
-    /// - 受限访问 / 无权限（`canConfirmMissing == false`）或写回失败：只计数提示，不改作品。这时导出仍取不到这些照片
-    ///   （按 ID 取图同样不含隐藏照片），那几格是白格。
-    /// 返回处理后的作品和提示用的张数（已去掉的 + 这次查到还没去掉的）。
-    func reconcileMissing(_ work: Work) async -> (work: Work, missing: Int) {
+    /// - 有缺失且能确认（完整相册权限）：交给 `rematcher` 换成本机、可见、清晰的相近照片（`IndexWorkRematcher`），
+    ///   实在找不到的留白；然后**重新生成预览**并原子写回（`applyRematch`）。之后再导出用写回的布局。
+    ///   照片恢复 / 取消隐藏后不改回去（5b）。没有注入 `rematcher` 或补格出错时全部留白（不是失败）。
+    /// - 受限访问 / 无权限（`canConfirmMissing == false`）或写回失败：只计数提示，不改作品。
+    /// - Task 被取消（关掉查看页）：不写回任何东西，返回 nil；下次打开再做。
+    /// 目标图副本只读（算格子的目标特征），不改、不删（5c 待定）。
+    /// 返回处理后的作品和 `works.missing` 用的张数（留白的 + 这次查到还没处理的）。
+    func reconcileMissing(_ work: Work) async -> (work: Work, missing: Int)? {
         let missing = await missingAssetIDs(work.layout)
+        if Task.isCancelled { return nil }
         guard !missing.isEmpty else { return (work, work.meta.droppedPhotoCount) }
-        guard await existence.canConfirmMissing() else { return (work, work.meta.droppedPhotoCount + missing.count) }
+        let pendingCount = work.meta.droppedPhotoCount + missing.count
+        guard await existence.canConfirmMissing() else { return (work, pendingCount) }
+        var result = WorkRematchResult.allBlank(work.layout, missing: missing)
+        if let rematcher {
+            var target: PixelBuffer?
+            if let url = work.targetURL { target = try? await images.readTarget(at: url) }
+            do {
+                result = try await rematcher.rematch(work.layout, missing: missing, target: target)
+            } catch is CancellationError {
+                return nil
+            } catch WorkRematchError.indexUnavailable {
+                return (work, pendingCount)   // 索引还没好：不改作品，下次打开再补
+            } catch {
+                // 补格本身出错：退回留白（隐藏照片照样不会再出现）
+            }
+            lastRematchNote = result.note
+        }
+        if Task.isCancelled { return nil }   // 取消：不写回半成品
         do {
-            let updated = try await store.dropMissingPhotos(missing, for: work.id)
-            return (updated, updated.meta.droppedPhotoCount)
+            let updated = try await store.applyRematch(result, base: work.layout, for: work.id)
+            return (updated, updated.meta.droppedPhotoCount + (updated.layout == work.layout ? missing.count : 0))
         } catch {
-            return (work, work.meta.droppedPhotoCount + missing.count)
+            return (work, pendingCount)
         }
     }
 
@@ -296,8 +326,7 @@ public final class WorksController {
     /// 目标图副本读不出来就不叠加。
     public func exportOpenedTapped(purpose: ExportPurpose) async {
         guard let work = openedWork, let handler = exportHandler else { return }
-        let (updated, missing) = await reconcileMissing(work)
-        guard openedWork?.id == work.id else { return }
+        guard let (updated, missing) = await reconcileMissing(work), openedWork?.id == work.id else { return }
         await apply(updated, missing: missing)
         var target: PixelBuffer?
         if let url = updated.targetURL { target = try? await images.readTarget(at: url) }

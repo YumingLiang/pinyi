@@ -13,9 +13,9 @@ public protocol WorksStore: Sendable {
     func delete(_ id: WorkID) async throws
     /// 记下最近一次检查到的缺失原照片数（列表 / 查看页提示用）。
     func setMissingCount(_ count: Int, for id: WorkID) async throws
-    /// 取不到的原照片（删除或后来被隐藏）按缺图处理：布局里用到它们的格子清成缺图格、重画预览、写回作品，
-    /// 并累计 `droppedPhotoCount`。布局里没有这些照片就什么都不动，原样返回。
-    func dropMissingPhotos(_ assetIDs: Set<String>, for id: WorkID) async throws -> Work
+    /// 写回一次补格结果（4b）：新布局、重画预览，累计 `replacedCellCount` / `droppedPhotoCount`。
+    /// 磁盘上的布局已经不是 `base`（期间别处已经处理过）或结果没有改动时，什么都不写，返回磁盘上的现状。
+    func applyRematch(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID) async throws -> Work
     /// 启动时清理上次被杀留下的临时目录 / 待删目录。
     func removeIncomplete() async
 }
@@ -161,30 +161,43 @@ public actor FileWorksStore: WorksStore {
         try Self.encoder().encode(meta).write(to: workDirectory(id).appendingPathComponent(Self.metaFileName), options: .atomic)
     }
 
-    /// 原子性（单个作品目录内，不整目录替换——整目录 rename 两步之间被杀会丢作品）：
+    /// 补格结果的写回。原子性（单个作品目录内，不整目录替换——整目录 rename 两步之间被杀会丢作品）：
     /// 1. 新预览先写进 `.tmp-*`（启动时清），再 rename 成作品目录里的**新文件名** `preview-<随机>.jpg`；
     /// 2. meta.json 原子替换（指向新预览、新指纹、累计去掉张数）——从这一刻起列表 / 查看页只认新预览；
     /// 3. layout.json 原子替换；4. 删旧预览。
     /// 任一步被杀：1 后只多一个没人引用的文件；2 后布局还是旧的，下次打开会再查到缺失、重做一遍（幂等，只是
     /// 去掉张数可能多算一次）；不会出现「新布局 + 旧预览（还看得到隐藏照片）」。
     /// 指纹随新布局更新：从作品再导出成功后自动保存仍能查重命中，不会多出一份。
+    public func applyRematch(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID) async throws -> Work {
+        try await serialized(id) { try await self.performApply(result, base: base, for: id) }
+    }
+
+    /// 不补格、全部留白（测试 / 没有补格器时）。
     public func dropMissingPhotos(_ assetIDs: Set<String>, for id: WorkID) async throws -> Work {
+        try await serialized(id) {
+            let work = try await self.load(id)
+            return try await self.performApply(.allBlank(work.layout, missing: assetIDs), base: work.layout, for: id)
+        }
+    }
+
+    private func serialized(_ id: WorkID, _ body: @escaping @Sendable () async throws -> Work) async throws -> Work {
         while let running = updating[id] {
             _ = try? await running.task.value
             // 已完成的任务由这里清掉（发起方可能还没轮到恢复），否则会对着一个已完成的任务空转
             if updating[id]?.token == running.token { updating[id] = nil }
         }
         let token = UUID()
-        let task = Task { try await self.performDrop(assetIDs, for: id) }
+        let task = Task { try await body() }
         updating[id] = (token, task)
         defer { if updating[id]?.token == token { updating[id] = nil } }
         return try await task.value
     }
 
-    private func performDrop(_ assetIDs: Set<String>, for id: WorkID) async throws -> Work {
+    private func performApply(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID) async throws -> Work {
         let work = try await load(id)
-        let (layout, dropped) = work.layout.clearingAssets(assetIDs)
-        guard dropped > 0 else { return work }
+        let layout = result.layout
+        guard work.layout == base, layout != base, layout.cols == base.cols, layout.rows == base.rows,
+              layout.cellAssignments.count == base.cellAssignments.count else { return work }
         let fm = FileManager.default
         let dir = workDirectory(id)
         let temp = directory.appendingPathComponent(Self.tempPrefix + "preview-" + UUID().uuidString, isDirectory: true)
@@ -206,7 +219,8 @@ public actor FileWorksStore: WorksStore {
         meta.previewPixelHeight = preview.pixelHeight
         meta.fingerprint = Self.fingerprint(layoutData)
         meta.photoCount = layout.uniqueAssetIDs.count
-        meta.droppedPhotoCount += dropped
+        meta.droppedPhotoCount += result.droppedPhotos
+        meta.replacedCellCount += result.replacedCells
         meta.missingCount = meta.droppedPhotoCount
         do {
             try Self.encoder().encode(meta).write(to: dir.appendingPathComponent(Self.metaFileName), options: .atomic)

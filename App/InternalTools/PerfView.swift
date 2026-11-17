@@ -45,6 +45,7 @@ struct PerfView: View {
                     ForEach(model.works.summaries.prefix(10)) { w in
                         Text(verbatim: Self.manifestLine(w.meta)).font(.footnote).monospacedDigit()
                     }
+                    if let n = model.works.controller.lastRematchNote { Text(verbatim: "最近一次补格：\(n)").font(.footnote) }
                 }
             }
             // MF-7：各阶段峰值内存（phys_footprint，0.5 s 采样）
@@ -96,7 +97,7 @@ struct PerfView: View {
     static func manifestLine(_ m: WorkMeta) -> String {
         let side = m.targetLocalLongSide.map(String.init) ?? "-"
         let k = m.overlayDegradeFactor.map { String(format: "%.3f", $0) } ?? "-"
-        return "\(m.id.directoryName.prefix(8)) targetLocalLongSide=\(side) overlayDegradeFactor=\(k) dropped=\(m.droppedPhotoCount) missing=\(m.missingCount)"
+        return "\(m.id.directoryName.prefix(8)) targetLocalLongSide=\(side) overlayDegradeFactor=\(k) replaced=\(m.replacedCellCount) dropped=\(m.droppedPhotoCount) missing=\(m.missingCount)"
     }
 
     private var deviceNote: String {

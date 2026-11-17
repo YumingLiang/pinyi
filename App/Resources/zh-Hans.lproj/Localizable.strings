@@ -420,62 +420,65 @@
 /* 查看页 / 导出前：原照片已删除的张数（copy_v1.1.md:355） 参数: %1$@=count */
 "works.missing" = "有 %1$@ 张原照片已经删掉了，导出时这些小块会缺少原照片";
 
-/* 作品读不出来（copy_v1.1.md:356） */
+/* 查看页 / 导出前：原照片已删除或隐藏、已换成本机相近照片的格数（4b；⚠️ 占位，待产品确认，参考 hd-export-req-v0.2 F2「已换成相近的照片」/ F5「N 格已替换」）（copy_v1.1.md:356） 参数: %1$@=count */
+"works.replaced" = "有 %1$@ 格的原照片不在了，已换成相近的照片";
+
+/* 作品读不出来（copy_v1.1.md:357） */
 "works.open_failed" = "这张作品打不开了";
 
-/* 删除失败（copy_v1.1.md:357） */
+/* 删除失败（copy_v1.1.md:358） */
 "works.delete_failed" = "没能删除，请再试一次";
 
-/* App 显示名（copy_v1.1.md:365） */
+/* App 显示名（copy_v1.1.md:366） */
 "app.display_name" = "拼忆";
 
-/* 建议 App Store 副标题（copy_v1.1.md:366） */
+/* 建议 App Store 副标题（copy_v1.1.md:367） */
 "app.store_subtitle" = "照片马赛克";
 
-/* 建议展示名（copy_v1.1.md:367） */
+/* 建议展示名（copy_v1.1.md:368） */
 "app.store_full_name" = "拼忆 - 照片马赛克";
 
-/* 取消（copy_v1.1.md:368） */
+/* 取消（copy_v1.1.md:369） */
 "common.cancel" = "取消";
 
-/* 完成（copy_v1.1.md:369） */
+/* 完成（copy_v1.1.md:370） */
 "common.done" = "完成";
 
-/* 返回（copy_v1.1.md:370） */
+/* 返回（copy_v1.1.md:371） */
 "common.back" = "返回";
 
-/* 确定（copy_v1.1.md:371） */
+/* 确定（copy_v1.1.md:372） */
 "common.ok" = "确定";
 
-/* 关闭（copy_v1.1.md:372） */
+/* 关闭（copy_v1.1.md:373） */
 "common.close" = "关闭";
 
-/* 重试（copy_v1.1.md:373） */
+/* 重试（copy_v1.1.md:374） */
 "common.retry" = "再试一次";
 
-/* 设置页标题（copy_v1.1.md:374） */
+/* 设置页标题（copy_v1.1.md:375） */
 "settings.title" = "设置";
 
-/* 内部 TestFlight 设置页入口（编译开关控制；正式版隐藏）（copy_v1.1.md:375） */
+/* 内部 TestFlight 设置页入口（编译开关控制；正式版隐藏）（copy_v1.1.md:376） */
 "settings.performance" = "性能测试";
 
-/* 关于入口（copy_v1.1.md:376） */
+/* 关于入口（copy_v1.1.md:377） */
 "settings.about" = "关于拼忆";
 
-/* 关于页标题（copy_v1.1.md:377） */
+/* 关于页标题（copy_v1.1.md:378） */
 "about.title" = "关于拼忆";
 
-/* 诊断导出说明（copy_v1.1.md:378） */
+/* 诊断导出说明（copy_v1.1.md:379） */
 "diagnostics.export_note" = "仅包含技术诊断信息，不含照片。";
 
-/* 关于正文（copy_v1.1.md:379） */
+/* 关于正文（copy_v1.1.md:380） */
 "about.body" = "拼忆在这台 iPhone 上，用你自己的照片拼出一张新的马赛克图。所有处理都在本地完成，照片不会上传。";
 
-/* 正式版隐藏入口说明（不对用户展示；连点版本号 5 次进入性能测试）（copy_v1.1.md:380） */
+/* 正式版隐藏入口说明（不对用户展示；连点版本号 5 次进入性能测试）（copy_v1.1.md:381） */
 "about.performance_hidden" = "（无文案，手势入口）";
 
-/* 隐私说明入口（copy_v1.1.md:381） */
+/* 隐私说明入口（copy_v1.1.md:382） */
 "privacy.entry" = "照片如何被使用";
 
-/* 隐私说明正文（copy_v1.1.md:382） */
+/* 隐私说明正文（copy_v1.1.md:383） */
 "privacy.body" = "拼忆会读取你允许访问的照片，用于生成马赛克图，也可以在你同意后把成品保存到相册。照片不会上传，也不会用于分析或广告。";

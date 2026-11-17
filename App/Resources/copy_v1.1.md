@@ -353,6 +353,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `works.delete.confirm` | 删除二次确认 | 删除这张作品？相册里的照片不会受影响。 |
 | `works.delete.confirm.ok` | 删除确认按钮 | 删除 |
 | `works.missing` | 查看页 / 导出前：原照片已删除的张数 | 有 {count} 张原照片已经删掉了，导出时这些小块会缺少原照片 |
+| `works.replaced` | 查看页 / 导出前：原照片已删除或隐藏、已换成本机相近照片的格数（4b；⚠️ 占位，待产品确认，参考 hd-export-req-v0.2 F2「已换成相近的照片」/ F5「N 格已替换」） | 有 {count} 格的原照片不在了，已换成相近的照片 |
 | `works.open_failed` | 作品读不出来 | 这张作品打不开了 |
 | `works.delete_failed` | 删除失败 | 没能删除，请再试一次 |
 

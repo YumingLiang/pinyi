@@ -13,12 +13,14 @@ public extension L10nKey {
     static let worksDeleteConfirmOK = L10nKey(rawValue: "works.delete.confirm.ok")
     /// 参数：张数（`%1$@`）。
     static let worksMissing = L10nKey(rawValue: "works.missing")
+    /// 参数：格数（`%1$@`）。⚠️ 占位文案，待产品确认。
+    static let worksReplaced = L10nKey(rawValue: "works.replaced")
     static let worksOpenFailed = L10nKey(rawValue: "works.open_failed")
     static let worksDeleteFailed = L10nKey(rawValue: "works.delete_failed")
 
     /// 本模块用到的全部 key（`WorksL10nTests` 断言都在 Localizable.strings 里）。
     static let allWorks: [L10nKey] = [
         worksEntry, worksNavTitle, worksEmpty, worksKeepHint, previewSaveToWorks, previewSavedToWorks, worksSaveFailed,
-        worksExport, worksDelete, worksDeleteConfirm, worksDeleteConfirmOK, worksMissing, worksOpenFailed, worksDeleteFailed,
+        worksExport, worksDelete, worksDeleteConfirm, worksDeleteConfirmOK, worksMissing, worksReplaced, worksOpenFailed, worksDeleteFailed,
     ]
 }
