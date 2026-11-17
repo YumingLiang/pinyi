@@ -1,5 +1,25 @@
 # CHANGES
 
+## feat/picker-t4：选图页 P0 T4「共用照片网格」（photo-picker-v0.1 §2、§3）
+
+基于 feat/picker-t0 `9cfd07e`。只依赖 T0 的 `AssetGridDataSource` / `GridThumbnailLoading` 协议，不碰 `App/Adapters`（T3）和 AlbumCatalog / BrowsePosition 的实现（T1 / T2）。没有新增文案，T0 公开接口签名没改。
+
+- **MosaicAppCore `Picker/AssetGrid.swift`**：实现 T0 留给 T4 的 `ThumbnailCacheWindow.update / reset`。期望区 = 可见区 ±1 屏（快速滑动时只有可见区），保留区 = 可见区 ±2 屏，新窗口 = (旧窗口 ∩ 保留区) ∪ 期望区；两段不相接（跳转 / 快速滑过）时直接取期望区。返回的 start / stop 互不重叠、都在 `0..<count` 内。
+- **MosaicAppCore `Picker/AssetGridLayout.swift`**（新）：
+  - `AssetGridLayout`：列数（格子最小 90 pt、至少 3 列；440 / 375 pt 宽都是 4 列）、格子边长（向下取整到整像素，正好整除时让出 1 px 防流式布局折行）、`targetPixelSize = cell × scale` 向上取整（17 Pro Max 约 325 px）、内容高度、可见下标区间、一屏格数。
+  - 锚点换算：`anchor(visibleTop:count:)` 取顶部可见行的第一格和偏移（`BrowsePosition` 语义：格子上边缘 − 可见区上边缘，被遮住为负）；`contentOffsetY(for:…)` 反算并夹到可滚范围。`GridAnchor`（下标 + 偏移）。
+  - `GridScrollSpeedMeter`：相邻两次滚动回调估速，超过每秒 4 屏算快速滑动。
+  - `AssetGridUpdatePlan.plan(for:oldCount:newCount:isOnScreen:)`：`AssetGridChange` → 什么都不做 / `performBatchUpdates`（删、插、移，之后单独 reload changed）/ `reloadData`。下标与前后数量对不上、同一格既删又移、网格不在屏幕上、从空到有、操作超过 300 个，都直接 reloadData。
+- **App `Views/Picker/AssetGridViewController.swift`**（新）：UICollectionView + 流式布局，`AssetGridView`（UIViewControllerRepresentable）给 SwiftUI 用。
+  - cell 复用 / 移出时 cancel 请求；开了 cell 预取时，移出后又被直接显示的 cell 补发请求。`.opportunistic` 的低清回调先显示，正式图到了替换；`image == nil` 只显示占位色，不提示（§5.2）。
+  - 缓存窗口：每次滚动按 `ThumbnailCacheWindow` 增减 `startCaching / stopCaching`，按照片 ID 记账；相册变化、换数据源、布局尺寸变化、离开页面、进后台时按 ID 整体 stop（不调 `stopCachingAll`，共享的缓存管理器别人可能也在用）。`prefetchDataSource` 只给窗口外的格子额外 start，快速滑动时不预取。
+  - 实况角标（SF Symbol `livephoto`，右上角）。`selectionMode`：`.single` 点一张回调 `onSelect(assetID, index)`；`.none` 只浏览。
+  - 相册变化按 `AssetGridUpdatePlan` 做 batch updates 或 reloadData；用户不在最顶上时，变化后按变化前顶部那张照片的 ID 把位置拉回来（新照片插到顶部时正在看的那张不动）；在最顶上时让新照片直接露出来。
+  - `scroll(to: GridAnchor)` 按锚点精确设 contentOffset（布局没好先记下）；`currentAnchor()` 和 `onAnchorChange`（滑动停下时报一次，位置没变不重复报）给出「相簿 + 顶部照片 ID + 偏移」，T5 直接存成 `BrowsePosition`。列数变化时按变化前的锚点恢复。
+- **App `InternalTools/FakePhotoGrid.swift`**（新，只在 `INTERNAL_TOOLS`）：5 万项假数据源 `FakeAssetGridDataSource`（ID 现算，不建数组；每 7 张一张实况；可模拟顶部新增、删最新、整体 reload）、假加载器 `FakeGridThumbnailLoader`（先同步回低清，延迟后回正式色块图；每 13 张一张本机没有；记缓存 / 请求 / 取消数）、内部工具页「照片网格（假数据 5 万张）」。T3 合入前用它单独跑网格。
+- **测试**：MosaicAppCore 新增 `ThumbnailCacheWindowTests` 11 个（首屏、±1 屏、两屏外才 stop、来回滚不抖动、跳转、快速滑不扩大、随机 500 步 start/stop 记账一致、count 变小、reset）和 `AssetGridLayoutTests` 20 个（列数和整像素、退化输入、可见区间、锚点读写往返、列数变化后锚点仍在屏内、速度判定、变化 → 批量 / reload 的各种边界）。App 单测 `AssetGridViewControllerTests` 6 个（用假数据源：5 万项、缓存窗口启动、锚点设置读回、点选回调、顶部插入保持位置、删除 / reload、换数据源回顶部并 stop 旧缓存），只在模拟器跑。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`，另用自写的 UIKit / SwiftUI 桩在 Swift 6 严格并发下做过类型检查，桩的签名是照记忆写的）：`AssetGridViewController.swift`、`FakePhotoGrid.swift`、`AssetGridViewControllerTests.swift`。
+
 ## feat/picker-t0：选图页 P0 T0「定接口」（photo-picker-v0.1 §3、§5）
 
 只定接口和数据类型，不做实现逻辑；T1–T4 按这里的协议并行实现。占位函数体是 `fatalError("Tn: …")`，谁实现谁替换。
