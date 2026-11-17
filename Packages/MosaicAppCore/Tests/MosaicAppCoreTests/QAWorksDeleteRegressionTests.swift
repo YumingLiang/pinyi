@@ -278,9 +278,9 @@ final class QAWorksDeleteRegressionTests: XCTestCase {
         h.controller.stop()
     }
 
-    // MARK: B4–B6 查重口径（AndyL 11-16 22:20 定，需求 B10；原 characterize 现状记录按新规则改）
+    // MARK: 查重口径（需求 B10-2/3、B9-7；原 characterize 现状记录按新规则改）
 
-    /// B4：结果页存 →「调整」改叠加滑杆 → 导出：不新增；按钮变「更新这张作品」（.needsUpdate）→ 再存：仍一份，原作品叠加强度更新。
+    /// B10-3：结果页存 →「调整」改叠加滑杆 → 导出：不新增；按钮变「更新这张作品」（.needsUpdate）→ 再存：仍一份，原作品叠加强度更新。
     func testRule_SameCellsDifferentAlphaUpdatesOneWork() async throws {
         let h = H()
         await h.controller.start()
@@ -297,19 +297,17 @@ final class QAWorksDeleteRegressionTests: XCTestCase {
         XCTAssertEqual(h.controller.state.saveStatus, .saved(a))
     }
 
-    /// B5：格子分配完全相同、只有 seed 不同 → 同一张（指纹不含 seed）。
-    func testRule_SameCellsDifferentSeedIsSameWork() async throws {
+    /// B10-2 / B9-7：格子分配完全相同、只有 seed 不同（重新生成 / 换一种拼法恰好同分配，例如只有 1 张素材）→ 两份。
+    /// 按 QA 原意恢复：指纹含 seed。
+    func testCharacterize_SameCellsDifferentSeedBecomesTwoWorks() async throws {
         let h = H()
         await h.controller.start()
-        let a = try await h.saveNew(["a", "b", "c"], seed: 7)
-        try h.newResult(["a", "b", "c"], seed: 8)
-        XCTAssertEqual(h.controller.state.saveStatus, .saved(a), "新结果和已存作品是同一张：直接显示已存")
-        let b = try await h.saveNew(["a", "b", "c"], seed: 8)
-        XCTAssertEqual(b, a)
-        XCTAssertEqual(h.controller.state.count, 1)
+        _ = try await h.saveNew(["a", "b", "c"], seed: 7)
+        _ = try await h.saveNew(["a", "b", "c"], seed: 8)
+        XCTAssertEqual(h.controller.state.count, 2, "指纹含 seed，同图不同 seed 存两份")
     }
 
-    /// B6：「换一种拼法」后（新 revision）按钮回到可存，再存 → 两份（B10-2）。
+    /// B10-2：「换一种拼法」后（新 revision）按钮回到可存，再存 → 两份（B10-2）。
     func testRule_ReshuffleThenSaveBecomesTwoWorks() async throws {
         let h = H()
         await h.controller.start()

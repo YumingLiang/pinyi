@@ -43,9 +43,11 @@ public enum WorkOrigin: String, Sendable, Codable, Hashable {
 ///
 /// 版本历史：
 /// - v1：`fingerprint` = 整个布局 JSON（含叠加强度、seed）的 FNV-1a 64。
-/// - v2（AndyL 11-16 22:20 的作品规则）：`fingerprint` = 内容指纹 `WorkFingerprint`（格子分配 + cols/rows + targetCrop，
-///   不含叠加强度 / seed / 档位）；新增 `updatedAt`（只改叠加强度更新原作品时写，只记录、不排序、不显示）。
-///   读到 v1 时存储层按 layout.json 补算内容指纹并原子写回（见 `FileWorksStore`）。
+/// - v2（AndyL 的作品规则：换拼法后再存就新存一份，只改强度算同一张；需求 B10-2/3、B9-7）：`fingerprint` = 内容指纹
+///   `WorkFingerprint`（格子分配 + cols/rows + targetCrop + seed，不含叠加强度 / 档位）；新增 `updatedAt`（只改叠加强度
+///   更新原作品时写，只记录、不排序、不显示）和 `pendingPreviewFile`（更新叠加强度的提交日志，见 `FileWorksStore`）。
+///   读到 v1（或 #17 早期内测包写的、不带 seed 的 v2 指纹）时，存储层按 layout.json 在内存里补算指纹，
+///   **只在命中并更新时才写回 v2**（QA A3），打开列表不写盘。
 public struct WorkMeta: Sendable, Hashable, Codable {
     public static let currentFormatVersion = 2
 
@@ -67,6 +69,9 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public var fingerprint: String
     /// 最近一次「只改叠加强度、更新原作品」的时间；从没更新过 / 旧数据为 nil。只记录，不参与排序，界面不显示（B10-7）。
     public var updatedAt: Date?
+    /// 更新叠加强度的提交日志：meta.json（新强度）写下时，新预览图还在作品目录里的这个临时文件名下，
+    /// 之后才换到 `previewFile`。读到非 nil 时存储层先把它换过去（前滚），再清掉这一项。平时为 nil（不写进 JSON）。
+    public var pendingPreviewFile: String?
     public var origin: WorkOrigin
     public var previewFile: String
     public var previewPixelWidth: Int
@@ -98,7 +103,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case formatVersion, id, createdAt, columns, rows, tier, photoCount, missingCount, overlayAlpha, seed, fingerprint,
-             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, updatedAt
+             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, updatedAt, pendingPreviewFile
     }
 
     public init(from decoder: any Decoder) throws {
@@ -120,22 +125,25 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         previewPixelWidth = try c.decodeIfPresent(Int.self, forKey: .previewPixelWidth) ?? 0
         previewPixelHeight = try c.decodeIfPresent(Int.self, forKey: .previewPixelHeight) ?? 0
         targetFile = try c.decodeIfPresent(String.self, forKey: .targetFile)
+        pendingPreviewFile = try c.decodeIfPresent(String.self, forKey: .pendingPreviewFile)
     }
 }
 
-/// 「同一张作品」的指纹（AndyL 11-16 22:20 定，需求 B10-2/3）：只看**格子分配**（每格照片 ID + 裁剪）、
-/// **cols/rows** 和 **targetCrop**。不含叠加强度、seed、密度名、targetSize：
-/// - 只改叠加强度 → 指纹相同 → 更新原作品（不另存）；
-/// - 不同 seed 但格子分配恰好相同 → 同一张；
-/// - 「换一种拼法」/ 重新生成 / 改密度、裁剪、目标图、素材 → 格子分配（或网格、裁剪区）不同 → 新的一张。
+/// 「同一张作品」的指纹（AndyL 的规则：换拼法后再存就新存一份，只改强度算同一张；需求 B10-2/3、B9-7，
+/// 开发协调人 11-16 按 QA PR #17 复核定口径）：**格子分配**（每格照片 ID + 裁剪）+ **cols/rows** + **targetCrop** + **seed**。
+/// 不含叠加强度、导出档位（B10-10）、密度名（三档长边格数固定，改密度必然改 cols/rows，QA 复核第 3 节②）、targetSize：
+/// - 只改叠加强度（「再调一调」→「完成」不换 seed）→ 指纹相同 → 更新原作品（不另存）；
+/// - 「换一种拼法」/「开始拼图」重新生成必换 seed → 新的一张，**即使格子分配恰好相同**（只有 1 张素材时就是这样）；
+/// - 改密度、裁剪、目标图、素材 → 网格 / 裁剪区 / 格子分配 / seed 不同 → 新的一张。
 ///
-/// 导出档位不进指纹（B10-10）。旧版指纹（WorkMeta v1）见 `WorkMeta` 版本历史。
+/// 指纹带前缀 `prefix`，用来认出 v1 和 #17 早期内测包写的不带 seed 的旧口径指纹（见 `isCurrent`）。
 /// 实现：对规范字节流做 FNV-1a 64（不经 JSON，1 万格也只要约 1 ms；Linux / iOS 一致）。
 /// 浮点按 1e-6 量化成整数，JSON 往返的末位差异不影响指纹。
 public enum WorkFingerprint {
     public static func of(_ layout: MosaicLayout) -> String {
         var h = FNV1a64()
-        h.add(Array("pinyi.work.v2".utf8))
+        h.add(Array("pinyi.work.v2s".utf8))
+        h.add(Int64(bitPattern: layout.params.seed))
         h.add(Int64(layout.cols))
         h.add(Int64(layout.rows))
         h.add(layout.targetCrop)
@@ -145,8 +153,13 @@ public enum WorkFingerprint {
             h.add([0])
             h.add(cell.crop)
         }
-        return h.hex
+        return prefix + h.hex
     }
+
+    /// 当前口径指纹的前缀。
+    public static let prefix = "s2-"
+    /// 是不是当前口径（含 seed）算出来的指纹。
+    public static func isCurrent(_ fingerprint: String) -> Bool { fingerprint.hasPrefix(prefix) }
 
     /// 叠加强度是否算「没改」（滑杆值经 JSON 往返，按 1e-6 比较）。
     public static func sameOverlay(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-6 }
