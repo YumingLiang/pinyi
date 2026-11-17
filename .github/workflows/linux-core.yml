@@ -5,7 +5,7 @@ name: linux-core
 on:
   pull_request:
   push:
-    branches: [main, ci/perf-gate-retry]  # 临时：PR 前删除
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -210,32 +210,3 @@ jobs:
             perf-packages.json
             perf-failed.json
             perf-log.txt
-
-  # ⚠️ 临时实验（PR 前删除）：同一 runner 上交错测多个 commit / 构建变体的 MosaicAppCore E2E 门禁（二分 + 对齐 + 只留 GenPerf）。
-  perf-ab:
-    name: perf A/B experiment (temporary) ${{ matrix.idx }}
-    runs-on: ubuntu-latest
-    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        idx: [1, 2, 3, 4]
-    env:
-      MOSAIC_PERF_GATE: "1"
-      MOSAIC_PERF_REPEAT: "5"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: A/B
-        run: |
-          git config --global --add safe.directory "$PWD"
-          apt-get update -qq && apt-get install -y -qq python3 >/dev/null
-          bash scripts/perf-ab-experiment.sh
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: perf-ab-${{ matrix.idx }}
-          path: ab/
-          if-no-files-found: ignore

@@ -90,7 +90,8 @@ python3 scripts/perf-gate.py check --results /tmp/p1/perf-results.jsonl
 新指标按全局 calib 缩放后写入全局，同机型只补新指标；新数据没覆盖到的同机型条目会被删掉。
 这样新一批 runner 偏慢（或偏快）不会把已有基线带偏。
 
-`threshold.per_metric`：`runner_slowpath_*` 的 `min_delta_ms` 为 50（QA，fake PhotoKit sleep 对调度敏感）；`runner_preview_fetch_*` 为 15（11-17：PR #18 的 0838ac9 在 EPYC 7763 上稳定比基线多约 9 ms、原因未定，10 ms 只剩 1 ms 余量；预览真回归是重复取图，≥ ×2）；
+`threshold.per_metric`：`runner_slowpath_*` 的 `min_delta_ms` 为 50（QA，fake PhotoKit sleep 对调度敏感）；`runner_preview_fetch_*` 为 15（11-17）。PR #18 的 0838ac9 在 EPYC 7763 上稳定比基线多约 9 ms，查明是**测试二进制代码布局（对齐）效应**，不是代码回归：
+同一 runner 交错 A/B（run 44047313570 / 44049180048），7763 上同一份 230002d 代码完整测试 target 31.2 ms、删掉无关测试只留 `GenPerf/` 后 40.1 ms，0838ac9 反过来 38.1 / 31.0；`-Xllvm -align-all-functions=6 -align-loops=64` 下两者都是 37.2；preview 路径源码（ThumbnailPreviewPlan、GenPerf 夹具、MosaicCore）、编译参数（-O -wmo -g -enable-testing，命令行哈希一致）、依赖（零第三方）都没变。任何改变测试二进制大小的提交都可能把 7763 上的 preview 在 31 / 37 / 41 ms 几档之间切换（Intel 6973P 上也有 25↔30 的两档，9V45 / 6975P 平）。15 ms 盖住这档抖动（最多 +9.8 ms），重复取图类真回归是 ≥ ×2（+30 ms 以上）仍能检出。根治建议（QA）：计时里不含 fake 缩略图合成（setup 里预生成），或门禁构建固定对齐后重定基线；
 `runner_gen_*` / `runner_reshuffle_*` 为 4（runner 上 6 次：同机型偏差 ≤ 4.5%、归一化后 ≤ ×1.045）。
 
 不要用 box / 本机的结果更新基线（核数和 CPU 与 runner 不同）。
