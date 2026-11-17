@@ -96,3 +96,14 @@
 - 隐藏照片后打开列表：受影响作品先占位，后台处理完自动换成新缩略图，新图里没有这张照片；其他作品不变；滚动不卡
 - 后台处理中打开那个作品：不会出现旧预览，不会替换两次；处理中删除那个作品：不报错、不残留文件
 - 处理中把 App 切到后台再回来：不留下半个作品，回来后继续处理完
+
+## 补不上的格子：缺失原因分类与兜底（2026-11-17 补，对应 #11 QA P0）
+- `PhotoFetch.classifyMissing(ids) -> [id: hidden | deleted | unknown]`：调一次 `fetchAssets(withLocalIdentifiers:)`，options 里开 includeHiddenAssets，只读能不能查到和 `isHidden`，**绝不取图**（这是「全部经 PhotoFetch」规则里唯一一处只读元数据的例外，要有测试保证取图调用为 0）
+  - 查到且 isHidden：hidden
+  - 受限访问下查不到：unknown
+  - 完全授权下查不到：deleted
+  - 其余情况：unknown
+- `MissingCellFill.decide(reason:hasCandidate:)`：有候选就用候选；deleted 用旧预览裁切（4b）；hidden 或 unknown 填目标图在这一格的平均色，计入 `works.missing`。预览、缩略图、存盘兜底和高清导出都只走这一个函数
+- 填纯色的格子不写进兜底图文件，只在 meta 里记下格子号和颜色
+- 迁移：兜底图加 `fallbackVersion = 2`。版本更低的整个作废、删掉文件，这些格子重新匹配；匹配不到的一律填目标色（旧预览可能已经被隐藏像素污染），然后重画 preview 和缩略图。重画完成前不显示旧 preview
+- InternalTools（例如 TestAlbumWriter）按 ID 直接取图，和规则 4 一样豁免，但守护要同时检查这些文件只属于 Internal target
