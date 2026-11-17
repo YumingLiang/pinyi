@@ -37,10 +37,7 @@ final class SourceAndGateTests: XCTestCase {
         p.select(.album(id: "x"))
         p.reconcile(with: [SourceRow(selection: .allPhotos, titleKey: .sourceListAll, albumTitle: nil,
                                      countLine: LocalizedLine(.sourceListCount, ["1"]), count: 1)])
-        XCTAssertEqual(p.selection, .allPhotos)
-        XCTAssertEqual(p.notice, .sourceAlbumUnreadable)
-        p.select(.album(id: "y"))
-        XCTAssertNil(p.notice)
+        XCTAssertEqual(p.selection, .allPhotos, "相簿不见了：静默回到全部照片（§2f 补充 1，不再弹提示）")
     }
 
     func testEmptyStates() {

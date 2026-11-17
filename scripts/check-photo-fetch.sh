@@ -90,5 +90,43 @@ if [ -n "$matches" ]; then
   fail=1
 fi
 
+# 4) 未过滤的取图结果要走 isHidden 后置过滤（相簿多选 PR 合并条件；QA #19 第 7 节收紧）：
+#    PhotoFetch.allImages / images(in:…) / images(withLocalIdentifiers:…) / keyAssets 的原始结果，除 PhotoFetch.swift 自身外，
+#    一律改用 visibleImages(in:) / visibleImages(withLocalIdentifiers:) / visibleObjects / visibleAllImagesCount / visibleKeyAssets。
+#    - 不再整文件放行。确实要拿原始 fetch result 的（网格懒加载、素材扫描分批取），在**同一行**写行级标记
+#      `// photo-fetch: raw-ok <理由>`，理由不能空；该行必须自己保证后续经过 isHidden 过滤（VisibleIndexMap / visibleObjects）。
+#    - 能拦：`PhotoFetch.images( in:` 这类空格变体、`PhotoFetch` 换行后 `.images(in:` 的链式调用、函数引用（不带括号）、按 ID 取图。
+#    - 按 ID 取图以 #15 的 PhotoFetch 为准：只有 `PhotoFetch.visibleImages(withLocalIdentifiers:)`（及 `isPickedAssetAvailable`）可用，
+#      原始 `images(withLocalIdentifiers:)` 只在 PhotoFetch.swift 内部用；#15 已把全部调用点收口，不再有存量放行。
+#    测试：scripts/tests/check-photo-fetch-test.sh（正反例）。
+ROOT_APP="${PHOTO_FETCH_APP_DIR:-App}"
+# awk：去掉整行注释；以 `.` 开头的续行（换行链式调用）、上一行以 `.` 结尾的，拼回上一行；输出 path:起始行号:拼好的内容。
+joined=$(find "$ROOT_APP" -name '*.swift' -not -path "$ROOT_APP/InternalTools/*" -not -name 'PhotoFetch.swift' -print0 2>/dev/null \
+  | xargs -0 -r awk '
+    function flush() { if (buf != "") print FILENAME_prev ":" start ":" buf; buf = "" }
+    FNR == 1 { flush(); FILENAME_prev = FILENAME }
+    {
+      line = $0
+      if (line ~ /^[ \t]*\/\//) next
+      if (buf != "" && (line ~ /^[ \t]*\./ || buf ~ /\.[ \t]*$/)) { sub(/^[ \t]+/, "", line); buf = buf line; next }
+      flush(); buf = line; start = FNR
+    }
+    END { flush() }' || true)
+raw_re='PhotoFetch[[:space:]]*\.[[:space:]]*(allImages|images|keyAssets)([^A-Za-z0-9_]|$)'
+hits=$(printf '%s\n' "$joined" | grep -E "$raw_re" || true)
+bad=""
+while IFS= read -r h; do
+  [ -z "$h" ] && continue
+  content=${h#*:*:}
+  # 行级标记（理由不能空）
+  if printf '%s' "$content" | grep -Eq '//[[:space:]]*photo-fetch:[[:space:]]*raw-ok[[:space:]]+[^[:space:]]'; then continue; fi
+  bad+="$h"$'\n'
+done <<< "$hits"
+if [ -n "$bad" ]; then
+  echo "::error::raw PhotoFetch results must go through PhotoFetch.visible* (isHidden post-filter), or carry '// photo-fetch: raw-ok <reason>' on the same line:"
+  printf '%s' "$bad"
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then exit 1; fi
 echo "OK: all photo fetches go through PhotoFetch; no hidden assets / hidden album."

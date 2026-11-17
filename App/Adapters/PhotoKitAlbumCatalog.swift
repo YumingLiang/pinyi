@@ -24,7 +24,7 @@ struct PhotoKitAlbumCatalog: AlbumCatalogProviding {
 
     /// 同步读一次（测试 / 调试也可直接调）。
     static func readSnapshot() -> AlbumCatalogSnapshot {
-        let allCount = PhotoFetch.allImages(order: .unspecified).count
+        let allCount = PhotoFetch.visibleAllImagesCount()   // isHidden 后置过滤
         let top = PhotoKitLibrary.array(PHCollectionList.fetchTopLevelUserCollections(with: nil))
         return AlbumCatalogSnapshot(allPhotosCount: allCount,
                                     myAlbums: entries(top, depth: 0),
@@ -86,9 +86,8 @@ struct PhotoKitAlbumCatalog: AlbumCatalogProviding {
         }
     }
 
-    /// 只数图片、不含隐藏照片。
+    /// 只数图片、不含隐藏照片（`includeHiddenAssets = false` + isHidden 后置过滤）。
     private static func imageCount(_ c: PHAssetCollection) -> Int {
-        PhotoFetch.images(in: c, sources: PhotoFetch.pickerSources(forSubtype: c.assetCollectionSubtype),
-                          order: .unspecified).count
+        PhotoFetch.visibleImages(in: c, sources: PhotoFetch.pickerSources(forSubtype: c.assetCollectionSubtype)).count
     }
 }

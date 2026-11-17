@@ -44,6 +44,8 @@ final class FakePhotoLibrary: PhotoLibraryClient, Sendable {
     }
     enum SaveErrorKind: Sendable { case generic, outOfSpace }
     let state = Locked(State())
+    /// 设了就让 `albums()` 停在这里（测「相簿列表加载完之前」）。
+    let albumsGate = Locked<GatePoint?>(nil)
 
     init(assetCount: Int = 0, prefix: String = "a") {
         state.update { s in
@@ -63,7 +65,13 @@ final class FakePhotoLibrary: PhotoLibraryClient, Sendable {
             return lo < hi ? Array(s.assets[lo..<hi]) : []
         }
     }
-    func albums() async -> [AlbumInfo] { state.get().albums }
+    func albums() async -> [AlbumInfo] {
+        if let g = albumsGate.get() {
+            await g.reached.open()
+            await g.release.wait()
+        }
+        return state.get().albums
+    }
     func assetIDs(inAlbum albumID: String) async throws -> [String] {
         guard let m = state.get().albumMembers[albumID] else { throw CocoaLikeError.notFound }
         return m

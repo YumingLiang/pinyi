@@ -131,6 +131,10 @@ final class AppModel: ObservableObject {
     var emptyState: LibraryEmptyState? { state.emptyState }
     var transientNotice: L10nKey? { state.transientNotice }
     var access: SourceAccess { state.access }
+    /// 来源是相簿、张数还没算出来：显示加载中（§2f 补充 3）。
+    var isMaterialCountLoading: Bool { state.isMaterialCountLoading }
+    /// 「开始拼图」在等相簿列表加载完（§2f 补充 3）。
+    var isWaitingForAlbums: Bool { state.isWaitingForAlbums }
     var allPhotosRow: SourceRow { state.allPhotosRow }
     var authorization: PhotoAuthorization { state.authorization }
     var sourceLowResLine: LocalizedLine? { state.sourceLowResLine }
@@ -168,6 +172,11 @@ final class AppModel: ObservableObject {
     func refreshAlbums() async { await coordinator.refreshAlbums() }
     func flowSend(_ e: MainFlow.Event) { coordinator.flowSend(e) }
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
+    // 相簿多选（§2f，判断在 AppCoordinator+MultiAlbum）
+    func openAlbumList() { coordinator.openAlbumList() }
+    func toggleAlbum(_ id: String) { coordinator.toggleAlbum(id) }
+    func finishAlbumSelection() { coordinator.finishAlbumSelection() }
+    func closeAlbumList() { coordinator.closeAlbumList() }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
     /// 设置页主按钮（B10.14）：只改了叠加强度 →「完成」回原结果；否则「开始拼图」。
