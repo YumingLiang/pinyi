@@ -8,11 +8,14 @@ ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --f
 ## 判定规则
 
 - 每个指标：预热 1 次，再测 `MOSAIC_PERF_REPEAT` 次（CI = 5），取**中位数**。
-- 对照 `perf/baseline-linux.json` 里的基线中位数：
-  **中位数 > 基线 × `ratio` 且 中位数 − 基线 > `min_delta_ms`** → 失败。
-  默认 `ratio = 1.25`、`min_delta_ms = 20`；可在 `threshold.per_metric` 里按指标覆盖。
-- `calib_cpu_scalar` 是固定的单线程 CPU 负载，不判定，只用来算「本 runner 比基线快/慢多少」，
-  报告里另列「标定归一化比值」。`threshold.gate_on` 可选 `raw`（默认）/ `normalized` / `both`。
+- `calib_cpu_scalar` 是固定的单线程 CPU 负载，不判定，只用来算本 runner 的速度系数
+  `speed = 本次 calib 中位数 ÷ 基线 calib`（>1 = 这台 runner 更慢）。
+- 对照 `perf/baseline-linux.json`：`比值 = 本次中位数 ÷ 基线`，`归一化比值 = 比值 ÷ speed`。
+  **当前口径 `gate_on = normalized`：归一化比值 > `ratio`（1.25）且 本次中位数 − 基线 > `min_delta_ms`（10 ms）→ 失败。**
+  可选 `raw`（只看原始比值）/ `both`（两者都超才失败）；可在 `threshold.per_metric` 按指标覆盖。
+- 为什么用归一化：ubuntu-latest 的机型是混的（11-16 实测 5 次：Xeon 8370C、EPYC 7763 ×3、Xeon 6975P-C），
+  原始中位数跨机型极差 25–46%，最慢机型比中位数高到 ×1.16，离 ×1.25 只剩 8%；
+  归一化后各门禁指标 max/中位数 ≤ ×1.03，×1.25 留 ≥ 20% 余量。同一 job 内 5 次样本极差 ≤ 2%，所以 5 次足够。
 - 基线里有、本次没跑出来的指标 → 失败（防止门禁被悄悄删掉）；本次有、基线没有 → 🆕 只显示不判定。
 - job summary 里有表：指标 / 基线 / 本次中位数 / 比值 / 归一化比值 / 本次极差 / 结果。
 

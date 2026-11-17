@@ -3,9 +3,81 @@
   "platform": "GitHub ubuntu-latest + swift:6.3.3-noble（同 linux-core.yml 钉的 digest），swift test -c release",
   "calibration_metric": "calib_cpu_scalar",
   "threshold": {
-    "gate_on": "raw",
-    "default": {"ratio": 1.25, "min_delta_ms": 20.0},
-    "per_metric": {}
+    "gate_on": "normalized",
+    "default": {
+      "ratio": 1.25,
+      "min_delta_ms": 10.0
+    },
+    "per_metric": {},
+    "why": "5 次 runner 实测：原始中位数跨机型极差 25–46%（最慢 Xeon 8370C 比中位数高到 ×1.16），按 calib_cpu_scalar 归一化后各指标 max/中位数 ≤ ×1.03；×1.25 留 ≥ 20% 余量。同一 job 内 5 次样本极差 ≤ 2%。"
   },
-  "metrics": {}
+  "metrics": {
+    "calib_cpu_scalar": {
+      "median_ms": 56.068,
+      "runs": 5,
+      "run_medians_ms": [
+        63.089,
+        56.075,
+        55.996,
+        49.885,
+        56.068
+      ]
+    },
+    "gen_fine_2048x1536_50k": {
+      "median_ms": 4025.116,
+      "runs": 5,
+      "run_medians_ms": [
+        4254.167,
+        4024.413,
+        4037.927,
+        3225.417,
+        4025.116
+      ]
+    },
+    "gen_medium_2048x1536_50k": {
+      "median_ms": 1316.29,
+      "runs": 5,
+      "run_medians_ms": [
+        1420.202,
+        1320.352,
+        1316.29,
+        1026.25,
+        1314.047
+      ]
+    },
+    "overlay_blend_2048x1536": {
+      "median_ms": 77.593,
+      "runs": 5,
+      "run_medians_ms": [
+        89.801,
+        77.554,
+        77.614,
+        70.467,
+        77.593
+      ]
+    },
+    "sample_fine_2048x1536": {
+      "median_ms": 129.92,
+      "runs": 5,
+      "run_medians_ms": [
+        123.92,
+        130.686,
+        129.92,
+        71.966,
+        131.93
+      ]
+    },
+    "worst_uniform_medium_80x60_cap1_50k": {
+      "median_ms": 1752.608,
+      "runs": 5,
+      "run_medians_ms": [
+        1919.271,
+        1754.199,
+        1752.608,
+        1319.994,
+        1748.745
+      ]
+    }
+  },
+  "note": "2026-11-16 首次标定：run 44015619344 attempt 1–5（b71d8a1，ubuntu-latest 4 核；CPU 混合 Xeon 8370C / EPYC 7763 ×3 / Xeon 6975P-C）"
 }
