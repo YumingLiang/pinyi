@@ -23,9 +23,9 @@ extension AppDependencies {
             clock: SystemClock(),
             lifecycle: lifecycle,
             preferences: UserDefaultsPreferences(),
-            // 「不能略糊」：匹配后只探测分到格子上的照片，本机版本 < 256 px 的剔除重配（零网络）。
-            generator: GenerationRunner(pipeline: MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())), perf: perf,
-                                        sharpness: LocalResolutionChecker(probe: PhotoKitResolutionProbe())),
+            // 生成只跑一次匹配：不再逐张探测清晰度、不剔除重配（AndyL 11-16 取消 #5 逐张检查，速度回到 14ac550）。
+            generator: GenerationRunner.production(pipeline: MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())),
+                                                   perf: perf),
             exporter: LiveMosaicExporter(thumbnails: thumbnails, perf: perf),
             memory: PhysFootprintReader(),
             perf: perf,
