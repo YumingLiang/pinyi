@@ -27,7 +27,8 @@ final class PhotoKitResolutionProbe: LocalResolutionProbing, Sendable {
     }
 
     func probe(assetID: String, minPixelSize: Int) async -> LocalResolutionVerdict {
-        guard let asset = PhotoKitLibrary.array(PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil)).first else {
+        // 走 PhotoFetch：隐藏 / 删除的照片取不到，判 missing（photo-picker-v0.1 §5.1）。
+        guard let asset = PhotoFetch.images(withLocalIdentifiers: [assetID]).firstObject else {
             return .unusable(.missing)
         }
         let size = CGSize(width: minPixelSize, height: minPixelSize)

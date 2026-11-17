@@ -1,5 +1,33 @@
 # CHANGES
 
+## feat/picker-t3：`fetchKeyAssets` 纳入隐藏照片检查（QA #9 补丁）
+
+- **iOS 编译修复**：`PHAsset.fetchKeyAssets(in:options:)` 返回可选，`PhotoFetch.keyAssets(in:)` / `keyAssets(in:sources:)` 改为返回 `PHFetchResult<PHAsset>?`（nil 时调用方按无封面处理）。目前没有调用点。
+
+基于 `fd89694`（已含 app-layer `41dc45f`）。`rg -n fetchKeyAssets` 时仓库里没有现成调用（相簿目录封面尚未用 `fetchKeyAssets`），所以没有调用点可改，只补封装和检查。
+
+- 新增 `PhotoFetch.keyAssets(in:)` / `keyAssets(in:sources:)`，选项走 `PhotoFetch.options`（写死 `includeHiddenAssets = false`）。共享相簿用 `pickerSources(forSubtype:)` 自动选 `.cloudShared`。
+- `scripts/check-photo-fetch.sh` 把 `fetchKeyAssets(` 与 `fetchAssets(` 同等检查：只允许出现在 `PhotoFetch.swift`，InternalTools 除外。脚本原先没有自测机制，未新增。已验证干净树通过；Adapters 里故意加一处 `fetchKeyAssets(` 失败；InternalTools 豁免仍通过；整行注释不算；原有的 `fetchAssets(` 检查不受影响。
+- `AppTests/PhotoFetchTests.testKeyAssetOptionsNeverIncludeHiddenAssets` 断言 keyAssets 所用选项 `includeHiddenAssets == false`、来源显式设置。
+- MosaicAppCore `swift test`：205 个，0 失败，1 跳过。改动的 App 文件 `swiftc -parse`、`check-no-network.sh` 通过。
+
+
+## feat/picker-t3：选图页 P0 T3「App 层 PhotoKit 适配」（photo-picker-v0.1 §2、§3、§5.1、§5.2、§6.1、§6.2）
+
+基于 feat/picker-t0 `9cfd07e`。不碰 `App/Views` 的网格 UI（T4）和 `MosaicAppCore/Picker/*.swift`（T0 / T1 / T2），T0 公开接口签名未改。
+
+- **相簿列表 `App/Adapters/PhotoKitAlbumCatalog.swift`**（实现 `AlbumCatalogProviding`）：全部照片（`PhotoFetch.allImages`，`Sources.library`）；我的相簿 = `fetchTopLevelUserCollections`，保持 PhotoKit 顺序，文件夹递归（最多 8 层），跳过混进来的共享相簿 / 我的照片流 / 智能相簿；8 个白名单智能相簿**逐个子类型去取**，从不枚举全部智能相簿，所以 `smartAlbumAllHidden` 根本不会被请求，取回后再用 `SmartAlbumKind(photoKitSubtype:)` 核一遍；共享相簿 `.albumCloudShared`。所有计数都用 `PhotoFetch` 的 imagesOnly 选项实数 `count`（智能相簿的 `estimatedAssetCount` 是 `NSNotFound`），共享相簿用 `Sources.cloudShared` 数。
+- **网格数据源 `App/Adapters/PhotoKitAssetGrid.swift`**：`PhotoKitAssetGridSourceProvider`（`AssetGridSourceProviding`）+ `PhotoKitAssetGridDataSource`（`AssetGridDataSource`）。直接包 `PHFetchResult`（懒加载，不转数组），创建时间倒序，下标 0 最新；白名单外的智能相簿 id（含「已隐藏」）返回 nil。收到变化时先换成 `fetchResultAfterChanges` 再通知网格。
+- **缩略图 `App/Adapters/PhotoKitThumbnailLoader.swift`**（`GridThumbnailLoading<UIImage>`）：全 App 一个 `PHCachingImageManager`（`shared`），`.opportunistic` / `.fast` / `isNetworkAccessAllowed = false` / `.aspectFill`；取消后迟到的回调丢掉；正式版是 nil 而之前已给过 degraded 图时不把格子清空；按 ID 找 `PHAsset` 走 `PhotoFetch`，结果小缓存（≤ 1000），相册一变就清空。素材扫描的 `PhotoKitThumbnails` 仍用自己的 manager（128 px `.fastFormat`，参数不同）。
+- **变化监听 `App/Adapters/PhotoLibraryObserver.swift`**：共享的 `PHPhotoLibraryChangeObserver`，第一次订阅时才注册；后台回调转主线程，网格数据源各自 `changeDetails(for:)`，增量还是 reload 由 `GridChangePlanner.plan`（MosaicAppCore 纯逻辑）决定：没有增量信息、变化 > 300 项、> 20 项且超过总数一半、或下标 / 计数不自洽都整体 reload（UICollectionView 批量更新数不对会崩）。另有 `addListener` 给相簿列表等「变了就重读」的订阅方。
+- **隐藏照片 = 删除**：所有 fetch result 都来自 `PhotoFetch`（`includeHiddenAssets = false`），照片被设为隐藏后从新结果里消失，changeDetails 里在 `removedIndexes`，网格表现为删除。素材索引：`LibraryChangeObserver` → `libraryDidChange` → 防抖后 `applyFullDiff` → `assetCount()` 重新走 `PhotoFetch.allImages`，隐藏照片不在 `current` 里，`LibraryDiff` 判为 `deleted`（tombstone + 删条目），下次生成不会用到（`PickerSupportTests.testHiddenPhotoDisappearsAsDeletedInLibraryDiff`）。两个监听本 PR 不合并（不动 AppModel），T5/T6 可以合。
+- **目标图取图 `App/Adapters/PhotoKitTargetImageLoader.swift`**（§5.2 + §6.1）：`isNetworkAccessAllowed = false`，长边 4096（不超过原图，不请求 MaximumSize），`PHImageManager.default()`；先 `.highQualityFormat`，拿到 nil 就改 `.opportunistic` 取最后一张（degraded 也收），都没有就返回 nil 让调用方用网格缩略图兜底。结果带本机长边 `localLongSide`、是否 degraded / 见过 InCloud / 是否回退。判定全在 MosaicAppCore 的 `TargetImageFetchMachine`（新文件 `PickerSupport/TargetImageFetch.swift`）：highQuality 10 秒不回调就回退，opportunistic 5 秒没回调按「本机没有」结束，只有 degraded 时等 1.5 秒宽限，取消立即结束；`finish` 只会发生一次，旧请求的迟到回调和旧定时器都被忽略，不会卡在「加载中」。App 侧动作排队执行，PhotoKit 同步重入回调也不会打乱定时器。**不弹任何低清提示**：代码里没有 `picker.low_res` 的提示逻辑（文案表里也没有这个 key），无需删除。
+- **现有取数点全部改走 PhotoFetch**（行为外观不变）：`PhotoKitLibrary.fetchAllImages` → `PhotoFetch.allImages(order: .oldestFirst)`；`albums()` 计数和 `assetIDs(inAlbum:)` → `PhotoFetch.images(in:sources: .library)`；`PhotoKitThumbnails.assets(_:)` 和 `PhotoKitResolutionProbe` → `PhotoFetch.images(withLocalIdentifiers:)`。`PhotoFetch.swift` 加了 `pickerSources(forSubtype:)`（共享相簿 → `.cloudShared`，其余 `.library`）和 `keyAssets(in:)` / `keyAssets(in:sources:)`（封面代表张，选项同样走 `options`），T0 原有签名未动。`InternalTools/TestAlbumWriter` 未改。
+- **CI 检查两层**：① `scripts/check-photo-fetch.sh`，接进 linux-core 的 mosaic-core job（紧跟零网络检查）：`App/` 下（InternalTools、PhotoFetch.swift 除外）代码行出现 `fetchAssets(` 或 `fetchKeyAssets(` 失败；任何地方 `includeHiddenAssets = true` 失败；代码里引用 `smartAlbumAllHidden` 失败（整行注释不算）。已验证在当前代码上通过、故意加一处 `fetchAssets(` / `fetchKeyAssets(`（Adapters）/ `includeHiddenAssets = true` / `smartAlbumAllHidden` 时失败，InternalTools 豁免仍通过。② `AppTests/PhotoFetchTests.swift`（ios.yml 的模拟器单测）：所有 imagesOnly × 来源 × 排序组合下 `includeHiddenAssets == false`、`includeAllBurstAssets == false`、来源显式设置；`keyAssets` 所用选项同样不含隐藏照片；白名单映射不含「已隐藏」；网格和目标图的请求选项都不联网；目标图 targetSize 长边 4096 且不放大。
+- **MosaicAppCore 新文件**（不改 T0 的 `Picker/*.swift`）：`PickerSupport/GridChangePlanner.swift`、`PickerSupport/TargetImageFetch.swift`；测试 `PickerSupportTests.swift` 18 个（`GridChangePlannerTests` 7 个、`TargetImageFetchMachineTests` 11 个，含 500 轮乱序事件下 `finish` 恰好一次）。
+- **新增的 `@unchecked Sendable` / `assumeIsolated`**：`PhotoLibraryObserver.ChangeBox`（`PHChange` 后台 → 主线程转交一次）、`DeliveredThumbnail`、`TargetImageDelivery`、`TargetImageFetchResult`（`UIImage` 不可变，SDK 若已标 Sendable 也无害）；PhotoKit 回调里 `Thread.isMainThread ? assumeIsolated : DispatchQueue.main.async { assumeIsolated }`。
+- **⚠️ App 层盲写**：5 个新文件和 3 个改动文件 Linux 上 `swiftc -parse` 通过；另用手写的 Photos / UIKit 桩模块按 Swift 6 + 严格并发 + warnings-as-errors 做了类型检查（两套桩：SDK 回调标 / 不标 `@Sendable`、`UIImage` / `PHChange` 是否 Sendable，都通过），由此修掉一处 `@MainActor` 类的 static 常量在 nonisolated 函数里引用的错误。真 SDK 签名以 CI 的 Xcode job 为准。
+
 ## feat/preview-sharp-quick：结果页预览放大发糊的止血（每格 48–64 px，长边约 4096，插值改为 high）
 
 AndyL 反馈预览放大后小格子很糊。原因是结果页预览每格只有 8–32 px（长边约 2400），SwiftUI 又用 `.interpolation(.none)` 最近邻放大。本卡只改预览绘制和显示，不改生成匹配，也不让生成变慢。
