@@ -482,12 +482,14 @@ final class WorksRematchTests: XCTestCase {
         let h = Harness(ids: ["a", "b", "c"], cols: 3, colors: Array(Self.cellColors.prefix(3)), index: [])
         let id = try await h.save()
         await h.controller.start()
-        h.existence.delete("b")   // 删除 → 旧预览裁切兜底（隐藏的纯色格见 testNoAcceptableCandidateLeavesBlankAndCounts）
+        h.existence.delete("b")   // 删除 → 和隐藏一样填目标色（Q1 取消 4b）
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"], cols: 3))
+        let firstLayout = try XCTUnwrap(h.controller.openedWork?.layout)
+        XCTAssertEqual(firstLayout.cellAssignments.map(\.localIdentifier), ["a", "", "c"])
+        XCTAssertNotNil(firstLayout.cellAssignments[1].fill)
+        XCTAssertFalse(firstLayout.cellAssignments[1].fallback)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
-        let firstFallback = try XCTUnwrap(h.controller.state.opened?.summary.meta.fallbackFile)
-        let workDir = h.dir.appendingPathComponent(id.directoryName)
+        XCTAssertNil(h.controller.state.opened?.summary.meta.fallbackFile)
 
         h.snap.set(Self.snapshot(base + [("red2", (212, 34, 30))]))   // 用户新拍了一张、扫描进了索引
         h.controller.close()
@@ -499,8 +501,7 @@ final class WorksRematchTests: XCTestCase {
         XCTAssertEqual(meta.replacedCellCount, 1)
         XCTAssertEqual(meta.droppedPhotoCount, 1, "历史累计，不回退")
         XCTAssertEqual(meta.fallbackCellCount, 1, "历史累计，不回退")
-        XCTAssertNil(meta.fallbackFile, "升级后没有兜底格了，兜底图删掉")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: workDir.appendingPathComponent(firstFallback).path))
+        XCTAssertNil(meta.fallbackFile)
         XCTAssertEqual(h.images.inner.state.get().previews, 3)
 
         h.controller.close()

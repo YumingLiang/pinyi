@@ -137,7 +137,7 @@ final class WorksControllerTests: XCTestCase {
         XCTAssertEqual(h.controller.state.opened?.missingCount, 3, "按格算：a 两格 + d 一格")
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["3"]))
         XCTAssertEqual(h.controller.state.summaries.first?.meta.missingCount, 0, "都处理过了，没有待处理的")
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["", "b", "c", "", "b", ""]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["", "b", "c", "", "b", ""], color: smallTargetColor))
         let persisted = await FileWorksStore(directory: h.dir, images: h.images).list().first?.meta
         XCTAssertEqual(persisted?.missingCount, 0)
         XCTAssertEqual(persisted?.droppedPhotoCount, 2)
@@ -148,7 +148,7 @@ final class WorksControllerTests: XCTestCase {
         await h.controller.exportOpenedTapped(purpose: .save)
         XCTAssertEqual(h.controller.state.opened?.missingCount, 2, "只提示这次新兜底的 b 两格")
         XCTAssertEqual(h.exporter.calls.count, 1)
-        XCTAssertEqual(h.exporter.calls.first?.0, sampleFallbackLayout(["", "", "c", "", "", ""]), "导出用处理后的显式布局")
+        XCTAssertEqual(h.exporter.calls.first?.0, sampleColorLayout(["", "", "c", "", "", ""], color: smallTargetColor), "导出用处理后的显式布局")
         XCTAssertEqual(h.exporter.fallbacks.first.map { Set($0.keys) }, [0, 1, 3, 4, 5], "兜底格都带上兜底图，不出白格")
         XCTAssertEqual(h.exporter.calls.first?.1, true, "目标图副本读回来做叠加")
         XCTAssertEqual(h.exporter.calls.first?.2, .save)
@@ -158,7 +158,7 @@ final class WorksControllerTests: XCTestCase {
         await h.controller.open(id)
         XCTAssertEqual(h.controller.state.opened?.missingCount, 0)
         XCTAssertNil(h.controller.state.missingLine)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["", "", "c", "", "", ""]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["", "", "c", "", "", ""], color: smallTargetColor))
         h.controller.stop()
     }
 

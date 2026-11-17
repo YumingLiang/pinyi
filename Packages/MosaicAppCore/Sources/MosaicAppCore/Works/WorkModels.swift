@@ -91,11 +91,14 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public var fallbackFile: String?
     /// 兜底规则版本（架构师 11-17）：2 = 隐藏 / 拿不准的格子填目标平均色、只有确认删除才裁旧预览。
     /// nil / 1 = 旧版（补不上的格子一律裁旧预览，兜底图和预览可能带着隐藏照片的像素），打开 / 导出前整体迁移。
+    /// 2 = 旧兜底图整体作废后的写法。产品 03:55 Q1 之后不再产生兜底图；v2 时删除格裁的旧预览兜底图靠
+    /// `needsFallbackMigration`（还登记着兜底图就迁移）作废，版本号不再升（QA 门禁按 2 断言）。
     public var fallbackVersion: Int?
     public static let currentFallbackVersion = 2
-    /// 旧版兜底需要迁移：版本 < 2 且存过兜底格。列表 / 查看页在迁移（重画预览）完成前不显示旧预览，用占位图。
+    /// 旧版兜底需要迁移：还登记着兜底图（v1 / v2 裁的旧预览，可能带先隐藏后删除的像素），或 v1 存过兜底格。
+    /// 列表 / 查看页在迁移（重画预览）完成前不显示旧预览，用占位图。
     public var needsFallbackMigration: Bool {
-        (fallbackVersion ?? 1) < Self.currentFallbackVersion && (fallbackCellCount > 0 || fallbackFile != nil)
+        fallbackFile != nil || ((fallbackVersion ?? 1) < 2 && fallbackCellCount > 0)
     }
     /// 目标图本机版本的有效长边（px，photo-picker-v0.1 §6.1；内部性能页显示）。旧作品 / 未记录为 nil。
     public var targetLocalLongSide: Int?
@@ -275,8 +278,10 @@ public struct WorkSummary: Sendable, Hashable, Identifiable {
     public var createdAt: Date { meta.createdAt }
     /// 最近一次保存时间：`updatedAt`，没有就用 `createdAt`（B10-12：旧数据多份同指纹时按它取最大的那份）。
     public var lastSavedAt: Date { meta.updatedAt ?? meta.createdAt }
-    /// 列表 / 查看页显示占位图而不是预览：旧版兜底还没迁移（预览可能带隐藏照片的像素），重画完成前不显示。
-    public var showsPlaceholder: Bool { meta.needsFallbackMigration }
+    /// 不是完整相册权限（运行时状态，由 `WorksState` 统一打上，不存盘）。04:05 临时做法：不逐个判断，所有作品都占位。
+    public var accessRestricted = false
+    /// 列表 / 查看页显示占位图而不是预览：旧版兜底还没迁移（预览可能带隐藏照片的像素），或不是完整相册权限（v1.7a）。
+    public var showsPlaceholder: Bool { meta.needsFallbackMigration || accessRestricted }
     public init(meta: WorkMeta, previewURL: URL) {
         self.meta = meta
         self.previewURL = previewURL
@@ -305,6 +310,11 @@ public struct Work: Sendable {
     public var targetURL: URL?
     public var meta: WorkMeta { summary.meta }
     public var id: WorkID { summary.id }
+    /// meta 已提交、layout.json 没写成（写回途中被杀，架构师 11-17 D-b）：meta 的指纹和实际布局对不上。
+    /// 只认本轮写过的作品（`fallbackVersion` 有值、指纹是当前口径）；这样的作品下次打开时按待处理重新走一遍写回。
+    public var isLayoutOutOfSync: Bool {
+        meta.fallbackVersion != nil && WorkFingerprint.isCurrent(meta.fingerprint) && meta.fingerprint != WorkFingerprint.of(layout)
+    }
     public init(summary: WorkSummary, layout: MosaicLayout, targetURL: URL?) {
         self.summary = summary
         self.layout = layout
@@ -434,4 +444,10 @@ public enum WorksStoreError: Error, Sendable, Equatable {
     /// 新版 App 写的作品（formatVersion 更高），旧版不读。
     case unsupportedFormat(Int)
     case corrupted
+}
+
+/// 作品写入的前置条件错误（架构师 11-17 B）。
+public enum WorksError: Error, Sendable, Equatable {
+    /// `write(_ draft:)` 收到带纯色格（`fc`）的布局：新存作品的预览渲染还不读 fc，先拒绝（长期改法见 works-missing-fill）。
+    case unsupportedFilledCells
 }

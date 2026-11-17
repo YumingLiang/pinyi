@@ -44,21 +44,17 @@ public enum MissingPhotoClassifier {
 public enum MissingCellFill: Sendable, Hashable {
     /// 用相近照片替换（4b / 5a）。
     case candidate
-    /// 用旧预览裁切放大（4b，只限确认删除的照片）。
-    case previewCrop
-    /// 填目标图这一格的平均色（隐藏或拿不准：旧预览里就是隐藏照片的像素，不能用）。
+    /// 填目标图这一格的平均色（隐藏 / 删除 / 拿不准一律如此，产品 03:55 Q1 取消 4b）。
+    /// 原来的「旧预览裁切」（previewCrop）已删除：先隐藏再删除和普通删除在元数据上分不出来，任何补格都不读旧预览。
     case targetColor
 
     /// - Parameters:
     ///   - reason: 原照片缺失原因；nil（例如早就是空格子、原因已不可考）按拿不准处理。
     ///   - hasCandidate: 有没有找到合格的相近照片。
-    /// 有候选 → 用候选；deleted → 旧预览裁切（4b）；hidden / unknown / 不知道 → 目标图这一格的平均色（按格计入 works.missing）。
+    /// 有候选 → 用候选；否则不论原因（hidden / deleted / unknown / 不知道）→ 目标图这一格的平均色（按格计入 works.missing）。
+    /// `reason`（`classifyMissing` 的结果）只用于统计和提示文案，不决定像素。
     public static func decide(reason: MissingReason?, hasCandidate: Bool) -> MissingCellFill {
-        if hasCandidate { return .candidate }
-        switch reason {
-        case .deleted: return .previewCrop
-        case .hidden, .unknown, .none: return .targetColor
-        }
+        hasCandidate ? .candidate : .targetColor
     }
 
     /// 没有目标图副本时的颜色（中性灰）。正常情况下目标图副本都在（5c 保留），这只是防御。

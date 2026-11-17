@@ -32,18 +32,22 @@ final class WorksFallbackMigrationTests: XCTestCase {
             let id = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c", "d", "e", "f"]), target: t, overlayAlpha: 0.2,
                                                     tier: "uhd", seed: 7, origin: .autoSavedOnExport)).summary.id
             let w = try await store.dropMissingPhotos(["b", "e"], for: id, reasons: ["b": .deleted, "e": .deleted])
-            XCTAssertTrue(w.layout.cellAssignments[1].fallback && w.layout.cellAssignments[4].fallback)
             let wdir = dir.appendingPathComponent(id.directoryName, isDirectory: true)
-            // 旧兜底图、旧预览改成哨兵色（同尺寸）
-            let atlasURL = wdir.appendingPathComponent(try XCTUnwrap(w.meta.fallbackFile))
-            let atlas = try XCTUnwrap(FakeWorkImages.decodeRaw(try Data(contentsOf: atlasURL)))
-            try FakeWorkImages.raw(Self.solid(atlas.width, atlas.height, WorksFallbackMigrationTests.sentinel)).write(to: atlasURL)
+            // 现在的写回不再产生兜底格 / 兜底图：手工改成旧版的样子——格 1、4 标 fb（去掉 fc）、登记一张旧兜底图
+            var legacy = w.layout
+            for i in [1, 4] { legacy.cellAssignments[i].fill = nil; legacy.cellAssignments[i].fallback = true }
+            try FileWorksStore.encoder().encode(legacy).write(to: wdir.appendingPathComponent(FileWorksStore.layoutFileName))
+            // 旧兜底图、旧预览都是哨兵色（同尺寸）
+            let atlasName = "fallback-legacy0.png"
+            let cp = FakeWorkImages.cellPixels
+            try FakeWorkImages.raw(Self.solid(3 * cp, 2 * cp, WorksFallbackMigrationTests.sentinel)).write(to: wdir.appendingPathComponent(atlasName))
             let prev = try XCTUnwrap(FakeWorkImages.decodeRaw(try Data(contentsOf: w.summary.previewURL)))
             try FakeWorkImages.raw(Self.solid(prev.width, prev.height, WorksFallbackMigrationTests.sentinel)).write(to: w.summary.previewURL)
-            // meta 去掉 fallbackVersion = 旧版
+            // meta 去掉 fallbackVersion = 旧版，登记旧兜底图
             let metaURL = wdir.appendingPathComponent(FileWorksStore.metaFileName)
             var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)) as? [String: Any])
-            XCTAssertNotNil(json.removeValue(forKey: "fallbackVersion"), "新写的作品带版本 2")
+            XCTAssertNotNil(json.removeValue(forKey: "fallbackVersion"), "新写的作品带版本号")
+            json["fallbackFile"] = atlasName
             try JSONSerialization.data(withJSONObject: json).write(to: metaURL)
             return id
         }
@@ -80,10 +84,14 @@ final class WorksFallbackMigrationTests: XCTestCase {
         plain.fallbackCellCount = 0; plain.fallbackFile = nil
         XCTAssertFalse(plain.needsFallbackMigration)
         plain.fallbackCellCount = 2; plain.fallbackVersion = 2
-        XCTAssertFalse(plain.needsFallbackMigration)
+        XCTAssertFalse(plain.needsFallbackMigration, "v2 只有纯色格（没有兜底图）：不用迁移")
+        plain.fallbackFile = "fallback-v2crop.png"
+        XCTAssertTrue(plain.needsFallbackMigration, "Q1：v2 删除格裁的旧预览兜底图同样作废")
+        plain.fallbackVersion = WorkMeta.currentFallbackVersion
+        XCTAssertTrue(plain.needsFallbackMigration, "任何还登记着的兜底图都要迁移")
     }
 
-    /// 打开：旧兜底图删掉、格子改填目标色、重画预览、写版本 2；哨兵色哪儿都不出现（预览、兜底、导出）。
+    /// 打开：旧兜底图删掉、格子改填目标色、重画预览、写当前版本；哨兵色哪儿都不出现（预览、兜底、导出）。
     func testOpenMigratesAndSentinelNeverAppears() async throws {
         let h = Harness()
         let id = try await h.legacyWork()
@@ -93,7 +101,7 @@ final class WorksFallbackMigrationTests: XCTestCase {
         let readsBefore = h.images.state.get().imageReads
         await h.controller.open(id)
         let work = try XCTUnwrap(h.controller.openedWork)
-        XCTAssertEqual(work.meta.fallbackVersion, 2)
+        XCTAssertEqual(work.meta.fallbackVersion, WorkMeta.currentFallbackVersion)
         XCTAssertFalse(work.summary.showsPlaceholder)
         XCTAssertNil(work.meta.fallbackFile, "旧兜底图整体作废")
         XCTAssertFalse(FileManager.default.fileExists(atPath: h.atlasURL(id, try XCTUnwrap(oldAtlas)).path), "旧兜底图文件删掉")
@@ -113,7 +121,7 @@ final class WorksFallbackMigrationTests: XCTestCase {
         XCTAssertFalse(tiles.values.contains { Self.containsSentinel($0) }, "重开后的 HQ 导出兜底也没有哨兵色")
         h.controller.stop()
 
-        // 再打开：已是版本 2，不再改写
+        // 再打开：已是当前版本，不再改写
         let again = try await h.store.load(id)
         XCTAssertEqual(again.layout, work.layout)
     }
@@ -130,18 +138,37 @@ final class WorksFallbackMigrationTests: XCTestCase {
         XCTAssertEqual(h.images.state.get().imageReads, readsBefore)
     }
 
-    /// 受限访问也迁移（缺失照片的格子不动，只作废旧兜底）。
-    func testLimitedAccessStillMigrates() async throws {
+    /// 受限访问（产品 04:00 Q2、架构师 A）：不迁移、不改写作品（文件逐字节不变），列表 / 查看页都是占位；
+    /// 导出照样填目标色、不写回；拿到完整权限、回到前台后再迁移。
+    func testLimitedAccessDoesNotMigrateUntilFullAccess() async throws {
         let h = Harness()
         let id = try await h.legacyWork()
+        let wdir = h.dir.appendingPathComponent(id.directoryName, isDirectory: true)
+        func snapshot() throws -> [String: Data] {
+            var r: [String: Data] = [:]
+            for f in try FileManager.default.contentsOfDirectory(atPath: wdir.path) { r[f] = try Data(contentsOf: wdir.appendingPathComponent(f)) }
+            return r
+        }
+        let before = try snapshot()
         h.existence.fullAccess.set(false)
         await h.controller.start()
+        XCTAssertTrue(h.controller.state.limitedAccess)
         await h.controller.open(id)
+        XCTAssertEqual(h.controller.state.openedPreviewDisplay, .limitedAccess)
+        await h.controller.exportOpenedTapped(purpose: .save)
+        let fb = try XCTUnwrap(h.exporter.fallbacks.last)
+        XCTAssertTrue(Self.near(fb[1], Self.red) && Self.near(fb[4], Self.cyan), "\(fb)")
+        XCTAssertEqual(try snapshot(), before, "受限访问下作品目录逐字节不变")
+
+        h.existence.fullAccess.set(true)
+        await h.controller.refreshLibraryAccess()
+        XCTAssertFalse(h.controller.state.limitedAccess)
         let work = try XCTUnwrap(h.controller.openedWork)
-        XCTAssertEqual(work.meta.fallbackVersion, 2)
+        XCTAssertEqual(work.meta.fallbackVersion, WorkMeta.currentFallbackVersion)
         XCTAssertNil(work.meta.fallbackFile)
         XCTAssertEqual(work.layout.cellAssignments[1].fill, CellColor(r: 200, g: 30, b: 30))
         XCTAssertFalse(Self.containsSentinel(try XCTUnwrap(FakeWorkImages.decodeRaw(try Data(contentsOf: work.summary.previewURL)))))
+        XCTAssertEqual(h.controller.state.openedPreviewDisplay, .preview(work.summary.previewURL))
         h.controller.stop()
     }
 
@@ -160,7 +187,7 @@ final class WorksFallbackMigrationTests: XCTestCase {
         XCTAssertEqual(rm.calls.get(), 1)
         XCTAssertEqual(work.layout.cellAssignments[1].localIdentifier, "x")
         XCTAssertEqual(work.layout.cellAssignments[4].fill, CellColor(r: 30, g: 200, b: 200))
-        XCTAssertEqual(work.meta.fallbackVersion, 2)
+        XCTAssertEqual(work.meta.fallbackVersion, WorkMeta.currentFallbackVersion)
         h.controller.stop()
     }
 

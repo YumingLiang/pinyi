@@ -20,21 +20,26 @@ public protocol WorksStore: Sendable {
     func delete(_ id: WorkID) async throws
     /// 记下最近一次检查到的缺失原照片数（列表 / 查看页提示用）。
     func setMissingCount(_ count: Int, for id: WorkID) async throws
-    /// 写回一次补格结果（4b）：新布局、预览兜底图、重画预览，累计 `replacedCellCount` / `fallbackCellCount` / `droppedPhotoCount`。
+    /// 写回一次补格结果（4b）：新布局、重画预览，累计 `replacedCellCount` / `fallbackCellCount` / `droppedPhotoCount`。
     /// 磁盘上的布局已经不是 `base`（期间别处已经处理过）或结果没有改动时，什么都不写，返回磁盘上的现状。
-    /// `reasons`：缺失原照片 → 原因（`MissingReason`）。找不到相近照片的格子按 `MissingCellFill.decide`：
-    /// 确认删除 → 旧预览裁切（`WorkFallbackImages`）；隐藏 / 拿不准 / 没给原因 → 目标图这一格的平均色（`CellAssignment.fill`）。
-    /// `migrateFallbacks`：旧版兜底（`WorkMeta.needsFallbackMigration`）整体作废——旧兜底图删掉、这些格子（这次没补上照片的）
-    /// 一律填目标平均色（旧预览可能已被隐藏像素污染，删除的也不裁），重画预览，写 `fallbackVersion = 2`。
+    /// `reasons`：缺失原照片 → 原因（`MissingReason`），只做统计。找不到相近照片的格子不论原因一律填目标图这一格的平均色
+    /// （`CellAssignment.fill`，产品 03:55 Q1）；**不读旧预览、不写兜底图**。
+    /// `migrateFallbacks`：旧版兜底（`WorkMeta.needsFallbackMigration`）整体作废，或 meta 和 layout 对不上（`Work.isLayoutOutOfSync`）：
+    /// 旧兜底图删掉、仍空着的旧兜底格填目标平均色，即使布局没变也重画预览，写当前 `fallbackVersion`。
     func applyRematch(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID,
                       reasons: [String: MissingReason], migrateFallbacks: Bool) async throws -> Work
-    /// 导出用的格子填充图：已标记兜底的格子（存盘的兜底图）+ 纯色格（`fill`）+ `transientCells`（还没处理的缺失格，
-    /// 受限访问 / 索引未就绪时临时补，**不**存盘：`transientReasons` 里确认删除的从当前预览裁，其余填目标平均色）。
-    /// 读不到时缺的格子不在结果里（导出留白）。
+    /// 导出用的格子填充图：纯色格（`fill`）+ 旧版兜底格 + `transientCells`（还没处理的缺失格，受限访问 / 索引未就绪时临时补，
+    /// **不**存盘），后两种一律填目标平均色；不读预览、不读兜底图（`transientReasons` 只做统计）。
     func fallbackTiles(for id: WorkID, transientCells: Set<Int>,
                        transientReasons: [Int: MissingReason]) async -> [Int: PixelBuffer]
-    /// 启动时清理上次被杀留下的临时目录 / 待删目录。
+    /// 启动时清理上次被杀留下的临时目录 / 待删目录，以及各作品目录里 meta 没登记的预览 / 兜底图（D-a）。
     func removeIncomplete() async
+    /// 打开作品前清掉这个作品目录里 meta 没登记的预览 / 兜底图（D-a）。
+    func removeOrphans(for id: WorkID) async
+}
+
+public extension WorksStore {
+    func removeOrphans(for id: WorkID) async {}
 }
 
 /// 文件实现：`Application Support/Works/<uuid>/` 一个作品一个目录。
@@ -142,6 +147,9 @@ public actor FileWorksStore: WorksStore {
     }
 
     private func write(_ draft: WorkDraft, layoutData: Data, fingerprint: String) async throws -> WorkSummary {
+        // 守护（架构师 11-17 B）：新存作品的预览按 `fallbacks: [:]` 画，带纯色格（`fc`）的布局会画成白格、和导出对不上。
+        // 长期改法（works-missing-fill）：预览渲染器和导出器都直接读 fc，然后去掉这个守护。
+        if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
         let fm = FileManager.default
         let id = WorkID()
         let temp = directory.appendingPathComponent(Self.tempPrefix + id.directoryName, isDirectory: true)
@@ -158,11 +166,12 @@ public actor FileWorksStore: WorksStore {
                 targetFile = try await images.writeTarget(t, maxLongEdge: WorkImageLimits.targetLongEdge, into: temp).fileName
             }
             let ids = draft.layout.uniqueAssetIDs
-            let meta = WorkMeta(id: id, createdAt: now(), columns: draft.layout.cols, rows: draft.layout.rows,
+            var meta = WorkMeta(id: id, createdAt: now(), columns: draft.layout.cols, rows: draft.layout.rows,
                                 tier: draft.tier, photoCount: ids.count, missingCount: 0,
                                 overlayAlpha: draft.overlayAlpha, seed: draft.seed, fingerprint: fingerprint,
                                 origin: draft.origin, previewFile: preview.fileName, previewPixelWidth: preview.pixelWidth,
                                 previewPixelHeight: preview.pixelHeight, targetFile: targetFile)
+            meta.fallbackVersion = WorkMeta.currentFallbackVersion
             // meta.json 最后写：它在，其余文件一定都在
             try Self.encoder().encode(meta).write(to: temp.appendingPathComponent(Self.metaFileName), options: .atomic)
             try fm.moveItem(at: temp, to: final)
@@ -365,41 +374,20 @@ public actor FileWorksStore: WorksStore {
         return try? await images.readTarget(at: url)
     }
 
-    /// 存盘的兜底图（按格）。
-    private func storedFallbacks(_ work: Work, cells: [Int]) async -> [Int: PixelBuffer] {
-        guard !cells.isEmpty, let name = work.meta.fallbackFile,
-              let atlas = try? await images.readImage(at: workDirectory(work.id).appendingPathComponent(name)) else { return [:] }
-        return WorkFallbackImages.split(atlas, cells: cells, layout: work.layout)
-    }
-
+    /// 导出 / 叠加重画用的补格小图：纯色格（`fc`）按存的颜色；旧版兜底格（`fb`，还没迁移）和这次临时补的缺失格一律按目标平均色。
+    /// 产品 03:55 Q1：**任何补格都不读旧预览、也不读存盘兜底图**（`transientReasons` 只做统计，不决定像素）。
     public func fallbackTiles(for id: WorkID, transientCells: Set<Int>,
                               transientReasons: [Int: MissingReason] = [:]) async -> [Int: PixelBuffer] {
         guard let work = try? await load(id) else { return [:] }
+        var tiles = MissingCellFill.colorTiles(work.layout)
         let marked = work.layout.cellAssignments.indices.filter { work.layout.cellAssignments[$0].fallback }
-        // 旧版兜底（还没迁移）：旧兜底图 / 当前预览都可能带隐藏像素，一律不用，旧兜底格也按目标色临时补
-        let legacy = work.meta.needsFallbackMigration
-        var tiles = legacy ? [:] : await storedFallbacks(work, cells: marked)
-        for (cell, tile) in MissingCellFill.colorTiles(work.layout) { tiles[cell] = tile }
-        var wanted = transientCells
-        if legacy { wanted.formUnion(marked) }
-        let extra = wanted.filter { tiles[$0] == nil && $0 < work.layout.cellAssignments.count }.sorted()
+        let extra = transientCells.union(marked).filter { tiles[$0] == nil && $0 < work.layout.cellAssignments.count }.sorted()
         guard !extra.isEmpty else { return tiles }
-        // 没处理的缺失格：确认删除的从当前预览裁；隐藏 / 拿不准的填目标平均色（当前预览里可能就是隐藏照片的像素）
-        let crop = legacy ? [] : extra.filter { MissingCellFill.decide(reason: transientReasons[$0], hasCandidate: false) == .previewCrop }
-        let color = extra.filter { !crop.contains($0) }
-        if !color.isEmpty {
-            let target = await readTargetCopy(work)
-            var l = work.layout
-            for cell in color { l.cellAssignments[cell].fill = MissingCellFill.targetColor(cell: cell, layout: work.layout, target: target) }
-            for cell in color { if let t = MissingCellFill.colorTiles(l)[cell] { tiles[cell] = t } }
-        }
-        if !crop.isEmpty, let preview = try? await images.readImage(at: work.summary.previewURL) {
-            let target = await readOverlayTarget(work)
-            for (cell, tile) in WorkFallbackImages.crop(from: preview, cells: crop, layout: work.layout, target: target,
-                                                        overlayAlpha: work.meta.overlayAlpha) {
-                tiles[cell] = tile
-            }
-        }
+        let target = await readTargetCopy(work)
+        var l = work.layout
+        for cell in extra { l.cellAssignments[cell].fill = MissingCellFill.targetColor(cell: cell, layout: work.layout, target: target) }
+        let colored = MissingCellFill.colorTiles(l)
+        for cell in extra { if let t = colored[cell] { tiles[cell] = t } }
         return tiles
     }
 
@@ -412,48 +400,32 @@ public actor FileWorksStore: WorksStore {
     private func performApply(_ result: WorkRematchResult, base: MosaicLayout, for id: WorkID,
                               reasons: [String: MissingReason], migrate: Bool) async throws -> Work {
         let work = try await load(id)
-        let migrate = migrate && work.meta.needsFallbackMigration   // 别处已迁移过：按普通写回
+        let migrate = migrate && (work.meta.needsFallbackMigration || work.isLayoutOutOfSync)   // 别处已处理过：按普通写回
         var layout = result.layout
         guard work.layout == base, layout.cols == base.cols, layout.rows == base.rows,
               layout.cellAssignments.count == base.cellAssignments.count else { return work }
-        // 找不到相近照片的格子怎么补（`MissingCellFill.decide`，需求 4.8 第 5e 条）：
-        // - 本次新空出来的：原照片确认删除 → 旧预览裁切（标兜底，进 WorkFallbackImages）；隐藏 / 拿不准 → 目标图平均色（`fill`，不进兜底图）。
-        // - 之前就兜底 / 纯色、这次仍没补上的：原样保留（兜底图直接搬，不二次裁切；纯色不变）。
-        // - 补上了照片的：丢掉兜底图和纯色。
+        // 找不到相近照片的格子怎么补（`MissingCellFill.decide`，产品 03:55 Q1 取消 4b）：
+        // - 本次新空出来的：不论原因（隐藏 / 删除 / 拿不准）一律填目标图平均色（`fill`），**不读旧预览**；`reasons` 只做统计。
+        // - 之前就纯色、这次仍没补上的：颜色不变。旧版兜底格（`fb`）仍空着的：旧兜底图整体作废，同样填目标色。
+        // - 补上了照片的：去掉纯色。不再产生新的 WorkFallbackImages 兜底图。
+        _ = reasons
         let cells = base.cellAssignments.indices
         let newlyEmpty = cells.filter { !base.cellAssignments[$0].localIdentifier.isEmpty && layout.cellAssignments[$0].localIdentifier.isEmpty }
-        // 迁移时旧兜底图整体作废（不逐格判断）：仍空着的旧兜底格一律填目标色
-        let keptFallback = migrate ? [] : cells.filter { base.cellAssignments[$0].fallback && layout.cellAssignments[$0].localIdentifier.isEmpty }
-        let migratedCells = migrate
-            ? cells.filter { base.cellAssignments[$0].fallback && layout.cellAssignments[$0].localIdentifier.isEmpty } : []
+        let oldFallbackCells = cells.filter { base.cellAssignments[$0].fallback && layout.cellAssignments[$0].localIdentifier.isEmpty }
         for i in cells {
             layout.cellAssignments[i].fallback = false
             let stillEmpty = layout.cellAssignments[i].localIdentifier.isEmpty
             layout.cellAssignments[i].fill = stillEmpty ? base.cellAssignments[i].fill : nil
         }
-        var tiles = await storedFallbacks(work, cells: keptFallback)
-        let decisions = Dictionary(uniqueKeysWithValues: newlyEmpty.map {
-            ($0, MissingCellFill.decide(reason: reasons[base.cellAssignments[$0].localIdentifier], hasCandidate: false))
-        })
-        // 迁移的那一次不裁旧预览（旧预览可能已被隐藏像素污染）：这次新空出来的删除格也填目标色
-        let cropCells = migrate ? [] : newlyEmpty.filter { decisions[$0] == .previewCrop }
-        let colorCells = newlyEmpty.filter { !cropCells.contains($0) } + migratedCells
+        let colorCells = newlyEmpty + oldFallbackCells
         let target = await readOverlayTarget(work)
-        if !cropCells.isEmpty, let old = try? await images.readImage(at: work.summary.previewURL) {
-            for (cell, tile) in WorkFallbackImages.crop(from: old, cells: cropCells, layout: base, target: target,
-                                                        overlayAlpha: work.meta.overlayAlpha) {
-                tiles[cell] = tile
-            }
-        }
-        for cell in tiles.keys { layout.cellAssignments[cell].fallback = true }
         if !colorCells.isEmpty {
             let copy = target != nil ? target : await readTargetCopy(work)   // 叠加时已读过就复用
             for cell in colorCells { layout.cellAssignments[cell].fill = MissingCellFill.targetColor(cell: cell, layout: base, target: copy) }
         }
-        guard layout != base || migrate else { return work }   // 迁移：即使布局没变也要重画预览、写版本 2
-        // 纯色格的填充图（不进兜底图 atlas）：预览重画用；导出同样经 `fallbackTiles` 拿到同一颜色
-        var drawTiles = tiles
-        for (cell, t) in MissingCellFill.colorTiles(layout) { drawTiles[cell] = t }
+        guard layout != base || migrate else { return work }   // 迁移 / 对齐：即使布局没变也要重画预览、写当前版本
+        // 纯色格的填充图：预览重画用；导出同样经 `fallbackTiles` 拿到同一颜色
+        let drawTiles = MissingCellFill.colorTiles(layout)
 
         let fm = FileManager.default
         let dir = workDirectory(id)
@@ -463,22 +435,13 @@ public actor FileWorksStore: WorksStore {
         var meta = work.meta
         let preview = try await images.writePreview(layout: layout, target: target, overlayAlpha: meta.overlayAlpha,
                                                     maxLongEdge: WorkImageLimits.previewLongEdge, fallbacks: drawTiles, into: temp)
-        var fallbackName: String?
+        let fallbackName: String? = nil   // 不再写兜底图
         var moved: [URL] = []
         func unique(_ prefix: String, _ file: String) -> String {
             let ext = (file as NSString).pathExtension
             return prefix + UUID().uuidString.prefix(8).lowercased() + (ext.isEmpty ? "" : "." + ext)
         }
         do {
-            // 兜底图尺寸按格子小图算（= 预览每格像素 × 列 / 行），与预览文件解码与否无关
-            let tw = tiles.values.map(\.width).max() ?? 0, th = tiles.values.map(\.height).max() ?? 0
-            if let atlas = WorkFallbackImages.atlas(tiles, layout: layout, width: layout.cols * tw, height: layout.rows * th) {
-                let f = try await images.writeFallback(atlas, into: temp)
-                let name = unique("fallback-", f.fileName)
-                try fm.moveItem(at: temp.appendingPathComponent(f.fileName), to: dir.appendingPathComponent(name))
-                moved.append(dir.appendingPathComponent(name))
-                fallbackName = name
-            }
             let newName = unique("preview-", preview.fileName)
             try fm.moveItem(at: temp.appendingPathComponent(preview.fileName), to: dir.appendingPathComponent(newName))
             moved.append(dir.appendingPathComponent(newName))
@@ -516,17 +479,33 @@ public actor FileWorksStore: WorksStore {
         for name in names where name.hasPrefix(Self.tempPrefix) || name.hasPrefix(Self.trashPrefix) {
             try? fm.removeItem(at: directory.appendingPathComponent(name))
         }
-        // 更新叠加强度在提交点（meta.json）之前被杀留下的临时预览：meta 没登记的才删（登记了的由读时前滚）
+        // 每个作品目录里 meta 没登记的预览 / 兜底图（架构师 11-17 D-a）：写回在提交点（meta.json）前后被杀留下的
+        // 新文件 / 旧文件都可能带隐藏照片的像素，又会进 iCloud 备份，一律删掉。
         for name in names where !name.hasPrefix(".") {
             guard let id = WorkID(directoryName: name) else { continue }
-            let dir = workDirectory(id)
-            guard let files = try? fm.contentsOfDirectory(atPath: dir.path),
-                  files.contains(where: { $0.hasPrefix(Self.pendingPreviewPrefix) }) else { continue }
-            let referenced = (try? Data(contentsOf: dir.appendingPathComponent(Self.metaFileName)))
-                .flatMap { try? Self.decoder().decode(WorkMeta.self, from: $0) }?.pendingPreviewFile
-            for f in files where f.hasPrefix(Self.pendingPreviewPrefix) && f != referenced {
-                try? fm.removeItem(at: dir.appendingPathComponent(f))
-            }
+            removeOrphanImages(id)
+        }
+    }
+
+    /// 打开作品前也清一次（`WorksController.open`）。
+    public func removeOrphans(for id: WorkID) async {
+        removeOrphanImages(id)
+    }
+
+    /// 删掉作品目录里 meta 没登记（`previewFile` / `fallbackFile` / `pendingPreviewFile`）的 `preview*` / `fallback*` /
+    /// 临时预览文件。meta 读不出来就什么都不删。这个作品正在写回（`serialized` 里，新文件已挪进来、meta 还没提交）时跳过；
+    /// actor 内从判断到删完没有挂起点，不会和写回交错。
+    private func removeOrphanImages(_ id: WorkID) {
+        guard updating[id] == nil else { return }
+        let fm = FileManager.default
+        let dir = workDirectory(id)
+        guard let files = try? fm.contentsOfDirectory(atPath: dir.path),
+              let data = try? Data(contentsOf: dir.appendingPathComponent(Self.metaFileName)),
+              let meta = try? Self.decoder().decode(WorkMeta.self, from: data) else { return }
+        let referenced = Set([meta.previewFile, meta.fallbackFile, meta.pendingPreviewFile].compactMap { $0 })
+        for f in files where !referenced.contains(f)
+            && (f.hasPrefix("preview") || f.hasPrefix("fallback") || f.hasPrefix(Self.pendingPreviewPrefix)) {
+            try? fm.removeItem(at: dir.appendingPathComponent(f))
         }
     }
 

@@ -3,8 +3,8 @@ import XCTest
 import MosaicCore
 @testable import MosaicAppCore
 
-/// 缺图格子的兜底分两种（需求 4.8 第 5e 条，架构师 11-17 意见二）：原照片被隐藏（或拿不准）→ 填目标图这一格的平均色；
-/// 确认删除 → 旧预览裁切（4b）。原因只靠只读元数据分（`availability` / `PhotoFetch.classifyMissing`），不请求任何图像。
+/// 缺图格子找不到相近照片时（需求 4.8 第 5e 条；产品 03:55 Q1 取消 4b）：不论隐藏 / 删除 / 拿不准，一律填目标图这一格的平均色，
+/// 任何补格都不读旧预览。原因只靠只读元数据分（`availability` / `PhotoFetch.classifyMissing`），只用于统计和文案，不请求任何图像。
 @MainActor
 final class MissingCellFillTests: XCTestCase {
     typealias RGB8 = FakeWorkImages.RGB8
@@ -15,7 +15,7 @@ final class MissingCellFillTests: XCTestCase {
         for reason in [MissingReason.hidden, .deleted, .unknown, nil] {
             XCTAssertEqual(MissingCellFill.decide(reason: reason, hasCandidate: true), .candidate, "有候选一律用候选")
         }
-        XCTAssertEqual(MissingCellFill.decide(reason: .deleted, hasCandidate: false), .previewCrop)
+        XCTAssertEqual(MissingCellFill.decide(reason: .deleted, hasCandidate: false), .targetColor, "删除也填色（Q1 取消 4b）")
         XCTAssertEqual(MissingCellFill.decide(reason: .hidden, hasCandidate: false), .targetColor)
         XCTAssertEqual(MissingCellFill.decide(reason: .unknown, hasCandidate: false), .targetColor, "拿不准按隐藏")
         XCTAssertEqual(MissingCellFill.decide(reason: nil, hasCandidate: false), .targetColor, "没有原因按隐藏")
@@ -132,24 +132,60 @@ final class MissingCellFillTests: XCTestCase {
         h.controller.stop()
     }
 
-    /// 删除且无候选：照旧用旧预览裁切（4b），进兜底图。
-    func testDeletedWithoutCandidateUsesOldPreviewCrop() async throws {
+    /// 删除且无候选（Q1 取消 4b）：和隐藏一样填目标色，不裁旧预览、不写兜底图；补格过程读旧预览 0 次。
+    func testDeletedWithoutCandidateFillsTargetColor() async throws {
         let h = Harness()
         let id = try await h.save(["a", "b", "c", "d", "e", "f"])
         await h.controller.start()
         h.existence.delete("b")
+        let readsBefore = h.images.state.get().imageReads
         await h.controller.open(id)
         let work = try XCTUnwrap(h.controller.openedWork)
-        XCTAssertEqual(work.layout, sampleFallbackLayout(["a", "", "c", "d", "e", "f"]))
-        XCTAssertNil(work.layout.cellAssignments[1].fill)
-        XCTAssertEqual(h.images.state.get().fallbackWrites, 1)
-        XCTAssertNotNil(work.meta.fallbackFile)
-        XCTAssertTrue(WorksFallbackTests.close(h.images.state.get().lastFallbacks[1], FakeWorkImages.color(of: "b")),
-                      "旧预览里 b 的颜色（叠加已去掉）")
+        XCTAssertEqual(work.layout, sampleColorLayout(["a", "", "c", "d", "e", "f"], color: CellColor(r: 200, g: 30, b: 30)))
+        XCTAssertFalse(work.layout.cellAssignments[1].fallback)
+        XCTAssertEqual(h.images.state.get().imageReads, readsBefore, "补格读旧预览 0 次")
+        XCTAssertEqual(h.images.state.get().fallbackWrites, 0, "不再产生兜底图")
+        XCTAssertNil(work.meta.fallbackFile)
+        XCTAssertEqual(h.images.state.get().lastFallbacks, [1: RGB8(r: 200, g: 30, b: 30)])
+        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]), "删除格同样按格计入 works.missing")
         h.controller.stop()
     }
 
-    /// 同一作品里一张隐藏、一张删除：各走各的；导出（含重开后）与预览颜色一致。
+    /// 守护（Q1）：任何原因、有没有候选，`decide` 都只会给出 candidate / targetColor；补格路径（store 写回 / 导出补格）
+    /// 不论传什么原因都不读预览、不写兜底图。源码里也不再有裁旧预览的调用。
+    func testNoPathProducesPreviewCrop() async throws {
+        for reason in [MissingReason.hidden, .deleted, .unknown, nil] {
+            for has in [true, false] {
+                XCTAssertTrue([MissingCellFill.candidate, .targetColor].contains(MissingCellFill.decide(reason: reason, hasCandidate: has)))
+            }
+        }
+        let h = Harness()
+        let id = try await h.save(["a", "b", "c", "d", "e", "f"])
+        let reads = h.images.state.get().imageReads
+        let tiles = await h.store.fallbackTiles(for: id, transientCells: [0, 1, 2],
+                                                transientReasons: [0: .deleted, 1: .hidden, 2: .unknown])
+        XCTAssertEqual(Set(tiles.keys), [0, 1, 2])
+        for (cell, tile) in tiles {
+            let c = WorksRematchTests.cellColors[cell]
+            XCTAssertEqual(FakeWorkImages.average(tile), RGB8(r: c.0, g: c.1, b: c.2), "格 \(cell) 填目标色")
+        }
+        let w = try await h.store.dropMissingPhotos(["a", "c"], for: id, reasons: ["a": .deleted, "c": .deleted])
+        XCTAssertEqual(h.images.state.get().imageReads, reads, "预览 / 兜底图读取 0 次")
+        XCTAssertEqual(h.images.state.get().fallbackWrites, 0)
+        XCTAssertNil(w.meta.fallbackFile)
+        XCTAssertFalse(w.layout.cellAssignments.contains { $0.fallback })
+
+        let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/MosaicAppCore/Works")
+        for file in ["FileWorksStore.swift", "MissingCellFill.swift", "WorksController.swift"] {
+            let text = try String(contentsOf: src.appendingPathComponent(file), encoding: .utf8)
+            XCTAssertFalse(text.contains("WorkFallbackImages.crop("), file)
+            XCTAssertFalse(text.contains("case previewCrop"), file)
+            XCTAssertFalse(text.contains("readImage(at: work.summary.previewURL"), file)
+        }
+    }
+
+    /// 同一作品里一张隐藏、一张删除：都填目标色；导出（含重开后）与预览颜色一致。
     func testMixedAndExportMatchesPreview() async throws {
         let h = Harness()
         let id = try await h.save(["a", "b", "c", "d", "e", "f"])
@@ -160,8 +196,8 @@ final class MissingCellFillTests: XCTestCase {
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(work.layout.cellAssignments[1].fill, CellColor(r: 200, g: 30, b: 30))
         XCTAssertFalse(work.layout.cellAssignments[1].fallback)
-        XCTAssertTrue(work.layout.cellAssignments[4].fallback)
-        XCTAssertNil(work.layout.cellAssignments[4].fill)
+        XCTAssertFalse(work.layout.cellAssignments[4].fallback, "删除格也填色（Q1）")
+        XCTAssertEqual(work.layout.cellAssignments[4].fill, CellColor(r: 30, g: 200, b: 200))
         let preview = h.images.state.get().lastFallbacks
         XCTAssertEqual(Set(preview.keys), [1, 4])
 

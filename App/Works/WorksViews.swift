@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import MosaicCore
 import MosaicAppCore
 
@@ -121,8 +122,14 @@ struct WorkCell: View {
             Text(verbatim: WorksModel.dateFormatter.string(from: summary.createdAt))
                 .font(.caption).foregroundStyle(.secondary)
         }
-        // 按 summary 整体重新解码：只改叠加强度更新原作品时 id 和预览文件名都不变；缺图处理重画预览后文件名会变，同样刷新
-        .task(id: summary) { image = works.thumbnail(for: summary) }
+        // 按 summary 整体重新解码：只改叠加强度更新原作品时 id 和预览文件名都不变；缺图处理重画预览后文件名会变，同样刷新。
+        // 权限变了（回到前台重读）也刷新：受限时 thumbnail 返回 nil、不读文件
+        .task(id: ThumbKey(summary: summary, limited: works.state.limitedAccess)) { image = works.thumbnail(for: summary) }
+    }
+
+    private struct ThumbKey: Hashable {
+        let summary: WorkSummary
+        let limited: Bool
     }
 }
 
@@ -132,11 +139,22 @@ struct WorkDetailView: View {
     @EnvironmentObject var works: WorksModel
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     let id: WorkID
 
     var body: some View {
         VStack(spacing: 12) {
-            if let img = works.openedPreview, let opened = works.state.opened, opened.id == id {
+            if works.state.opened?.id == id, works.state.openedPreviewDisplay == .limitedAccess {
+                // 受限访问（v1.7a）：不读保存的预览，显示占位说明 +「去设置」
+                Spacer()
+                Image(systemName: "photo.on.rectangle.angled").font(.largeTitle).foregroundStyle(.secondary)
+                Text(L10nKey.worksLimitedPlaceholder).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                } label: { Text(L10nKey.worksLimitedNoteSettings) }
+                    .buttonStyle(.bordered)
+                Spacer()
+            } else if let img = works.openedPreview, let opened = works.state.opened, opened.id == id {
                 ZoomableContainer(aspectRatio: Double(img.width) / Double(max(1, img.height)),
                                   columns: opened.summary.meta.columns, rows: opened.summary.meta.rows,
                                   zoom: $works.detailZoom) {

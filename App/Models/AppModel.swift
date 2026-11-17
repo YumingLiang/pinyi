@@ -160,7 +160,11 @@ final class AppModel: ObservableObject {
         coordinator.start()
         await works.start()
     }
-    func scenePhaseChanged(_ phase: ScenePhase) { lifecycle.scenePhaseChanged(phase) }
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        lifecycle.scenePhaseChanged(phase)
+        // 回到前台重读相册权限（v1.7a）：受限 ↔ 完整变了就刷新作品列表 / 查看页
+        if phase == .active { Task { await works.refreshLibraryAccess() } }
+    }
     func onboardingButtonTapped() { Task { await coordinator.onboardingButtonTapped() } }
     func onboardingSwiped(to page: Int) { coordinator.onboardingSwiped(to: page) }
     func permissionAction(_ action: PermissionAction, on prompt: PermissionPrompt) {

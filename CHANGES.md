@@ -1,5 +1,24 @@
 # CHANGES
 
+## feat/works-hidden（追加 6）：#11 隐私修复轮（产品 03:55 Q1–Q4、04:00 / 04:05 修订，copy v1.7a；架构师 11-17 A–D）
+
+- **Q1 / A 取消 4b**：`MissingCellFill.decide` 只剩 `candidate` / `targetColor`（`previewCrop` 删掉）：删除、隐藏、拿不准一律填目标图这一格的平均色，按格计入 `works.missing`。
+  `performApply` / `fallbackTiles` 里裁旧预览的分支删掉，补格、导出都不读旧预览、不读存盘兜底图；`classifyMissing` 的原因只用于统计和文案。
+  不再产生新的 `WorkFallbackImages` 兜底图；还登记着兜底图的作品（v1，以及 v2 时删除格裁的）一律按旧版迁移（`needsFallbackMigration = fallbackFile != nil || v1 有兜底格`）。
+  守护测试 `MissingCellFillTests.testNoPathProducesPreviewCrop`（所有原因 / 有无候选；store 写回、导出补格读图 0 次；源码里没有裁切调用）。
+- **Q2 受限访问占位（04:00 / 04:05 口径）**：不是完整权限时所有作品都占位（不逐个判断、不逐张查）。`WorksState.limitedAccess`（启动、回到前台 `refreshLibraryAccess()`、打开作品时重读）；
+  `WorkSummary.accessRestricted` → `showsPlaceholder`；`WorksState.previewDisplay(for:)` / `decodePreview(for:_:)` 是列表缩略图和查看页读预览的唯一入口，先看权限、受限时解码闭包调用 0 次。
+  查看页显示 `works.limited_placeholder` +「去设置」（`works.limited_note.settings`，打开 `UIApplication.openSettingsURLString`）。受限访问下**不改写作品**（迁移也等完整权限），导出照样填色不写回。
+  回到前台权限变了刷新列表；变成完整权限且查看页开着，重新打开一次（这时才做缺图处理 / 迁移）。`works.limited_note` 不收（v1.7a 暂不使用）。
+- **B**：`write(_ draft:)` 遇到带 `fc` 的布局抛 `WorksError.unsupportedFilledCells`（长期改法在 works-missing-fill：渲染器直接读 fc）。
+- **C**：核对 check-photo-fetch：豁免只有 PhotoFetch.swift 本身、`classifyMissing` 元数据例外（限定文件 + 函数 + 一处标记）、InternalTools（规则 5 保证只进内测包）；没有别的。
+- **D 孤儿文件**：提交点仍是 meta.json。a) `removeIncomplete()`（启动）和 `removeOrphans(for:)`（打开作品前）删掉作品目录里 meta 没登记的 `preview*` / `fallback*` / 临时预览；
+  该作品正在写回时跳过，meta 读不出不删。b) meta 指纹 ≠ 实际布局指纹（`Work.isLayoutOutOfSync`）按待处理，下次打开重新走一遍写回，不读旧文件。
+- **Q3**：不改（放到 5e GoneLog，04:05）。**Q4**：加测试，取消隐藏 / 从「最近删除」恢复的照片补格时能重新被选中（没有黑名单）。
+- 打开后马上导出（没有新变化）：本次查看里还没消失的 `works.missing` / `works.replaced` 提示保留到自动消失，不提前清（QA Q1 门禁）。
+- 测试：新增 `WorksPrivacyRoundTests`（B、D-a、D-b/D-c 被杀窗口无哨兵、Q2 读预览 0 次 + 前台刷新、文案）、`WorksRematchNoBlacklistTests`（Q4）；
+  `WorksFallbackTests` / `WorksFallbackMigrationTests` / `MissingCellFillTests` / `WorksControllerTests` / `WorksRematchTests` 按 Q1 改期望（删除格填色、没有兜底图、受限不迁移）。
+
 ## feat/works-hidden（追加 5）：架构师 11-17 最终方案（#11 P0）
 
 - **merge origin/feat/app-layer 57eff11**（含 #19 的 5cd6eb4 和 #21），没有 rebase；CHANGES.md、linux-core.yml 两边都保留。A-21 测试保持与 app-layer 一致，不单独再改。

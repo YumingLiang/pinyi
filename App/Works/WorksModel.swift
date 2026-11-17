@@ -24,14 +24,14 @@ final class WorksModel: ObservableObject {
     private func stateChanged(_ s: WorksState) {
         let previousOpened = state.opened?.id
         let previousSummary = state.opened?.summary   // 更新叠加后预览文件名不变，按 meta 判断要不要重解码
+        let previousLimited = state.limitedAccess
         state = s
         if s.opened?.id != previousOpened { detailZoom.reset() }
         // 换了作品、缺图处理后预览重画了（文件名会变），或只改叠加强度更新了原作品（meta 变）：重新解码
-        if s.opened?.id != previousOpened || s.opened?.summary != previousSummary {
-            // 旧版兜底还没迁移（预览可能带隐藏照片的像素）：不解码旧预览，查看页显示占位（转圈），迁移重画后再解码
-            openedPreview = s.opened.flatMap {
-                $0.summary.showsPlaceholder ? nil
-                    : ImageIOWorkImages.loadImage($0.summary.previewURL, maxPixel: WorkImageLimits.previewLongEdge)
+        if s.opened?.id != previousOpened || s.opened?.summary != previousSummary || s.limitedAccess != previousLimited {
+            // 先看权限再看作品（`WorksState.decodePreview`）：受限访问 / 旧版兜底还没迁移时不读、不解码预览文件，查看页显示占位
+            openedPreview = s.opened.flatMap { opened in
+                s.decodePreview(for: opened.summary) { ImageIOWorkImages.loadImage($0, maxPixel: WorkImageLimits.previewLongEdge) }
             }
         }
     }
@@ -42,6 +42,7 @@ final class WorksModel: ObservableObject {
     func open(_ id: WorkID) async { await controller.open(id) }
     func close() { controller.close() }
     func libraryDidChange() { controller.libraryDidChange() }
+    func refreshLibraryAccess() async { await controller.refreshLibraryAccess() }
     func saveCurrentResult() { Task { await controller.saveCurrentResultTapped() } }
     func exportOpened(_ purpose: ExportPurpose) { Task { await controller.exportOpenedTapped(purpose: purpose) } }
     func deleteTapped(_ id: WorkID) { controller.deleteTapped(id) }
@@ -50,10 +51,9 @@ final class WorksModel: ObservableObject {
     func dismissNotice() { controller.dismissNotice() }
 
     /// 列表缩略图（降采样解码，约 2 列 × 3x 屏幕密度）。
-    /// 旧版兜底还没迁移的作品显示占位（灰底），不显示旧预览（打开后迁移重画，列表随之刷新）。
+    /// 受限访问（v1.7a）/ 旧版兜底还没迁移的作品显示占位（灰底），不读、不解码预览文件。
     func thumbnail(for summary: WorkSummary) -> CGImage? {
-        guard !summary.showsPlaceholder else { return nil }
-        return ImageIOWorkImages.loadImage(summary.previewURL, maxPixel: 600)
+        state.decodePreview(for: summary) { ImageIOWorkImages.loadImage($0, maxPixel: 600) }
     }
 
     /// 「11月16日」。

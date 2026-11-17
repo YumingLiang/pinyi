@@ -3,9 +3,9 @@ import XCTest
 import MosaicCore
 @testable import MosaicAppCore
 
-/// 预览兜底（hd-export-req-v0.2 F 节；`works.missing`「这几格会稍模糊」）：找不到合格相近照片的格子，在重画预览**之前**
-/// 从旧预览裁出该格、存进作品目录（布局里 `fb` 标记 + meta.fallbackFile），之后预览重画和高清导出都用它放大填充；
-/// 没有旧预览才留白。兜底格以后能升级成照片（兜底图随之删掉）。
+/// 找不到合格相近照片的格子（hd-export-req-v0.2 F 节；产品 03:55 Q1 取消 4b 之后）：不论原因一律填目标图这一格的平均色
+/// （布局里 `fc`），预览重画和高清导出都用同一颜色；不读旧预览、不再写兜底图（`WorkFallbackImages` 只剩旧作品迁移 / 纯函数）。
+/// 纯色格以后能升级成照片。
 @MainActor
 final class WorksFallbackTests: XCTestCase {
     typealias RGB8 = FakeWorkImages.RGB8
@@ -94,45 +94,52 @@ final class WorksFallbackTests: XCTestCase {
 
     // MARK: 兜底图
 
-    /// 兜底图在重画预览之前从旧预览裁出（叠加按位置去掉），存进作品目录；重开后从磁盘读回，内容一致。
-    func testFallbackCroppedFromOldPreviewAndPersisted() async throws {
+    /// 目标图这一格的平均色（Q1 后找不到相近照片的格子一律填它）。
+    static func fill(_ cell: Int, _ ids: [String], _ target: PixelBuffer?) -> CellColor {
+        MissingCellFill.targetColor(cell: cell, layout: sampleLayout(ids), target: target)
+    }
+    static func rgb(_ c: CellColor) -> RGB8 { RGB8(r: c.r, g: c.g, b: c.b) }
+
+    /// 删除格（产品 03:55 Q1 取消 4b）：不裁旧预览，填目标图这一格的平均色存进布局（`fc`）；不写兜底图；
+    /// 重开后从布局读回同一颜色。
+    func testDeletedCellsFillTargetColorAndPersisted() async throws {
         let h = Harness()
-        let id = try await h.save(["a", "b", "c", "d", "e", "f"], target: try Self.gradientTarget())
+        let ids = ["a", "b", "c", "d", "e", "f"]
+        let target = try Self.gradientTarget()
+        let id = try await h.save(ids, target: target)
         await h.controller.start()
         let oldPreview = try XCTUnwrap(h.controller.state.summaries.first?.previewURL)
         h.existence.delete("b", "f")
+        let reads = h.images.state.get().imageReads
         await h.controller.open(id)
 
         let work = try XCTUnwrap(h.controller.openedWork)
-        XCTAssertEqual(work.layout, sampleFallbackLayout(["a", "", "c", "d", "e", ""]))
-        XCTAssertEqual(work.layout.cellAssignments.map(\.fallback), [false, true, false, false, false, true])
-        let file = try XCTUnwrap(work.meta.fallbackFile)
-        XCTAssertTrue(file.hasPrefix("fallback-") && file.hasSuffix(".png"))
-        XCTAssertTrue(try h.files(id).contains(file))
+        XCTAssertEqual(work.layout.cellAssignments.map(\.localIdentifier), ["a", "", "c", "d", "e", ""])
+        XCTAssertEqual(work.layout.cellAssignments.map(\.fallback), [false, false, false, false, false, false])
+        XCTAssertEqual(work.layout.cellAssignments[1].fill, Self.fill(1, ids, target))
+        XCTAssertEqual(work.layout.cellAssignments[5].fill, Self.fill(5, ids, target))
+        XCTAssertNil(work.meta.fallbackFile)
+        XCTAssertFalse(try h.files(id).contains { $0.hasPrefix("fallback") })
         XCTAssertFalse(FileManager.default.fileExists(atPath: oldPreview.path), "旧预览已换掉")
-        // 预览重画时这两格用了兜底图；颜色是原照片的（叠加已按位置去掉，不会叠两次）
+        XCTAssertEqual(h.images.state.get().imageReads, reads, "没读旧预览")
+        XCTAssertEqual(h.images.state.get().fallbackWrites, 0)
         let used = h.images.state.get().lastFallbacks
-        XCTAssertEqual(Set(used.keys), [1, 5])
-        XCTAssertTrue(Self.close(used[1], FakeWorkImages.color(of: "b")), "\(String(describing: used[1]))")
-        XCTAssertTrue(Self.close(used[5], FakeWorkImages.color(of: "f")), "\(String(describing: used[5]))")
-        XCTAssertEqual(h.images.state.get().fallbackWrites, 1)
+        XCTAssertEqual(used, [1: Self.rgb(Self.fill(1, ids, target)), 5: Self.rgb(Self.fill(5, ids, target))])
 
-        // layout.json 里只有兜底格带 "fb"
         let json = String(decoding: try Data(contentsOf: h.workDir(id).appendingPathComponent(FileWorksStore.layoutFileName)), as: UTF8.self)
-        XCTAssertEqual(json.components(separatedBy: "\"fb\":true").count - 1, 2)
+        XCTAssertEqual(json.components(separatedBy: "\"fc\":").count - 1, 2)
+        XCTAssertFalse(json.contains("\"fb\""))
         h.controller.stop()
 
-        // 重开：从磁盘读回的兜底图与写入时一致
         let fresh = FileWorksStore(directory: h.dir, images: h.images)
         let reloaded = try await fresh.load(id)
         XCTAssertEqual(reloaded.layout, work.layout)
         let tiles = await fresh.fallbackTiles(for: id, transientCells: [])
         XCTAssertEqual(tiles.mapValues(FakeWorkImages.average), used)
-        XCTAssertEqual(tiles[1].map { [$0.width, $0.height] }, [FakeWorkImages.cellPixels, FakeWorkImages.cellPixels])
     }
 
-    /// 重导出（含杀掉 App 重开后）用存盘的兜底图放大填充，不出白格；不重新裁、不重画预览、不再提示。
-    func testReexportUsesStoredFallback() async throws {
+    /// 重导出（含杀掉 App 重开后）用布局里存的颜色填充，不出白格；不重画预览、不再提示。
+    func testReexportUsesStoredFillColor() async throws {
         let h = Harness()
         let id = try await h.save(["a", "b", "c"], target: try smallTarget())
         await h.controller.start()
@@ -141,10 +148,13 @@ final class WorksFallbackTests: XCTestCase {
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         let previews = h.images.state.get().previews
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertNil(h.controller.state.missingLine, "再导出：不再提示")
-        XCTAssertEqual(h.exporter.calls.last?.0, sampleFallbackLayout(["a", "b", ""]))
-        XCTAssertTrue(Self.close(h.exporter.fallbacks.last?[2], FakeWorkImages.color(of: "c")))
-        XCTAssertEqual(h.exporter.fallbacks.last?.count, 1)
+        XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]),
+                       "同一次查看里马上导出：没有新变化，提示保留到自动消失（QA Q1 门禁）")
+        h.controller.dismissCellNotice()
+        await h.controller.exportOpenedTapped(purpose: .save)
+        XCTAssertNil(h.controller.state.missingLine, "消失后再导出：不再提示")
+        XCTAssertEqual(h.exporter.calls.last?.0, sampleColorLayout(["a", "b", ""], color: smallTargetColor))
+        XCTAssertEqual(h.exporter.fallbacks.last, [2: Self.rgb(smallTargetColor)])
         h.controller.stop()
 
         let (c2, e2) = h.relaunched()
@@ -152,96 +162,85 @@ final class WorksFallbackTests: XCTestCase {
         await c2.open(id)
         XCTAssertNil(c2.state.missingLine, "重开：不再提示")
         await c2.exportOpenedTapped(purpose: .share)
-        XCTAssertEqual(e2.fallbacks.last, h.exporter.fallbacks.last, "重开后导出用同一份兜底图")
+        XCTAssertEqual(e2.fallbacks.last, h.exporter.fallbacks.last, "重开后导出同一颜色")
         XCTAssertEqual(h.images.state.get().previews, previews, "没有再重画预览")
-        XCTAssertEqual(h.images.state.get().fallbackWrites, 1, "没有再裁一次")
+        XCTAssertEqual(h.images.state.get().fallbackWrites, 0)
 
-        // 再导出成功 → 自动保存按指纹查重命中（布局里的 fb 标记也在指纹里，一致）
         await c2.exportSucceeded(layout: try XCTUnwrap(e2.calls.last?.0))
         let count = await h.store.list().count
-        XCTAssertEqual(count, 1)
+        XCTAssertEqual(count, 1, "再导出成功 → 自动保存按指纹查重命中")
         c2.stop()
     }
 
-    /// 兜底格之后又有一张兜底、一张升级：仍兜底的直接搬旧兜底图（不从新预览二次裁），新兜底的从当前预览裁，
-    /// 升级的那格兜底图删掉；旧兜底图文件换掉。
-    func testFallbackKeptMovedAndUpgraded() async throws {
+    /// 纯色格之后一格升级、一格仍空、一格新空：仍空的颜色不变，新空的填目标色，升级的去掉颜色；始终没有兜底图。
+    func testFillKeptAndUpgraded() async throws {
         let dir = makeTempDir()
         let images = FakeWorkImages()
         let store = FileWorksStore(directory: dir, images: images)
-        let id = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c"]), target: try Self.gradientTarget(),
+        let ids = ["a", "b", "c"]
+        let target = try Self.gradientTarget()
+        let id = try await store.save(WorkDraft(layout: sampleLayout(ids), target: target,
                                                 overlayAlpha: 0.2, origin: .savedManually)).summary.id
         let w1 = try await store.dropMissingPhotos(["a", "b"], for: id, reasons: ["a": .deleted, "b": .deleted])
-        XCTAssertEqual(w1.layout, sampleFallbackLayout(["", "", "c"]))
-        let first = try XCTUnwrap(w1.meta.fallbackFile)
-        let tiles1 = await store.fallbackTiles(for: id, transientCells: []).mapValues(FakeWorkImages.average)
+        XCTAssertEqual(w1.layout.cellAssignments.map(\.fill), [Self.fill(0, ids, target), Self.fill(1, ids, target), nil])
+        XCTAssertNil(w1.meta.fallbackFile)
 
-        // 格 0 升级成照片 x，格 1 仍兜底，格 2（c）这次也找不到替代
         var next = w1.layout
         next.cellAssignments[0] = .init(localIdentifier: "x")
         next.cellAssignments[2] = .init(localIdentifier: "")
         let w2 = try await store.applyRematch(WorkRematchResult(layout: next, replacedCells: 1, blankCells: 2, droppedPhotos: 1),
                                               base: w1.layout, for: id, reasons: ["c": .deleted])
         XCTAssertEqual(w2.layout.cellAssignments.map(\.localIdentifier), ["x", "", ""])
-        XCTAssertEqual(w2.layout.cellAssignments.map(\.fallback), [false, true, true])
-        let second = try XCTUnwrap(w2.meta.fallbackFile)
-        XCTAssertNotEqual(second, first)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent(id.directoryName).appendingPathComponent(first).path),
-                       "旧兜底图删掉")
-        let tiles2 = await store.fallbackTiles(for: id, transientCells: []).mapValues(FakeWorkImages.average)
-        XCTAssertEqual(Set(tiles2.keys), [1, 2], "升级的格 0 没有兜底图了")
-        XCTAssertEqual(tiles2[1], tiles1[1], "仍兜底的格子原样搬过来（逐位一致，不二次裁切）")
-        XCTAssertTrue(Self.close(tiles2[2], FakeWorkImages.color(of: "c")))
+        XCTAssertEqual(w2.layout.cellAssignments.map(\.fill), [nil, Self.fill(1, ids, target), Self.fill(2, ids, target)])
+        XCTAssertEqual(w2.layout.cellAssignments.map(\.fallback), [false, false, false])
+        XCTAssertNil(w2.meta.fallbackFile)
         XCTAssertEqual(w2.meta.fallbackCellCount, 3, "按格累计：a、b、c")
         XCTAssertEqual(w2.meta.replacedCellCount, 1)
 
-        // 全部升级：没有兜底格了，兜底图删掉、meta 不再指向它
         var all = w2.layout
         all.cellAssignments[1] = .init(localIdentifier: "y")
         all.cellAssignments[2] = .init(localIdentifier: "z")
         let w3 = try await store.applyRematch(WorkRematchResult(layout: all, replacedCells: 2, blankCells: 0, droppedPhotos: 0),
                                               base: w2.layout, for: id)
-        XCTAssertNil(w3.meta.fallbackFile)
         XCTAssertEqual(w3.layout, sampleLayout(["x", "y", "z"]))
         let names = try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent(id.directoryName).path)
         XCTAssertFalse(names.contains { $0.hasPrefix("fallback") })
         XCTAssertEqual(w3.meta.fallbackCellCount, 3, "累计不回退")
+        XCTAssertEqual(images.state.get().fallbackWrites, 0)
     }
 
-    /// 没有旧预览（读不出）时才留白：格子不标兜底、不写兜底图，照样按格计数、提示一次。
-    func testNoOldPreviewLeavesBlank() async throws {
+    /// 旧预览读不出来也无所谓：补格本来就不读它，删除格照样填目标色、提示一次，导出同一颜色。
+    func testUnreadableOldPreviewDoesNotMatter() async throws {
         let h = Harness()
-        let id = try await h.save(["a", "b", "c"])
+        let id = try await h.save(["a", "b", "c"], target: try smallTarget())
         await h.controller.start()
         let preview = try XCTUnwrap(h.controller.state.summaries.first?.previewURL)
         try Data("not an image".utf8).write(to: preview)
         h.existence.delete("b")
         await h.controller.open(id)
         let work = try XCTUnwrap(h.controller.openedWork)
-        XCTAssertEqual(work.layout, sampleLayout(["a", "", "c"]))
-        XCTAssertFalse(work.layout.cellAssignments[1].fallback)
+        XCTAssertEqual(work.layout, sampleColorLayout(["a", "", "c"], color: smallTargetColor))
         XCTAssertNil(work.meta.fallbackFile)
-        XCTAssertEqual(h.images.state.get().fallbackWrites, 0)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         XCTAssertEqual(work.meta.fallbackCellCount, 1)
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.exporter.fallbacks.last, [:], "没有兜底图可用，这格导出留白")
+        XCTAssertEqual(h.exporter.fallbacks.last, [1: Self.rgb(smallTargetColor)])
         h.controller.stop()
     }
 
-    /// 写兜底图失败：作品原样（布局、meta、预览都不变），不留临时文件、不留孤儿文件，不提示；下次打开再做。
-    func testFallbackWriteFailureKeepsWorkIntact() async throws {
+    /// 重画预览失败：作品原样（布局、meta、文件都不变），不留临时文件，不提示；下次打开再做。
+    func testPreviewWriteFailureKeepsWorkIntact() async throws {
         let h = Harness()
-        let id = try await h.save(["a", "b", "c"])
+        let id = try await h.save(["a", "b", "c"], target: try smallTarget())
         await h.controller.start()
         let filesBefore = try h.files(id)
         let metaBefore = try Data(contentsOf: h.workDir(id).appendingPathComponent(FileWorksStore.metaFileName))
-        h.images.state.update { $0.failAt = .fallback }
+        h.images.state.update { $0.failAt = .preview }
         h.existence.delete("b")
         await h.controller.open(id)
         XCTAssertNil(h.controller.state.missingLine)
         XCTAssertEqual(try h.files(id), filesBefore)
-        XCTAssertEqual(try Data(contentsOf: h.workDir(id).appendingPathComponent(FileWorksStore.metaFileName)).count, metaBefore.count)
+        XCTAssertEqual(try Data(contentsOf: h.workDir(id).appendingPathComponent(FileWorksStore.metaFileName)).count, metaBefore.count, "只记待处理数")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: h.dir.path).filter { $0.hasPrefix(".") }, [])
         let onDisk = try await h.store.load(id)
         XCTAssertEqual(onDisk.layout, sampleLayout(["a", "b", "c"]))
@@ -249,7 +248,7 @@ final class WorksFallbackTests: XCTestCase {
         h.images.state.update { $0.failAt = nil }
         h.controller.close()
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.openedWork?.layout, sampleFallbackLayout(["a", "", "c"]))
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "", "c"], color: smallTargetColor))
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         h.controller.stop()
     }

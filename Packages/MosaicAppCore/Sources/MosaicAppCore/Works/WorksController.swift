@@ -82,12 +82,42 @@ public struct OpenedWork: Sendable, Hashable {
     }
 }
 
+/// 列表缩略图 / 查看页显示什么（产品 04:00 Q2 修订、架构师 11-17 A）。
+public enum WorkPreviewDisplay: Sendable, Hashable {
+    /// 解码保存的预览。
+    case preview(URL)
+    /// 旧版兜底还没迁移（预览可能带隐藏照片的像素）：占位，迁移重画后再显示。
+    case migrating
+    /// 不是完整相册权限：占位（查看页加 `works.limited_placeholder` +「去设置」），**不读、不解码**任何预览文件。
+    case limitedAccess
+}
+
 /// 作品相关的全部可观察状态（值类型）。
 public struct WorksState: Sendable, Hashable {
+    /// 当前不是完整相册权限（受限 / 无权限 / 还不知道）。默认 true（保守：`start()` 读到权限前不显示任何预览），
+    /// `start()` 和回到前台（`refreshLibraryAccess()`）时重读。
+    public var limitedAccess = true { didSet { stampAccess() } }
     /// 按保存时间倒序。
-    public var summaries: [WorkSummary] = []
+    public var summaries: [WorkSummary] = [] { didSet { stampAccess() } }
     public var isLoaded = false
-    public var opened: OpenedWork?
+    public var opened: OpenedWork? { didSet { stampAccess() } }
+    /// 查看页占位说明（受限访问时 = `works.limited_placeholder`，配「去设置」`works.limited_note.settings`）；否则 nil。
+    public private(set) var viewerPlaceholderKey: L10nKey?
+
+    /// 把当前权限打到每个 summary 上（`WorkSummary.showsPlaceholder`），并更新查看页占位说明。
+    private mutating func stampAccess() {
+        let limited = limitedAccess
+        if summaries.contains(where: { $0.accessRestricted != limited }) {
+            summaries = summaries.map { var s = $0; s.accessRestricted = limited; return s }
+        }
+        if let o = opened, o.summary.accessRestricted != limited {
+            var o2 = o
+            o2.summary.accessRestricted = limited
+            opened = o2
+        }
+        let key: L10nKey? = (opened != nil && limited) ? .worksLimitedPlaceholder : nil
+        if viewerPlaceholderKey != key { viewerPlaceholderKey = key }
+    }
     /// 删除二次确认弹窗（`works.delete.confirm`）对应的作品。
     public var pendingDelete: WorkID?
     public var saveStatus: WorkSaveStatus = .idle
@@ -104,6 +134,22 @@ public struct WorksState: Sendable, Hashable {
     public var saveButtonKey: L10nKey { saveStatus.buttonKey }
     /// 结果页「存到我的作品」按钮能不能点（QA A12，= `saveStatus.isEnabled`；平台层另外在导出中置灰）。
     public var isSaveButtonEnabled: Bool { saveStatus.isEnabled }
+    /// 先看权限、再看作品（不逐张查照片）：受限 → 占位；旧版兜底没迁移 → 占位；否则显示保存的预览。
+    public func previewDisplay(for summary: WorkSummary) -> WorkPreviewDisplay {
+        if limitedAccess { return .limitedAccess }
+        if summary.showsPlaceholder { return .migrating }
+        return .preview(summary.previewURL)
+    }
+
+    /// 读预览文件的唯一入口（列表缩略图、查看页都走这里）：只有 `.preview` 时才调 `decode`。
+    public func decodePreview<T>(for summary: WorkSummary, _ decode: (URL) -> T?) -> T? {
+        guard case .preview(let url) = previewDisplay(for: summary) else { return nil }
+        return decode(url)
+    }
+
+    /// 查看页当前该显示什么（没有打开的作品时 nil）。
+    public var openedPreviewDisplay: WorkPreviewDisplay? { opened.map { previewDisplay(for: $0.summary) } }
+
     /// 列表底部常驻提示（需求 B8）。
     public static let keepHintKey = L10nKey.worksKeepHint
     /// 查看页的兜底提示（`works.missing`，参数：格数；只出一次）。
@@ -269,7 +315,17 @@ public final class WorksController {
     /// 启动：清掉上次被杀留下的半截目录，再读列表。
     public func start() async {
         await store.removeIncomplete()
+        state.limitedAccess = !(await existence.canConfirmMissing())
         await reload()
+    }
+
+    /// 回到前台时重读相册权限（产品 04:00 Q2）：变了就刷新列表；变成完整权限且查看页开着，重新打开一次（这时才做缺图处理 / 迁移）。
+    public func refreshLibraryAccess() async {
+        let limited = !(await existence.canConfirmMissing())
+        guard limited != state.limitedAccess else { return }
+        state.limitedAccess = limited
+        await reload()
+        if !limited, let id = state.opened?.id { await open(id) }
     }
 
     public func reload() async {
@@ -387,7 +443,17 @@ public final class WorksController {
     public func open(_ id: WorkID) async {
         openToken += 1
         let token = openToken
+        // 打开时也重读一次权限（设置里改了权限、还没收到回到前台）：决定查看页占位，不逐张查
+        let limited = !(await existence.canConfirmMissing())
+        guard token == openToken else { return }
+        if limited != state.limitedAccess {
+            state.limitedAccess = limited
+            await reload()
+            guard token == openToken else { return }
+        }
         do {
+            // 先清掉这个作品目录里 meta 没登记的预览 / 兜底图（架构师 11-17 D-a）
+            await store.removeOrphans(for: id)
             let work = try await store.load(id)
             guard token == openToken else { return }
             openedWork = work
@@ -506,8 +572,9 @@ public final class WorksController {
         let reasons = await missingAssets(work.layout)
         let missing = Set(reasons.keys)
         if Task.isCancelled { return nil }
-        // 旧版兜底（fallbackVersion < 2）：整体作废旧兜底图、重新走一遍，重画预览（不需要完整权限：不动缺失照片的格子）
-        let migrate = work.meta.needsFallbackMigration
+        // 旧版兜底（还登记着兜底图 / v1 兜底格）：整体作废旧兜底图、重新走一遍，重画预览。
+        // meta 已提交、layout.json 没写成（D-b，指纹对不上）：同样按待处理，重新走一遍写回（不读旧文件：纯色只看目标图副本）。
+        let migrate = work.meta.needsFallbackMigration || work.isLayoutOutOfSync
         // 之前兜底 / 留白的格子（找不到替代）：有补格器时再试一次，补上了按 works.replaced 提示一次。
         // P3：同一布局重找过一次没找到，相册没变化之前不再重找（`libraryDidChange` 清记录；重开 App 也会再试一次）。
         let hasBlanks = work.layout.cellAssignments.contains { $0.localIdentifier.isEmpty }
@@ -521,10 +588,10 @@ public final class WorksController {
                                          pendingCells: pendingCells, pendingReasons: pendingReasons)
         let nothingToDo = ReconcileOutcome(work: work, replaced: 0, missingShown: 0, pending: 0)
         guard !missing.isEmpty || retryBlanks || migrate else { return nothingToDo }
+        // 受限访问 / 无权限：**绝不改写作品**（产品 04:00 Q2、架构师 A），迁移也等拿到完整权限再做；这期间列表 / 查看页都是占位。
         let canConfirm = await existence.canConfirmMissing()
-        guard canConfirm || migrate else { return unchanged }
-        // 受限访问时只做迁移：缺失照片的格子不动（没选进来的照片也取不到，不能当成没了）
-        let fix = canConfirm ? missing : []
+        guard canConfirm else { return unchanged }
+        let fix = missing
         var targets = fix
         if retryBlanks { targets.insert("") }   // "" = 兜底 / 留白格，一起重新找
         var result = WorkRematchResult.allBlank(work.layout, missing: fix)
@@ -536,7 +603,7 @@ public final class WorksController {
             } catch is CancellationError {
                 return nil
             } catch WorkRematchError.indexUnavailable {
-                if !migrate { return unchanged }   // 索引还没好：不改作品，下次打开再补（迁移照做：旧预览不能再显示）
+                if !migrate { return unchanged }   // 索引还没好：不改作品，下次打开再补（迁移照做：旧预览不能再显示；缺失格填色）
             } catch {
                 // 补格本身出错：退回兜底（隐藏照片照样不会再出现）
             }
@@ -546,7 +613,7 @@ public final class WorksController {
         do {
             // 找不到相近照片的格子按 `MissingCellFill.decide(reason:)` 补：deleted → 旧预览裁切；hidden / unknown → 目标平均色
             let updated = try await store.applyRematch(result, base: work.layout, for: work.id,
-                                                       reasons: canConfirm ? reasons : [:], migrateFallbacks: migrate)
+                                                       reasons: reasons, migrateFallbacks: migrate)
             if retryBlanks, updated.layout.cellAssignments.contains(where: { $0.localIdentifier.isEmpty }) {
                 settledBlankRetries[work.id] = WorkFingerprint.of(updated.layout)
             }
@@ -557,9 +624,7 @@ public final class WorksController {
             let base = work.layout.cellAssignments, now = updated.layout.cellAssignments
             let newlyUnfilled = base.indices.filter { !base[$0].localIdentifier.isEmpty && now[$0].localIdentifier.isEmpty }.count
             return ReconcileOutcome(work: updated, replaced: result.replacedCells, missingShown: newlyUnfilled,
-                                    pending: canConfirm ? 0 : missing.count,
-                                    pendingCells: canConfirm ? [] : pendingCells,
-                                    pendingReasons: canConfirm ? [:] : pendingReasons)
+                                    pending: 0)
         } catch {
             return unchanged
         }
@@ -578,8 +643,14 @@ public final class WorksController {
         var updated = work
         updated.summary = summary
         openedWork = updated
+        let isNew = outcome.missingShown > 0 || outcome.replaced > 0
+        if !isNew, let current = state.opened, current.id == work.id {
+            // 这次没有新变化（如打开后马上导出）：本次查看里还没消失的提示保留到自动消失，不提前清掉、也不重新计时
+            state.opened = OpenedWork(summary: summary, missingCount: current.missingCount ?? 0, replacedCount: current.replacedCount)
+            return
+        }
         state.opened = OpenedWork(summary: summary, missingCount: outcome.missingShown, replacedCount: outcome.replaced)
-        if outcome.missingShown > 0 || outcome.replaced > 0 { scheduleCellNoticeDismiss(for: work.id) }
+        if isNew { scheduleCellNoticeDismiss(for: work.id) }
     }
 
     // MARK: 再导出
