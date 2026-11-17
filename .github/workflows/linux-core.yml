@@ -147,9 +147,6 @@ jobs:
     env:
       MOSAIC_PERF_GATE: "1"
       MOSAIC_PERF_REPEAT: "5"
-      # 临时自检：两次都把 gen_coarse ×2（期望失败），演示重测路径；PR 前删除
-      PERF_GATE_SELFTEST_INFLATE: "runner_gen_coarse_1536x1152_2k:2"
-      PERF_GATE_SELFTEST_PASSES: "1,2"
     steps:
       - uses: actions/checkout@v4
 
@@ -213,3 +210,32 @@ jobs:
             perf-packages.json
             perf-failed.json
             perf-log.txt
+
+  # ⚠️ 临时实验（PR 前删除）：同一 runner 上交错测 230002d（基线代码）/ 0838ac9（#18）/ 78ce569 的 MosaicAppCore E2E 门禁。
+  perf-ab:
+    name: perf A/B experiment (temporary) ${{ matrix.idx }}
+    runs-on: ubuntu-latest
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        idx: [1, 2, 3, 4, 5, 6]
+    env:
+      MOSAIC_PERF_GATE: "1"
+      MOSAIC_PERF_REPEAT: "5"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: A/B
+        run: |
+          git config --global --add safe.directory "$PWD"
+          apt-get update -qq && apt-get install -y -qq python3 >/dev/null
+          bash scripts/perf-ab-experiment.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-ab-${{ matrix.idx }}
+          path: ab/
+          if-no-files-found: ignore
