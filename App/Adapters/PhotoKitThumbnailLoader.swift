@@ -12,7 +12,7 @@ import MosaicAppCore
 /// - 回调：`.opportunistic` 可能先给 degraded 再给正式版；都转发给 handler（主线程）。正式版是 nil 而之前已给过图时，
 ///   不再转发 nil（不把格子清空）。本机没有就是 `image == nil`，不弹任何提示（§5.2）。
 /// - 取消：`cancel` 后即使 PhotoKit 还有迟到的回调也不再转发（cell 已复用给别的照片）。
-/// - 按 ID 找 `PHAsset` 走 `PhotoFetch.images(withLocalIdentifiers:)`（隐藏照片取不到），结果放一个小缓存；
+/// - 按 ID 找 `PHAsset` 走 `PhotoFetch.visibleImages(withLocalIdentifiers:)`（取回后再滤 isHidden），结果放一个小缓存；
 ///   相册一有变化就清空缓存，避免拿着已隐藏 / 已删除照片的旧 `PHAsset` 继续请求图。
 /// - 素材扫描的 `PhotoKitThumbnails`（128 px、`.fastFormat`，actor 隔离）仍用它自己的 manager，参数不同，混用只会互相挤缓存。
 /// ⚠️ 盲写（Linux 只做 swiftc -parse）。
@@ -103,17 +103,21 @@ final class PhotoKitThumbnailLoader: GridThumbnailLoading {
 
     // MARK: 按 ID 取 PHAsset
 
-    /// 缓存命中的直接用，没命中的一次批量取（走 PhotoFetch，隐藏 / 删除的照片取不到，自然被丢掉）。
+    /// 缓存命中的直接用，没命中的一次批量取（走 PhotoFetch.visibleImages，隐藏 / 删除的照片取不到）。
+    /// 读缓存时再看一遍 isHidden，避免相册变化监听之前把已隐藏的照片交出去。
     private func assets(_ ids: [String]) -> [PHAsset] {
         observeChangesIfNeeded()
         let missing = ids.filter { assetCache[$0] == nil }
         if !missing.isEmpty {
             if assetCache.count + missing.count > Self.assetCacheLimit { assetCache.removeAll(keepingCapacity: true) }
-            for a in PhotoKitLibrary.array(PhotoFetch.images(withLocalIdentifiers: missing)) {
+            for a in PhotoFetch.visibleImages(withLocalIdentifiers: missing) {
                 assetCache[a.localIdentifier] = a
             }
         }
-        return ids.compactMap { assetCache[$0] }
+        return ids.compactMap { id in
+            guard let a = assetCache[id], !a.isHidden else { return nil }
+            return a
+        }
     }
 
     private func observeChangesIfNeeded() {

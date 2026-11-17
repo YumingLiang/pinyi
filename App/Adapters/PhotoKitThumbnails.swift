@@ -36,7 +36,7 @@ actor PhotoKitThumbnails: ThumbnailProviding {
     }
 
     func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {
-        guard let asset = assets([assetID]).first else { return .failed }
+        guard let asset = assets([assetID]).first else { return .missing }
         let size = CGSize(width: request.targetPixelSize, height: request.targetPixelSize)
         let opts = options(request)
         let mode: PHImageContentMode = request.aspectFill ? .aspectFill : .aspectFit
@@ -66,6 +66,49 @@ actor PhotoKitThumbnails: ThumbnailProviding {
         }
     }
 
+    /// 结果页预览清晰层专用：和 `thumbnail(for:request:)` 一样（同一个 `PHCachingImageManager`、不联网、
+    /// 照片经 `PhotoFetch` 取，隐藏照片取不到），另外在 Task 被取消时调 `cancelImageRequest`，让 PhotoKit 立刻停止解码。
+    /// 扫描 / 导出不走这里，行为不变。
+    func cancellableThumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {
+        if Task.isCancelled { return .failed }
+        guard let asset = assets([assetID]).first else { return .missing }
+        let size = CGSize(width: request.targetPixelSize, height: request.targetPixelSize)
+        let opts = options(request)
+        let mode: PHImageContentMode = request.aspectFill ? .aspectFill : .aspectFit
+        let fast = opts.deliveryMode == .fastFormat
+        let token = ImageRequestToken(manager: manager)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (cont: CheckedContinuation<ThumbnailResult, Never>) in
+                let once = ResumeOnce(cont)
+                let id = manager.requestImage(for: asset, targetSize: size, contentMode: mode, options: opts) { @Sendable image, info in
+                    let inCloud = (info?[PHImageResultIsInCloudKey] as? NSNumber)?.boolValue ?? false
+                    let degraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
+                    let cancelled = (info?[PHImageCancelledKey] as? NSNumber)?.boolValue ?? false
+                    if cancelled {
+                        once.resume(.failed)
+                    } else if let image, let cg = image.cgImage {
+                        if degraded && !fast { return }   // 等最终图
+                        let pixels = request.centerCropToSquare
+                            ? ImagePixels.opaqueSRGBCenteredSquare(cg, maxEdge: request.targetPixelSize)
+                            : ImagePixels.opaqueSRGB(cg, maxEdge: request.targetPixelSize)
+                        once.resume(pixels.map { .image($0) } ?? .failed)
+                    } else if inCloud {
+                        once.resume(.unavailableLocal)
+                    } else if info?[PHImageErrorKey] != nil {
+                        once.resume(.failed)
+                    } else {
+                        once.resume(.unavailableLocal)
+                    }
+                }
+                // 取消可能早于拿到 requestID：token 记下后若已取消会立刻 cancel。cancel 后 PhotoKit 会带
+                // PHImageCancelledKey 回调一次，上面 resume(.failed)；ResumeOnce 防二次 resume。
+                token.set(id)
+            }
+        } onCancel: {
+            token.cancel()
+        }
+    }
+
     func startCaching(_ assetIDs: [String], request: ThumbnailRequest) async {
         let size = CGSize(width: request.targetPixelSize, height: request.targetPixelSize)
         manager.startCachingImages(for: assets(assetIDs), targetSize: size, contentMode: .aspectFill, options: options(request))
@@ -91,5 +134,29 @@ final class ResumeOnce<T: Sendable>: Sendable {
             return c
         }
         c?.resume(returning: v)
+    }
+}
+
+/// `PHImageRequestID` + 取消标志（清晰层取消用）。`PHImageManager` 文档说明可跨线程调用，所以 `@unchecked Sendable`。
+final class ImageRequestToken: @unchecked Sendable {
+    private let manager: PHImageManager
+    private let state = LockedState<(id: PHImageRequestID?, cancelled: Bool)>((nil, false))
+
+    init(manager: PHImageManager) { self.manager = manager }
+
+    func set(_ id: PHImageRequestID) {
+        let cancelNow = state.withLock { s -> Bool in
+            s.id = id
+            return s.cancelled
+        }
+        if cancelNow { manager.cancelImageRequest(id) }
+    }
+
+    func cancel() {
+        let id = state.withLock { s -> PHImageRequestID? in
+            s.cancelled = true
+            return s.id
+        }
+        if let id { manager.cancelImageRequest(id) }
     }
 }
