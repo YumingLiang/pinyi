@@ -165,7 +165,8 @@ def _judged_ratio(row):
 def check(args):
     """退出码：0 = 通过；1 = 失败（回归在两次测量里都超限，或指标缺失）；2 = 用法 / 输入错误（argparse / 异常）。
     只给 --results（第 1 次）时：有回归即退出 1，并把可重测的指标写到 --failed-out，由 CI 决定是否重测。
-    同时给 --retry-results（第 2 次）时：第 1 次超限的指标，只有第 2 次也超限（或第 2 次没跑出来）才算失败。"""
+    同时给 --retry-results（第 2 次）时：第 1 次超限的指标，把两次的样本合在一起（5 + 5 = 10 个）取中位数再判一次；
+    合并后仍超限（或第 2 次没跑出来）才算失败。缺失的指标不重测、直接失败。"""
     base = load_baseline(args.baseline)
     [(meta1, s1)] = load_results([args.results])
     info1, rows1 = evaluate(base, meta1, s1)
@@ -190,45 +191,62 @@ def check(args):
         if missing:
             out.append(f"**失败（缺失，不重测）：{', '.join(missing)}**。")
         if regressed:
-            out.append(f"**第 1 次超限：{', '.join(regressed)}**（CI 会对所在包自动重测一次；两次都超限才算失败）。")
+            out.append(f"**第 1 次超限：{', '.join(regressed)}**（CI 会对所在包自动重测一次，两次样本合并取中位数再判）。")
     else:
         [(meta2, s2)] = load_results([args.retry_results])
         calib = base.get("calibration_metric")
-        if calib and calib not in s2 and calib in s1:
+        calib_reused = bool(calib and calib not in s2 and calib in s1)
+        if calib_reused:
             # 只重测了不含 calib 的包（例如 MosaicAppCore）：同一台 VM，沿用第 1 次的 calib 做归一化。
             s2 = {**s2, calib: s1[calib]}
         meta2 = meta2 or meta1
         info2, rows2 = evaluate(base, meta2, s2)
         by2 = {r["metric"]: r for r in rows2}
+        # 合并判定：第 1 次超限且第 2 次跑出来的指标，两次样本合并取中位数（calib 同样合并），对照同一基线再判一次。
+        pooled = {m: s1[m] + s2[m] for m in regressed if m in s2}
+        if calib and calib in s1:
+            pooled[calib] = s1[calib] + ([] if calib_reused else s2.get(calib, []))
+        _, rowsp = evaluate(base, meta1, pooled)
+        byp = {r["metric"]: r for r in rowsp}
         confirmed = []
         for m in regressed:
-            r2 = by2.get(m)
-            if r2 is None or r2["kind"] in ("bad", "missing"):
+            rp = byp.get(m)
+            if m not in s2 or rp is None or rp["kind"] in ("bad", "missing"):
                 confirmed.append(m)
         failed += confirmed
         out.append(_info_line(info1, "第 1 次 "))
         out.append(_info_line(info2, "第 2 次 "))
         out.append("")
-        out.append("判定：第 1 次超限的指标在同一 job 里重测一次，**两次都超限才失败**；第 1 次通过的指标不重测。")
+        out.append("判定：第 1 次超限的指标在同一 job 里重测一次，**两次样本合并（10 个）取中位数再判**，仍超限才失败；第 1 次通过的指标不重测。")
         out.append("")
-        out.append("| 指标 | 对照 | 基线 ms | 第 1 次中位数 ms | 第 1 次比值 | 第 2 次中位数 ms | 第 2 次比值 | 结论 |")
-        out.append("|---|---|---:|---:|---:|---:|---:|---|")
+        out.append("| 指标 | 对照 | 基线 ms | 第 1 次中位数 ms | 第 1 次比值 | 第 2 次中位数 ms | 第 2 次比值 | 合并中位数 ms | 合并比值 | 结论 |")
+        out.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---|")
         for r in rows1:
             m = r["metric"]
             retried = m in s2 and (m in regressed or m != calib)
             if r["kind"] == "missing":
                 verdict = "❌ 缺失（不重测）"
             elif m in regressed:
-                verdict = "❌ 两次都超限" if m in confirmed else "✅ 第 1 次超限、重测通过（视为抖动）"
+                r2b = by2.get(m)
+                if m not in confirmed:
+                    verdict = "✅ 第 1 次超限、重测通过（合并中位数未超限，视为抖动）"
+                elif m not in s2:
+                    verdict = "❌ 第 2 次缺失"
+                elif r2b is not None and r2b["kind"] == "bad":
+                    verdict = "❌ 两次都超限（合并中位数超限）"
+                else:
+                    verdict = "❌ 合并中位数超限（第 2 次单独未超限）"
             else:
                 verdict = _status(r)
             r2v = by2.get(m) if retried else None
+            rp = byp.get(m) if (m in regressed and m in s2) else None
             out.append(f"| `{m}` | {r['ref'] or '—'} | {_f(r['base_ms'], '{:.1f}')} | {_f(r['med'], '{:.1f}')} | "
                        f"{_f(_judged_ratio(r), '×{:.3f}') if r['ratio'] is not None else '—'} | "
                        f"{_f(r2v and r2v['med'], '{:.1f}') if retried else '（未重测）'} | "
-                       f"{(_f(_judged_ratio(r2v), '×{:.3f}') if r2v and r2v['ratio'] is not None else '—') if retried else '—'} | {verdict} |")
+                       f"{(_f(_judged_ratio(r2v), '×{:.3f}') if r2v and r2v['ratio'] is not None else '—') if retried else '—'} | "
+                       f"{_f(rp['med'], '{:.1f}') if rp else '—'} | {_f(_judged_ratio(rp), '×{:.3f}') if rp and rp['ratio'] is not None else '—'} | {verdict} |")
         out.append("")
-        out.append("比值列为判定口径的比值（有 calib 时为归一化比值）。")
+        out.append("比值列为判定口径的比值（有 calib 时为归一化比值）；合并列 = 两次样本合在一起的中位数（calib 也合并），失败与否只看合并列。")
         if failed:
             out.append(f"**失败：{', '.join(failed)}**。")
         elif regressed:
@@ -351,7 +369,7 @@ def main():
     c.add_argument("--results", required=True)
     c.add_argument("--baseline", default=DEFAULT_BASELINE)
     c.add_argument("--summary")
-    c.add_argument("--retry-results", help="同一 job 内重测的结果（第 2 次）；给了就按「两次都超限才失败」判定")
+    c.add_argument("--retry-results", help="同一 job 内重测的结果（第 2 次）；给了就把第 1 次超限指标的两次样本合并取中位数再判")
     c.add_argument("--failed-out", help="把第 1 次的 {regressed, missing} 写成 JSON（CI 据此决定重测哪些包）")
     u = sub.add_parser("update")
     u.add_argument("--results", nargs="+", required=True)

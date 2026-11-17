@@ -137,7 +137,7 @@ jobs:
   # 稳定后设为 feat/app-layer 的 required check。与上面的 A-21（全量 bench，只记录）分开：这里只跑少量门禁指标。
   # 口径：release；每指标预热 1 次 + 测 MOSAIC_PERF_REPEAT 次取中位数，对照仓库里的 perf/baseline-linux.json，
   # 中位数 > 基线 × ratio 且绝对差 > min_delta_ms 才算超限（数值与依据见 perf/README.md）；
-  # 第 1 次超限的指标在同一 job 里对所在包重测一次，两次都超限才失败（缺失指标直接失败）。
+  # 第 1 次超限的指标在同一 job 里对所在包重测一次，两次样本合并（10 个）取中位数再判，仍超限才失败（缺失指标直接失败）。
   # 收录规则：任何包里名为 *PerfGateTests.swift 的测试文件都会被跑（--filter PerfGateTests），QA 的端到端用例照此接入。
   perf-gate:
     name: Generation perf regression
@@ -163,7 +163,7 @@ jobs:
       - name: 判定脚本自测（合成数据）
         run: python3 scripts/test_perf_gate.py
 
-      # 第 1 次测量所有包；有超限指标时，只对这些指标所在的包在同一 job 里重测一次，两次都超限才失败。
+      # 第 1 次测量所有包；有超限指标时，只对这些指标所在的包在同一 job 里重测一次，两次样本合并取中位数再判一次。
       # 缺失的指标直接失败、不重测。退出码：0 通过 / 1 失败 / 其他 = 脚本或环境错误。
       - name: Run *PerfGateTests (release) + compare with baseline
         shell: bash
