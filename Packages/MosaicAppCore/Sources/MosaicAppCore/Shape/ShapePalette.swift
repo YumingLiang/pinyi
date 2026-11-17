@@ -61,9 +61,10 @@ public enum ShapePaletteBuilder {
 
     // MARK: - 按相册取色（auto）
 
-    /// 近灰阈值：chroma < 0.03 的照片不参与色相分桶。
+    /// 「有彩照片」：OKLab 均值色度 √(a² + b²) ≥ 0.03（设计 v0.1.1 §4-1）；否则算近灰，不参与色相分桶。
     public static let grayChroma: Float = 0.03
-    /// 有彩照片占比低于 30% 时退回按明度的单色渐变。
+    /// 有彩照片占比**严格小于** 30% 时退回按明度的单色渐变；正好 30% 仍按多色走（设计 v0.1.1 §4-3）。
+    /// 判定用整数比较 `有彩 × 10 < 全部 × 3`，避免 0.3 × n 的浮点误差（0.3 × 100 = 30.000000000000004）。
     public static let minColorfulShare = 0.30
     /// 色相桶数。
     public static let hueBuckets = 12
@@ -71,7 +72,8 @@ public enum ShapePaletteBuilder {
     public static let minBucketGap = 2
     /// 最多几个色标。
     public static let maxHueStops = 3
-    /// 一个色相桶至少要占有彩照片的多少才算「主色」（⚠️ 设计未写，见 shape-s2-questions.md Q3）。
+    /// 一个色相桶至少要占有彩照片的 10% 才能当色标（设计 v0.1.1 §4-2 `minStopShare`）。
+    /// 判定用整数 `桶内张数 × 10 ≥ 有彩张数`。
     public static let minStopShare = 0.10
     /// 明度渐变取的分位。
     public static let lightnessQuantiles = (low: 0.20, high: 0.80)
@@ -106,12 +108,13 @@ public enum ShapePaletteBuilder {
     /// 每桶取 L、a、b 中位数作色标，多段插值。只有一个主色相时退成它的深浅渐变；有彩照片不到 30% 时退成明度渐变。
     /// 结果只由照片颜色决定，与种子无关（「换一种拼法」不变色）。
     public static func auto(photoColors: [OKLab]) -> AutoPalette {
+        // 设计 v0.1.1 §4-3：没有可用颜色（快照为空等）→ 中性灰 L 0.45 → 0.80，不报错。
         guard !photoColors.isEmpty else {
             return AutoPalette(gradient: ShapeGradient(stops: [OKLab(L: 0.45, a: 0, b: 0), OKLab(L: 0.80, a: 0, b: 0)]),
                                kind: .empty)
         }
         let colorful = photoColors.filter { chroma($0) >= grayChroma }
-        if Double(colorful.count) < minColorfulShare * Double(photoColors.count) {
+        if colorful.count * 10 < photoColors.count * 3 {
             let ls: [Float] = photoColors.map { $0.L }
             let lo: Float = quantile(ls, lightnessQuantiles.low)
             let hi: Float = quantile(ls, lightnessQuantiles.high)
@@ -121,7 +124,7 @@ public enum ShapePaletteBuilder {
 
         var buckets = [[OKLab]](repeating: [], count: hueBuckets)
         for c in colorful { buckets[hueBucket(c)].append(c) }
-        let minCount = max(1, Int((minStopShare * Double(colorful.count)).rounded(.up)))
+        let minCount = max(1, (colorful.count + 9) / 10)   // ceil(10% × 有彩张数)，整数运算
         let counts: [Int] = buckets.map { $0.count }
         // 照片多的优先；数量相同按桶号（确定）。
         let ranked: [Int] = rankBuckets(counts).filter { counts[$0] >= minCount }
@@ -135,7 +138,7 @@ public enum ShapePaletteBuilder {
             return AutoPalette(gradient: ShapeGradient(stops: stops), kind: .multiHue(count: stops.count))
         }
 
-        // 只有一个主色相（或都太分散）：取最多的那个桶，做这个颜色的深浅渐变。
+        // 设计 v0.1.1 §4-2 单主色：符合条件的桶只有 1 个时，用这个桶做深浅渐变（a、b 取中位数，L 取 20% / 80% 分位）。
         let main: Int = picked.first ?? rankBuckets(counts)[0]
         let cs: [OKLab] = buckets[main]
         let hue = medianColor(cs)
@@ -143,7 +146,7 @@ public enum ShapePaletteBuilder {
         var lo: Float = quantile(ls, lightnessQuantiles.low)
         var hi: Float = quantile(ls, lightnessQuantiles.high)
         if hi - lo < 0.1 {
-            // 明度太集中时拉开一点，保证看得出深浅（仍在合法范围内）。
+            // 设计 v0.1.1 §4-2：两端明度差不到 0.1 时，以中点为中心往两边各拉开 0.1，并限制在 L 0.05–0.95。
             let mid = (lo + hi) / 2
             lo = max(0.05, mid - 0.1)
             hi = min(0.95, mid + 0.1)

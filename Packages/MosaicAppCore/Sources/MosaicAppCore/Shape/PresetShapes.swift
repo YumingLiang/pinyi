@@ -147,15 +147,23 @@ extension ShapePresetID {
 }
 
 extension PresetShapes {
-    /// 花朵：5 片圆形花瓣（一片朝上）+ 花心，左右对称。
+    /// 花朵：5 片椭圆花瓣（沿径向长 40、横向宽 26，一片朝上）+ 花心（半径 16），左右对称。
+    /// 花瓣中心离花心 30（从半径 10 伸到 50），相邻花瓣在半径约 18 以外就分开、互不重叠，只靠花心连在一起，
+    /// 所以花瓣之间的凹口一直凹到花心附近（外缘半径 50 → 约 18），粗档也能数出 5 片（产品 11-17）。
     static func flower() -> ShapePath {
+        var petal = ShapePathBuilder()
+        petal.ellipse(0, 0, 20, 13)   // 长轴沿 x（径向）
         var b = ShapePathBuilder()
-        let petalR = 21.0, dist = 29.0
+        let dist = 30.0
         for k in 0..<5 {
             let angle = (-90 + 72 * Double(k)) * Double.pi / 180
-            b.circle(50 + dist * cos(angle), 50 + dist * sin(angle), petalR)
+            let c = cos(angle), sn = sin(angle)
+            b.append(petal.elements) { p in
+                let x = p.x + dist
+                return ShapePoint(50 + x * c - p.y * sn, 50 + x * sn + p.y * c)
+            }
         }
-        b.circle(50, 50, 22)
+        b.circle(50, 50, 16)
         return b.build()
     }
 }

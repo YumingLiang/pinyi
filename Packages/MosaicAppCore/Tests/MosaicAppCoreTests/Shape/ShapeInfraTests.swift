@@ -99,6 +99,8 @@ final class ShapeInfraTests: XCTestCase {
 
     func testTextModeIsAlwaysFineDensity() throws {
         XCTAssertEqual(ShapeLayoutRules.textDensity, .fine)
+        XCTAssertEqual(ShapeLayoutRules.presetMarginCells, 1, "设计 v0.1.1 §2：预设和文字都是 1 格边距")
+        XCTAssertEqual(ShapeLayoutRules.textMarginCells, 1)
         // 不同宽高比的「文字轮廓」都按长边 120 出网格，且没有可传密度的入口。
         for (aspect, w, h) in [(2.3, 2.3, 1.0), (4.3, 4.3, 1.0), (2.0, 4.3, 2.15), (0.9, 1.0, 1.1)] {
             let o = TextOutline(path: ShapePath(elements: S.square.elements, aspect: aspect), widthEm: w, heightEm: h)
@@ -249,6 +251,67 @@ final class ShapeInfraTests: XCTestCase {
         XCTAssertEqual(auto.gradient.stops[0].a, 0)
         XCTAssertLessThan(auto.gradient.stops[0].L, auto.gradient.stops[1].L)
         XCTAssertEqual(ShapePaletteBuilder.auto(photoColors: []).kind, .empty)
+    }
+
+    /// 有彩照片：chroma ≥ 0.03（正好 0.03 算有彩）。走明度渐变的条件是有彩占比**严格小于** 30%（设计 v0.1.1 §4）。
+    func testColorfulShareBoundaryAt29_30_31Percent() {
+        func album(colorful: Int, total: Int) -> [OKLab] {
+            let hued = S.cluster(hueDegrees: 45, chroma: 0.12, count: colorful, seed: 21)
+            let gray = (0..<(total - colorful)).map { i in OKLab(L: 0.2 + Float(i % 60) / 100, a: 0.01, b: -0.01) }
+            return hued + gray
+        }
+        XCTAssertEqual(ShapePaletteBuilder.auto(photoColors: album(colorful: 29, total: 100)).kind, .lightness, "29%")
+        XCTAssertNotEqual(ShapePaletteBuilder.auto(photoColors: album(colorful: 30, total: 100)).kind, .lightness, "30% 整按多色走")
+        XCTAssertNotEqual(ShapePaletteBuilder.auto(photoColors: album(colorful: 31, total: 100)).kind, .lightness, "31%")
+        // 另一组总数，排除只在 100 张时成立：290 / 300 / 310 ‰。
+        XCTAssertEqual(ShapePaletteBuilder.auto(photoColors: album(colorful: 290, total: 1000)).kind, .lightness)
+        XCTAssertNotEqual(ShapePaletteBuilder.auto(photoColors: album(colorful: 300, total: 1000)).kind, .lightness)
+        XCTAssertNotEqual(ShapePaletteBuilder.auto(photoColors: album(colorful: 310, total: 1000)).kind, .lightness)
+        // 色度边界：0.03 算有彩，0.0299 算近灰。
+        XCTAssertGreaterThanOrEqual(ShapePaletteBuilder.chroma(OKLab(L: 0.5, a: 0.03, b: 0)), ShapePaletteBuilder.grayChroma)
+        XCTAssertLessThan(ShapePaletteBuilder.chroma(OKLab(L: 0.5, a: 0.0299, b: 0)), ShapePaletteBuilder.grayChroma)
+        let edge = [OKLab](repeating: OKLab(L: 0.5, a: 0.03, b: 0), count: 3)
+            + [OKLab](repeating: OKLab(L: 0.5, a: 0, b: 0), count: 7)
+        XCTAssertNotEqual(ShapePaletteBuilder.auto(photoColors: edge).kind, .lightness, "3/10 且色度正好 0.03")
+    }
+
+    /// 色标门槛 10%（设计 v0.1.1 §4-2）：正好 10% 的桶能当色标，不到 10% 的不能。
+    func testStopShareBoundaryAtTenPercent() {
+        // 色相取桶中心（每桶 30°），±8° 抖动不会跨桶。
+        let main = S.cluster(hueDegrees: 45, chroma: 0.12, count: 90, seed: 31)
+        let tenth = S.cluster(hueDegrees: 225, chroma: 0.12, count: 10, seed: 32)   // 10 / 100 = 10%
+        XCTAssertEqual(ShapePaletteBuilder.auto(photoColors: main + tenth).kind, .multiHue(count: 2))
+        let fewer = S.cluster(hueDegrees: 225, chroma: 0.12, count: 9, seed: 33)    // 9 / 99 < 10%
+        XCTAssertEqual(ShapePaletteBuilder.auto(photoColors: main + fewer).kind, .singleHue)
+    }
+
+    /// 单主色明度太集中：以中点为中心各拉开 0.1，并限制在 L 0.05–0.95（设计 v0.1.1 §4-2，e2a3755）。
+    func testSingleHueStretchIsClampedToValidLightness() {
+        func flat(_ l: Float) -> [OKLab] { (0..<200).map { i in OKLab(L: l + Float(i % 3) * 0.001, a: 0.06, b: 0.06) } }
+        let mid = ShapePaletteBuilder.auto(photoColors: flat(0.5))
+        XCTAssertEqual(mid.kind, .singleHue)
+        XCTAssertEqual(mid.gradient.stops[1].L - mid.gradient.stops[0].L, 0.2, accuracy: 1e-3)
+        let bright = ShapePaletteBuilder.auto(photoColors: flat(0.93))
+        XCTAssertEqual(bright.gradient.stops[1].L, 0.95, accuracy: 1e-6)
+        XCTAssertLessThan(bright.gradient.stops[0].L, bright.gradient.stops[1].L)
+        let dark = ShapePaletteBuilder.auto(photoColors: flat(0.02))
+        XCTAssertEqual(dark.gradient.stops[0].L, 0.05, accuracy: 1e-6)
+        // 没有可用颜色：中性灰 0.45 → 0.80，不报错。
+        let none = ShapePaletteBuilder.auto(photoColors: [])
+        XCTAssertEqual(none.gradient.stops.map(\.L), [0.45, 0.80])
+        XCTAssertEqual(none.gradient.stops.map(\.a), [0, 0])
+    }
+
+    /// 文字轮廓（各种宽高比、各种排版大小）也不会出全 0 掩码。
+    func testTextMasksAreNeverAllZero() throws {
+        for aspect in [0.4, 0.9, 1.0, 2.3, 4.3, 6.0, 8.6] {
+            for path in [S.square, S.circle] {
+                let o = TextOutline(path: ShapePath(elements: path.elements, aspect: aspect), widthEm: aspect, heightEm: 1)
+                let g = try ShapeLayoutRules.text(o)
+                XCTAssertGreaterThan(g.mask.activeCount, 0, "aspect \(aspect)")
+                XCTAssertEqual(g.density, .fine)
+            }
+        }
     }
 
     /// 色标与种子无关：同一批照片（顺序不同）得到同一渐变。

@@ -22,13 +22,13 @@ public protocol TextOutlineProviding: Sendable {
 
 /// 形状网格与掩码（设计 §2、§3）。
 ///
-/// - 预设形状：长边 = 所选密度档的格数（粗 40 / 中 80 / 细 120），短边按外接框比例（含 0.5 格边距）。
+/// - 预设形状：长边 = 所选密度档的格数（粗 40 / 中 80 / 细 120），短边按外接框比例（含 1 格边距）。
 /// - **文字固定细档（120 格）**：文字入口不接受密度参数（需求 1c；架构师 S2 接口 4）。
 /// - 合成目标图 = 列 × 16、行 × 16 像素；`Layout.grid` 对这张图算出的网格与这里的网格相同，
 ///   所以生成时直接把掩码作为 `activeCells` 传给 `MosaicPipeline`。
 public enum ShapeLayoutRules {
-    /// 预设形状四周边距（格）。
-    public static let presetMarginCells = 0.5
+    /// 预设形状四周边距（格）。设计 v0.1.1 §2：预设和文字都是 1 格（0.5 格时最宽处的边格覆盖正好 32/64 会被点亮，形状贴图边）。
+    public static let presetMarginCells = 1.0
     /// 文字四周边距（格）。
     public static let textMarginCells = 1.0
     /// 文字模式的固定密度：细档 120。
@@ -61,7 +61,7 @@ public enum ShapeLayoutRules {
         return try shapeGrid(path: path, density: density, margin: presetMarginCells)
     }
 
-    /// 任意路径按预设规则（可选密度、0.5 格边距）出网格与掩码。
+    /// 任意路径按预设规则（可选密度、1 格边距）出网格与掩码。
     public static func preset(path: ShapePath, density: Density) throws -> ShapeGrid {
         try shapeGrid(path: path, density: density, margin: presetMarginCells)
     }

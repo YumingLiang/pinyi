@@ -198,9 +198,13 @@ final class ActiveCellsTests: XCTestCase {
         let g = try pipe.generate(target: target, density: .coarse, snapshot: snap, seed: 3, activeCells: mask)
         XCTAssertEqual(g.activeCells, mask)
         XCTAssertEqual(g.assignment.tiles.filter { $0 < 0 }.count, layout.cellCount - mask.activeCount)
+        // 设计 v0.1.1 §3：形状模式下统计里的 cellCount = 形状内格数（不是整张网格）。
+        XCTAssertEqual(g.assignment.statistics.cellCount, mask.activeCount)
+        XCTAssertLessThan(mask.activeCount, layout.cellCount)
 
         let r = try pipe.reshuffle(g, target: target, snapshot: snap)
         XCTAssertEqual(r.activeCells, mask, "换一种拼法沿用同一掩码")
+        XCTAssertEqual(r.assignment.statistics.cellCount, mask.activeCount)
         for i in 0..<layout.cellCount { XCTAssertEqual(r.assignment.tiles[i] < 0, !mask.isActive(i)) }
 
         let outside = (0..<layout.cellCount).filter { !mask.isActive($0) }
@@ -210,6 +214,7 @@ final class ActiveCellsTests: XCTestCase {
         for c in outside { XCTAssertEqual(f.assignment.tiles[c], -1, "补格不碰形状外") }
         XCTAssertTrue([5, 9].contains(f.assignment.tiles[inside[0]]))
         XCTAssertEqual(f.activeCells, mask)
+        XCTAssertEqual(f.assignment.statistics.cellCount, mask.activeCount)
         XCTAssertEqual(f.assignment.statistics.levelCounts.reduce(0, +), mask.activeCount)
     }
 

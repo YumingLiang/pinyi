@@ -24,7 +24,7 @@ final class PresetShapesTests: XCTestCase {
         "star": Expectation(mirrorX: true, mirrorY: false, fill: 0.35...0.55),
         "circle": Expectation(mirrorX: true, mirrorY: true, fill: 0.76...0.81),
         "birthdayCake": Expectation(mirrorX: true, mirrorY: false, fill: 0.45...0.75),
-        "flower": Expectation(mirrorX: true, mirrorY: false, fill: 0.65...0.85),
+        "flower": Expectation(mirrorX: true, mirrorY: false, fill: 0.45...0.65),   // 凹口加深后（产品 11-17）面积比约 0.52
         "moon": Expectation(mirrorX: false, mirrorY: true, fill: 0.35...0.65),
         "fourLeafClover": Expectation(mirrorX: false, mirrorY: false, fill: 0.40...0.70),
         "house": Expectation(mirrorX: false, mirrorY: false, fill: 0.55...0.85),
@@ -42,6 +42,91 @@ final class PresetShapesTests: XCTestCase {
             XCTAssertTrue(id.isKnown)
             XCTAssertNotNil(Self.expectations[id.rawValue], "\(id) 缺测试期望")
         }
+    }
+
+    /// rawValue 会写进作品 manifest 的 `source.preset`、也是文案 key `shape.preset.<id>` 的后缀，定稿后不能改（设计 v0.1.1 §1）。
+    func testPresetRawValuesAreLocked() throws {
+        XCTAssertEqual(ShapePresetID.heart.rawValue, "heart")
+        XCTAssertEqual(ShapePresetID.star.rawValue, "star")
+        XCTAssertEqual(ShapePresetID.circle.rawValue, "circle")
+        XCTAssertEqual(ShapePresetID.birthdayCake.rawValue, "birthdayCake")
+        XCTAssertEqual(ShapePresetID.flower.rawValue, "flower")
+        XCTAssertEqual(ShapePresetID.moon.rawValue, "moon")
+        XCTAssertEqual(ShapePresetID.fourLeafClover.rawValue, "fourLeafClover")
+        XCTAssertEqual(ShapePresetID.house.rawValue, "house")
+        XCTAssertEqual(ShapePresetID.speechBubble.rawValue, "speechBubble")
+        XCTAssertEqual(ShapePresetID.roundedSquare.rawValue, "roundedSquare")
+        XCTAssertEqual(ShapePresetID.all.map(\.rawValue), Self.implementationOrder)
+        // 已登记的能解码；没登记的（大小写不同、旧名、空串）一律报错。
+        for raw in Self.implementationOrder {
+            let id = try JSONDecoder().decode(ShapePresetID.self, from: Data("\"\(raw)\"".utf8))
+            XCTAssertEqual(id.rawValue, raw)
+        }
+        for raw in ["Heart", "cake", "clover", "bubble", "square", ""] {
+            XCTAssertThrowsError(try JSONDecoder().decode(ShapePresetID.self, from: Data("\"\(raw)\"".utf8)), raw)
+            let json = #"{"source":{"preset":"\#(raw)"},"color":"auto","background":"white"}"#
+            XCTAssertThrowsError(try JSONDecoder().decode(ShapeSpec.self, from: Data(json.utf8)), raw)
+        }
+    }
+
+    /// 预设形状在任何密度下都不会出全 0 掩码（全 0 时引擎不抛错、返回全 -1，见 MosaicCore ActiveCellsTests）。
+    func testPresetMasksAreNeverAllZero() throws {
+        for id in ShapePresetID.all {
+            for d in [Density.coarse, .medium, .fine, .custom(columns: 57), .custom(columns: 12)] {
+                let g = try ShapeLayoutRules.preset(id, density: d)
+                XCTAssertGreaterThan(g.mask.activeCount, 0, "\(id) @\(d.columns)")
+            }
+        }
+    }
+
+    /// 花朵（产品 11-17）：粗档下以中心为原点径向扫一圈，外缘半径有 5 个明显的局部最大值（5 片花瓣数得出来）。
+    func testFlowerHasFiveDistinctPetalsAtCoarse() throws {
+        let g = try ShapeLayoutRules.preset(.flower, density: .coarse)
+        let peaks = Self.radialPeaks(g.mask, minProminence: 2)
+        XCTAssertEqual(peaks.count, 5, "外缘半径峰值 \(peaks)")
+        // 相邻峰大约相隔 72°。
+        let sorted = peaks.sorted()
+        for i in sorted.indices {
+            let gap = (sorted[(i + 1) % sorted.count] - sorted[i] + 360) % 360
+            XCTAssertEqual(Double(gap), 72, accuracy: 12, "峰角度 \(sorted)")
+        }
+    }
+
+    /// 从形状内格子的质心出发，每 2° 一条射线，求外缘半径（最后一个形状内格子的距离，单位格）；
+    /// 返回「在 ±18° 内最高、且比 ±36° 内最低处高出 minProminence 格」的峰的角度。
+    static func radialPeaks(_ m: CellMask, minProminence: Double) -> [Int] {
+        var sx = 0.0, sy = 0.0
+        let act = m.activeIndices
+        for i in act { sx += Double(i % m.columns) + 0.5; sy += Double(i / m.columns) + 0.5 }
+        let cx = sx / Double(act.count), cy = sy / Double(act.count)
+        let step = 2, n = 360 / step
+        var radius = [Double](repeating: 0, count: n)
+        for k in 0..<n {
+            let a = Double(k * step) * Double.pi / 180
+            var r = 0.0
+            while true {
+                let x = cx + r * cos(a), y = cy + r * sin(a)
+                guard x >= 0, y >= 0, x < Double(m.columns), y < Double(m.rows) else { break }
+                if m.isActive(column: Int(x), row: Int(y)) { radius[k] = r }
+                r += 0.25
+            }
+        }
+        var peaks: [Int] = []
+        let near = 18 / step, far = 36 / step
+        for k in 0..<n {
+            var isMax = true
+            var low = Double.infinity
+            for d in -far...far {
+                let v = radius[(k + d + n) % n]
+                low = min(low, v)
+                if abs(d) <= near, d != 0 {
+                    // 平顶只记最左一个：左侧相等不算峰。
+                    if v > radius[k] || (d < 0 && v == radius[k]) { isMax = false }
+                }
+            }
+            if isMax, radius[k] - low >= minProminence { peaks.append(k * step) }
+        }
+        return peaks
     }
 
     func testEveryPresetRoundTripsThroughCodable() throws {
@@ -82,10 +167,11 @@ final class PresetShapesTests: XCTestCase {
                 XCTAssertLessThan(g.mask.activeCount, g.mask.cellCount, tag)
                 XCTAssertEqual(S.foregroundComponents(g.mask), 1, "\(tag) 不能断开")
                 XCTAssertEqual(S.interiorHoles(g.mask), [], "\(tag) 内部不留孔")
-                // 0.5 格边距：最外一圈格子最多被盖住一半（≤ 32/64）。
+                // 1 格边距（设计 v0.1.1 §2）：最外一圈格子完全不被覆盖，图边永远留白。
                 let cols = g.mask.columns, rows = g.mask.rows
                 for i in 0..<g.mask.cellCount where i % cols == 0 || i % cols == cols - 1 || i / cols == 0 || i / cols == rows - 1 {
-                    XCTAssertLessThanOrEqual(Int(g.raster.coverage[i]), PathRasterizer.insideThreshold, tag)
+                    XCTAssertEqual(Int(g.raster.coverage[i]), 0, "\(tag) 边框格 \(i)")
+                    XCTAssertFalse(g.mask.isActive(i), tag)
                 }
             }
         }
