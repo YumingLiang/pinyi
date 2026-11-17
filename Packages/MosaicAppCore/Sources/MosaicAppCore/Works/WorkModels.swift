@@ -1,0 +1,212 @@
+import Foundation
+import MosaicCore
+
+// 「我的作品」数据模型（design/works-storage-v0.1.md，架构师；product/hd-export-req-v0.2.md B 节、F 节）。
+// 每格用哪张照片显式存在 `MosaicLayout` 里（localIdentifier + 裁剪），重新打开 / 再导出都不重跑匹配、不靠种子重算。
+
+/// 作品 id（目录名 = `uuidString`）。
+public struct WorkID: Hashable, Sendable, Codable, CustomStringConvertible {
+    public let uuid: UUID
+    public init(_ uuid: UUID = UUID()) { self.uuid = uuid }
+    public init?(directoryName: String) {
+        guard let u = UUID(uuidString: directoryName) else { return nil }
+        uuid = u
+    }
+    public var directoryName: String { uuid.uuidString }
+    public var description: String { uuid.uuidString }
+
+    public init(from decoder: any Decoder) throws {
+        let s = try decoder.singleValueContainer().decode(String.self)
+        guard let u = UUID(uuidString: s) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "bad work id \(s)"))
+        }
+        uuid = u
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(uuid.uuidString)
+    }
+}
+
+/// 作品是怎么进库的（导出成功自动存 / 结果页「存到我的作品」）。
+public enum WorkOrigin: String, Sendable, Codable, Hashable {
+    case autoSavedOnExport
+    case savedManually
+}
+
+/// meta.json：列表只扫这个文件（不读布局、不解码图片），所以 100 个作品也很快。
+///
+/// 版本规则（升级兼容，QA「升级后重开旧作品」）：
+/// - `formatVersion` ≤ `currentFormatVersion`：照常读；后加的字段一律 `decodeIfPresent` + 默认值，旧作品不丢；
+/// - `formatVersion` > `currentFormatVersion`（新版写的、又装回旧版）：列表跳过、**不删除**，装回新版还能看到。
+public struct WorkMeta: Sendable, Hashable, Codable {
+    public static let currentFormatVersion = 1
+
+    public var formatVersion: Int
+    public var id: WorkID
+    public var createdAt: Date
+    public var columns: Int
+    public var rows: Int
+    /// 保存时的导出档位（字符串，档位枚举归导出层；手动保存时为 nil）。
+    public var tier: String?
+    /// 不同照片数。
+    public var photoCount: Int
+    /// 最近一次检查时缺失的原照片数（保存时为 0；打开 / 导出前会重新检查，见 `WorksController`）。
+    public var missingCount: Int
+    public var overlayAlpha: Double
+    /// 只用于追溯（不用于重算）。
+    public var seed: UInt64?
+    /// 布局指纹（布局 JSON 的 FNV-1a 64）：同一张图重复保存只存一份（需求 B2 / B9-2）。
+    public var fingerprint: String
+    public var origin: WorkOrigin
+    public var previewFile: String
+    public var previewPixelWidth: Int
+    public var previewPixelHeight: Int
+    public var targetFile: String?
+
+    public init(formatVersion: Int = WorkMeta.currentFormatVersion, id: WorkID, createdAt: Date, columns: Int, rows: Int,
+                tier: String?, photoCount: Int, missingCount: Int, overlayAlpha: Double, seed: UInt64?, fingerprint: String,
+                origin: WorkOrigin, previewFile: String, previewPixelWidth: Int, previewPixelHeight: Int, targetFile: String?) {
+        self.formatVersion = formatVersion
+        self.id = id
+        self.createdAt = createdAt
+        self.columns = columns
+        self.rows = rows
+        self.tier = tier
+        self.photoCount = photoCount
+        self.missingCount = missingCount
+        self.overlayAlpha = overlayAlpha
+        self.seed = seed
+        self.fingerprint = fingerprint
+        self.origin = origin
+        self.previewFile = previewFile
+        self.previewPixelWidth = previewPixelWidth
+        self.previewPixelHeight = previewPixelHeight
+        self.targetFile = targetFile
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case formatVersion, id, createdAt, columns, rows, tier, photoCount, missingCount, overlayAlpha, seed, fingerprint,
+             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try c.decode(Int.self, forKey: .formatVersion)
+        id = try c.decode(WorkID.self, forKey: .id)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        columns = try c.decode(Int.self, forKey: .columns)
+        rows = try c.decode(Int.self, forKey: .rows)
+        tier = try c.decodeIfPresent(String.self, forKey: .tier)
+        photoCount = try c.decodeIfPresent(Int.self, forKey: .photoCount) ?? 0
+        missingCount = try c.decodeIfPresent(Int.self, forKey: .missingCount) ?? 0
+        overlayAlpha = try c.decodeIfPresent(Double.self, forKey: .overlayAlpha) ?? 0
+        seed = try c.decodeIfPresent(UInt64.self, forKey: .seed)
+        fingerprint = try c.decodeIfPresent(String.self, forKey: .fingerprint) ?? ""
+        origin = try c.decodeIfPresent(WorkOrigin.self, forKey: .origin) ?? .savedManually
+        previewFile = try c.decodeIfPresent(String.self, forKey: .previewFile) ?? "preview.jpg"
+        previewPixelWidth = try c.decodeIfPresent(Int.self, forKey: .previewPixelWidth) ?? 0
+        previewPixelHeight = try c.decodeIfPresent(Int.self, forKey: .previewPixelHeight) ?? 0
+        targetFile = try c.decodeIfPresent(String.self, forKey: .targetFile)
+    }
+}
+
+/// 列表里的一项（meta + 预览图文件位置）。
+public struct WorkSummary: Sendable, Hashable, Identifiable {
+    public var meta: WorkMeta
+    public var previewURL: URL
+    public var id: WorkID { meta.id }
+    public var createdAt: Date { meta.createdAt }
+    public init(meta: WorkMeta, previewURL: URL) {
+        self.meta = meta
+        self.previewURL = previewURL
+    }
+}
+
+/// 打开的作品：summary + 显式布局 + 目标图副本位置。
+public struct Work: Sendable {
+    public var summary: WorkSummary
+    public var layout: MosaicLayout
+    public var targetURL: URL?
+    public var meta: WorkMeta { summary.meta }
+    public var id: WorkID { summary.id }
+    public init(summary: WorkSummary, layout: MosaicLayout, targetURL: URL?) {
+        self.summary = summary
+        self.layout = layout
+        self.targetURL = targetURL
+    }
+}
+
+/// 要保存的东西。
+public struct WorkDraft: Sendable {
+    public var layout: MosaicLayout
+    /// 目标图（App 里是解码降采样后的那份；副本长边 ≤ `WorkImageLimits.targetLongEdge`）。
+    public var target: PixelBuffer?
+    public var overlayAlpha: Double
+    public var tier: String?
+    public var seed: UInt64?
+    public var origin: WorkOrigin
+
+    public init(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, tier: String? = nil, seed: UInt64? = nil,
+                origin: WorkOrigin) {
+        self.layout = layout
+        self.target = target
+        self.overlayAlpha = overlayAlpha
+        self.tier = tier
+        self.seed = seed
+        self.origin = origin
+    }
+}
+
+/// 图片尺寸约定（works-storage-v0.1）。
+public enum WorkImageLimits {
+    /// 预览图长边（屏幕分辨率，列表缩略图和查看放大都用它）。
+    public static let previewLongEdge = 2732
+    /// 目标图副本长边上限。
+    public static let targetLongEdge = 4096
+}
+
+/// 平台层写出的一张图。
+public struct WorkImageFile: Sendable, Hashable {
+    public var fileName: String
+    public var pixelWidth: Int
+    public var pixelHeight: Int
+    public init(fileName: String, pixelWidth: Int, pixelHeight: Int) {
+        self.fileName = fileName
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+    }
+}
+
+/// 平台层图片编解码（App 里是 Core Graphics + ImageIO；Linux 测试用假实现）。
+///
+/// 实现约定：只往给定的 `directory`（作品的临时目录）里写，文件名自定（如 `preview.jpg`）；
+/// 失败就抛错——存储层会把整个临时目录删掉，不留半个作品。
+public protocol WorkImageEncoding: Sendable {
+    /// 按布局渲染预览图（长边 ≤ `maxLongEdge`）。
+    func writePreview(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, maxLongEdge: Int,
+                      into directory: URL) async throws -> WorkImageFile
+    /// 写目标图副本（长边 ≤ `maxLongEdge`，原图更小就不放大）。
+    func writeTarget(_ target: PixelBuffer, maxLongEdge: Int, into directory: URL) async throws -> WorkImageFile
+    /// 读回目标图副本（从作品再导出时做叠加用）。
+    func readTarget(at url: URL) async throws -> PixelBuffer
+}
+
+/// 原照片还在不在（App 里是 `PHAsset.fetchAssets(withLocalIdentifiers:)`，一次批量查）。
+public protocol PhotoExistenceChecking: Sendable {
+    /// 返回 `identifiers` 里仍然存在、可访问的那部分。
+    func existingIdentifiers(among identifiers: [String]) async -> Set<String>
+}
+
+/// 11-18 预留（需求 F2 / F5「4b」）：把缺失原照片的格子换成本机相近照片，返回新布局。
+/// **本轮不实现**；`WorksController` 只做缺失检测 + 计数。缺失格子不再用预览图放大补（F 节作废）。
+public protocol MissingCellRematching: Sendable {
+    func rematch(_ layout: MosaicLayout, missing: Set<String>) async throws -> (layout: MosaicLayout, replacedCells: Int)
+}
+
+public enum WorksStoreError: Error, Sendable, Equatable {
+    case notFound
+    /// 新版 App 写的作品（formatVersion 更高），旧版不读。
+    case unsupportedFormat(Int)
+    case corrupted
+}
