@@ -1,5 +1,25 @@
 # CHANGES
 
+## feat/preview-detail-layer：结果页预览清晰层（正式修复放大发糊；架构师 21:02 方案）
+
+基于 feat/preview-sharp-quick（`39e277a`，含止血改动）。AndyL：「可能主要是不清晰，先把清晰度的问题修复了」。底图（每格 ≤ 64 px、长边 ≤ 4096）不动；放大到底图不够清楚时，只给可见格子换高清方图。不改生成 / 匹配，不碰 LiveDependencies 的清晰度注入，不碰 target.heic。
+
+- **MosaicAppCore `Preview/DetailLayer.swift`（新，纯逻辑）**：
+  - `DetailGeometry`：和 `ZoomableContainer` 同一套变换（scaledToFit 居中 → 以视口中心 scaleEffect → offset），算内容 / 格子的屏幕像素矩形、每格屏幕像素、可见格子范围（半开区间，边缘落在格线上不多算一格）、外扩 N 圈、中心优先顺序（先可见格、再外扩圈），以及 scaleEffect 之内摆放用的未缩放格子 frame。
+  - `DetailLayerTrigger`：启用条件 = 屏幕每格像素 > 底图每格像素 × 1.5，且可见格 ≤ 300；返回外扩 1 圈后的范围和档位。
+  - `DetailTier`：按可见格数分档，> 64 → 256 px，≤ 64 → 512，≤ 4 → 1024。
+  - `DetailLayerState`：防抖 + 代次。缩放 / 平移每次变化代次 +1，150 ms 内没有新变化才更新可见集合；过期定时器作废；集合没变不重复更新；离开结果页 / 换拼法 / 内存警告 `reset()` 清空 + 清缓存。
+  - `DetailLoadPlan`（按照片分组，同一照片多格只取一次）、`DetailRequestDiff`（可见集合变化时要取消 / 新发的请求）。
+  - `PerfPhase.previewDetail`（性能页「预览清晰层」）。
+- **App `Rendering/PreviewDetailLayer.swift`（新）**：
+  - `PreviewDetailLayer`（MainActor）：取图复用导出 hq 请求（`fastFormat = false`、`fastResize = false`、`centerCropToSquare = true`，不联网），取不到退回 `.scanDisplay`，再取不到就保持底图、不提示。最多 6 个请求在飞，可见集合变化时取消不再需要的。`NSCache` 按字节计费、上限 64 MB、键 = assetID；离开结果页、换拼法、内存警告时清空。显示中的图被视图持有、NSCache 淘汰不掉，所以取图计划再按 64 MB 截断（中心优先，外圈先丢），守住峰值 ≤ 现在 + 64 MB。每次更新写 os_log（category `preview-detail`）和性能页。
+  - `PreviewDetailTilesView`：放在 `ZoomableContainer` 内容里（和底图同一个 scaleEffect 之内），每格一个 `Image`，frame = 未缩放格子尺寸，`.position` 定位，**不加 drawingGroup 等光栅化修饰符**。手势进行中清晰层随内容一起缩放平移，不隐藏也不会错位；手势停下 150 ms 后才换可见集合。
+  - 叠加 α > 0：清晰层上再叠目标图（同一 cropRect、同一 α，`.opacity`），用已显示格子的形状做遮罩，只盖住有清晰图的格子（其余是底图，底图里已叠过）。
+- **App `Adapters/PhotoKitThumbnails.swift`**：新增 `cancellableThumbnail`（Task 取消 → `cancelImageRequest`），只给清晰层用；扫描 / 导出路径不变。`assets(_:)` 改走 `PhotoFetch.images(withLocalIdentifiers:)`（与 #9 同一行、同一写法，合并时不冲突），隐藏照片取不到。
+- **App `Models/AppModel.swift`、`Views/MainFlowView.swift`**：结果页内容改成「底图 + 清晰层」ZStack；`onChange(of: resultZoom)` 通知清晰层；换结果时 `configure`，离开结果页时 `reset`。
+- **拉伸检查**：底图缩略图预览用 `.scanDisplay`（`centerCropToSquare = true`，dd61da7 起）按短边居中裁方，没有非等比拉伸；色块占位不涉及照片。清晰层请求同样 `centerCropToSquare = true`。本次不做竖图上三分之一裁切。
+- **测试**：`DetailLayerTests` 19 个（可见格子 / 外扩 / 中心优先、未缩放 frame 与屏幕矩形互相换算、档位、启用条件、防抖代次、平移换集合 / 缩小清除、reset、取图计划去重、64 MB 字节预算截断、请求差分）。`DetailLayerBenchTests` 只在 `MOSAIC_BENCH=1` 时跑。PhotoKit / SwiftUI 部分 Linux 只做 `swiftc -parse`。
+
 ## feat/preview-sharp-quick：结果页预览放大发糊的止血（每格 48–64 px，长边约 4096，插值改为 high）
 
 AndyL 反馈预览放大后小格子很糊。原因是结果页预览每格只有 8–32 px（长边约 2400），SwiftUI 又用 `.interpolation(.none)` 最近邻放大。本卡只改预览绘制和显示，不改生成匹配，也不让生成变慢。

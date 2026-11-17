@@ -15,6 +15,8 @@ final class AppModel: ObservableObject {
     private let thumbnails: PhotoKitThumbnails
     /// 「我的作品」（逻辑在 MosaicAppCore 的 `WorksController`）。
     let works: WorksModel
+    /// 结果页预览清晰层（放大后按可见格子取 256 / 512 / 1024 px 方图，盖在底图上）。
+    let detailLayer: PreviewDetailLayer
 
     @Published private(set) var state: AppState
     @Published private(set) var targetPreview: CGImage?
@@ -41,6 +43,7 @@ final class AppModel: ObservableObject {
         self.perf = perf
         self.lifecycle = lifecycle
         self.thumbnails = thumbnails
+        self.detailLayer = PreviewDetailLayer(thumbnails: thumbnails, perf: perf)
         // 导出成功 → 中继 → WorksController 自动存（AppDependencies 先于协调器创建，所以经中继转）
         let relay = ExportSuccessRelay()
         let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
@@ -167,12 +170,23 @@ final class AppModel: ObservableObject {
         coordinator.setTarget(pb)
     }
 
-    /// 取消未完成的缩略图绘制，并释放 `resultImage`。
+    /// 取消未完成的缩略图绘制，并释放 `resultImage`；清晰层取消请求、清空缓存。
     private func releasePreviewImage() {
         previewTask?.cancel()
         previewTask = nil
         if resultImage != nil { resultImage = nil }
+        detailOverlay = nil
         renderedRevision = 0
+        detailLayer.reset()
+    }
+
+    /// 清晰层上的目标图叠加（裁剪区，和底图 / 导出同一个 cropRect）；α = 0 或没有作品时为 nil。
+    @Published private(set) var detailOverlay: CGImage?
+
+    /// 结果页缩放 / 平移变化（视图 `onChange(of: resultZoom)` 调）。
+    func resultZoomChanged(displayScale: Double) {
+        guard state.flow.step == .result, coordinator.product != nil else { return }
+        detailLayer.zoomChanged(resultZoom, displayScale: displayScale)
     }
 
     private func renderPreview() {
@@ -186,6 +200,13 @@ final class AppModel: ObservableObject {
         // 先换成小色块占位，立刻丢掉上一张大预览图。
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
         let alpha = state.flow.settings.overlayAlpha
+        // 清晰层：换作品（含换拼法）清空缓存；准备叠加用的目标图裁剪区（与底图同一 cropRect、同一 α）。
+        detailLayer.configure(product: product)
+        detailOverlay = nil
+        if OverlayBlendLimits.clamp(alpha) > 0, let t = ImagePixels.cgImage(target) {
+            let crop = product.generation.layout.cropRect
+            detailOverlay = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height))
+        }
         let thumbs = thumbnails
         let perf = self.perf
         let revision = renderedRevision
