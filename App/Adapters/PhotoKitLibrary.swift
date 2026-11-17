@@ -12,7 +12,7 @@ actor PhotoKitLibrary: PhotoLibraryClient {
     /// 走 `PhotoFetch`（photo-picker-v0.1 §5.1）：不含隐藏照片——照片后来被隐藏，下次 diff 时它不在结果里，
     /// `LibraryDiff` 把它判为删除（tombstone），生成时就不会再用到。来源是 `Sources.library`（本机图库 + iTunes 同步）。
     private func fetchAllImages() -> PHFetchResult<PHAsset> {
-        PhotoFetch.allImages(order: .oldestFirst)
+        PhotoFetch.allImages(order: .oldestFirst)   // photo-fetch: raw-ok 素材扫描缓存 fetch result 分批取，每批经 visibleObjects 过滤
     }
 
     /// 缓存同一个 fetch result，分批取元数据时不重复 fetch；每轮 diff 开始（`assetCount()`）时重新 fetch。

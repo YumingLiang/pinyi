@@ -47,6 +47,10 @@ public final class AppCoordinator {
         var selection: SourceSelection
         var density: DensityChoice
     }
+    /// 来源被静默去掉相簿（不是用户改的）：当前结果记下的来源同样换掉，`settingsPrimaryAction` 不因此变「开始拼图」。
+    func notePrunedSelectionForProduct(old: SourceSelection, new: SourceSelection) {
+        if productInputs?.selection == old { productInputs?.selection = new }
+    }
     private var currentInputs: ProductInputs {
         ProductInputs(targetGeneration: targetGeneration, selection: state.flow.source.selection,
                       density: state.flow.settings.density)
@@ -311,6 +315,7 @@ public final class AppCoordinator {
                                                     unreadable: unreadable)
         reconcileSourceSelection()
         state.albumsLoaded = true
+        rememberSelectedAlbumNames()
         await pruneLowResExclusion()
         await refreshUnionCounts()
     }
@@ -550,7 +555,9 @@ public final class AppCoordinator {
                 }
                 let failure = GenerationFailure.classify(error)
                 if failure == .albumUnreadable, self.state.flow.generation.currentRunID == id {
+                    let old = self.state.flow.source.selection
                     self.state.flow.source.albumsBecameUnreadable()
+                    self.silentSelectionPruned(from: old)
                 }
                 self.send(.finishedWithError(runID: id, failure: failure))
             }

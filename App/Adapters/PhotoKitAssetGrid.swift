@@ -28,14 +28,13 @@ final class PhotoKitAssetGridSourceProvider: AssetGridSourceProviding {
     static func fetchResult(for album: SourceSelection) -> PHFetchResult<PHAsset>? {
         switch album {
         case .allPhotos:
-            return PhotoFetch.allImages(order: .newestFirst)
+            return PhotoFetch.allImages(order: .newestFirst)   // photo-fetch: raw-ok 网格懒加载，VisibleIndexMap 在后台跳过隐藏项
         case .albums:
             return nil   // 多选只用于素材来源，选图页一次只浏览一个相簿
         case .album(let id):
             let cols = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil)
             guard let c = cols.firstObject, isBrowsable(c) else { return nil }
-            return PhotoFetch.images(in: c, sources: PhotoFetch.pickerSources(forSubtype: c.assetCollectionSubtype),
-                                     order: .newestFirst)
+            return PhotoFetch.images(in: c, sources: PhotoFetch.pickerSources(forSubtype: c.assetCollectionSubtype), order: .newestFirst)   // photo-fetch: raw-ok 网格懒加载，VisibleIndexMap 在后台跳过隐藏项
         }
     }
 

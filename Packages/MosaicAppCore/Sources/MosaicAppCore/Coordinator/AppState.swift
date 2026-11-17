@@ -80,6 +80,8 @@ public struct AppState: Sendable, Hashable {
     public var albumsLoaded = false
     /// 「开始拼图」在等相簿列表加载完（§2f 补充 3）：按钮短暂显示加载状态。
     public var isWaitingForAlbums = false
+    /// 上次选的相簿名（偏好里记的），相簿列表加载完之前素材标签先显示它们（§2f 补充 3a）。
+    public var rememberedAlbumNames: [String: String] = [:]
     public var indexStatus = IndexStatus(assetTotal: nil, available: 0, pending: 0, unavailableLocal: 0, failed: 0,
                                          isScanning: false, wasInterrupted: false, hasCompletedInitialScan: false)
     public var scan = ScanFlow()
@@ -158,6 +160,11 @@ public struct AppState: Sendable, Hashable {
 
     /// 确认页素材摘要「素材：{name} · {count} 张」（需求 v1.0 §2b）。`allPhotosTitle`：平台层把
     /// 「全部照片 / 已允许访问的照片」本地化后传进来（逻辑层不产出中文）。张数与来源页该行显示的一致。
+    /// 相簿名：列表里有就用列表的，没有（还没加载完）用上次记下的。
+    func albumName(_ id: String) -> String {
+        albumRows.first { $0.albumID == id }?.albumTitle ?? rememberedAlbumNames[id] ?? ""
+    }
+
     /// 来源是相簿、张数还没算出来（启动时相簿列表未加载完，或去重合计在算）：显示加载中，不显示旧数字 / 0（§2f 补充 3）。
     public var isMaterialCountLoading: Bool {
         switch flow.source.selection {
@@ -171,13 +178,16 @@ public struct AppState: Sendable, Hashable {
         switch flow.source.selection {
         case .allPhotos:
             return LocalizedLine(.quickSourceSummary, [allPhotosTitle, CountFormat.grouped(allPhotosRow.count)])
-        case .album:
-            let row = displayedAlbumRows.first { $0.selection == flow.source.selection }
-            return LocalizedLine(.quickSourceSummary, [row?.albumTitle ?? "", CountFormat.grouped(row?.count ?? 0)])
+        case .album(let id):
+            // 相簿列表加载完之前（§2f 补充 3a）：先显示上次的相簿名，张数位置「正在统计…」，不显示旧数字。
+            guard albumsLoaded, let row = displayedAlbumRows.first(where: { $0.selection == flow.source.selection }) else {
+                return MultiAlbumText.materialSummary(names: [albumName(id)], count: nil)
+            }
+            return LocalizedLine(.quickSourceSummary, [row.albumTitle ?? albumName(id), CountFormat.grouped(row.count)])
         case .albums(let ids):
-            // §2f / 验收 12：相簿名按勾选顺序；张数是去重合计。
-            let names = ids.map { id in albumRows.first { $0.albumID == id }?.albumTitle ?? "" }
-            return MultiAlbumText.materialSummary(names: names, count: flow.source.selectionUnion?.count ?? 0)
+            // §2f / 验收 12：相簿名按勾选顺序；张数是去重合计（还没算出来 =「正在统计…」）。
+            return MultiAlbumText.materialSummary(names: ids.map(albumName),
+                                                  count: isMaterialCountLoading ? nil : flow.source.selectionUnion?.count)
         }
     }
 

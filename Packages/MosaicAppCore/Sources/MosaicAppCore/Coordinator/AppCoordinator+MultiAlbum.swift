@@ -8,19 +8,43 @@ extension AppCoordinator {
 
     /// init 时：读上次的来源。相簿还没列出来，先放进去（张数显示「加载中」），第一次 `refreshAlbums` 时静默核对。
     func restoreSourceSelection() {
-        guard let saved = selectionStore?.load(), !saved.isAllPhotos else { return }
+        guard let store = selectionStore, let saved = store.load(), !saved.isAllPhotos else { return }
+        state.rememberedAlbumNames = store.loadNames()
         state.flow.source.select(saved)
+    }
+
+    /// 记下当前所选相簿的名字（列表里有的才记），下次启动列表加载完之前显示（§2f 补充 3a）。
+    func rememberSelectedAlbumNames() {
+        let ids = state.flow.source.selection.albumIDs
+        var names: [String: String] = [:]
+        for id in ids {
+            if let t = state.albumRows.first(where: { $0.albumID == id })?.albumTitle { names[id] = t }
+            else if let t = state.rememberedAlbumNames[id] { names[id] = t }
+        }
+        if names != state.rememberedAlbumNames { state.rememberedAlbumNames = names }
+        selectionStore?.saveNames(names)
     }
 
     /// 来源变了（`state` 的 didSet 调）：存起来。
     func sourceSelectionDidChange() {
         selectionStore?.save(state.flow.source.selection)
+        rememberSelectedAlbumNames()
         state.flow.source.selectionUnion = nil
         scheduleUnion(for: state.flow.source.selection.albumIDs, draft: false)
     }
 
     func reconcileSourceSelection() {
+        let old = state.flow.source.selection
         state.flow.source.reconcile(with: [state.allPhotosRow] + state.albumRows)
+        silentSelectionPruned(from: old)
+    }
+
+    /// 相簿被静默去掉（§2f 补充 3a）：不算用户改了参数。「再调一调」时当前结果的输入按同样的去法更新，
+    /// 主按钮保持原状（只改了叠加强度时仍是「完成」）；新的来源等下次重新生成才生效。
+    func silentSelectionPruned(from old: SourceSelection) {
+        let new = state.flow.source.selection
+        guard new != old else { return }
+        notePrunedSelectionForProduct(old: old, new: new)
     }
 
     /// 「开始拼图」/「再试一次」前（§2f 补充 3）：来源是相簿时，绝不拿失效的选择去生成。
@@ -39,7 +63,9 @@ extension AppCoordinator {
         var readable: Set<String> = []
         for id in ids where (try? await dependencies.library.assetIDs(inAlbum: id)) != nil { readable.insert(id) }
         if readable.count != ids.count {
-            state.flow.source.select(state.flow.source.selection.keepingSelectable(readable))
+            let old = state.flow.source.selection
+            state.flow.source.select(old.keepingSelectable(readable))
+            silentSelectionPruned(from: old)
             await refreshUnionCounts()
         }
     }

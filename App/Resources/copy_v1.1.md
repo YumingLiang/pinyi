@@ -374,6 +374,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.selection.summary_pending` | 底部栏，扫描未完成时 | 已选 {n} 个相簿 · 约 {count} 张 |
 | `source.album.done` | 底部主按钮 | 完成 |
 | `albums.limited_note` | 相簿列表顶部，只在受限访问时显示（00:15） | 只显示你允许拼忆访问的照片 |
+| `source.counting` | 素材标签里的张数位置，相簿列表加载完之前（00:35） | 正在统计… |
 | `quick.source.summary_two` | 确认页，2 个相簿 | 素材：{name1}、{name2} · {count} 张 |
 | `quick.source.summary_many` | 确认页，3 个及以上 | 素材：{name1} 等 {n} 个相簿 · {count} 张 |
 

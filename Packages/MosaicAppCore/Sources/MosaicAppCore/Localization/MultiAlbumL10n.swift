@@ -14,9 +14,11 @@ public extension L10nKey {
 
     /// 相簿列表顶部小字，只在受限访问（.limited）时显示（quick-start v1.0 §2f 补充 2）。
     static let albumsLimitedNote = L10nKey(rawValue: "albums.limited_note")
+    /// 素材标签里张数的位置，相簿列表加载完之前「正在统计…」（§2f 补充 3a）。
+    static let sourceCounting = L10nKey(rawValue: "source.counting")
 
     static let allMultiAlbum: [L10nKey] = [
         sourceSelectionSummary, sourceSelectionNone, sourceSelectionDedupNote, sourceSelectionSummaryPending,
-        sourceAlbumDone, quickSourceSummaryTwo, quickSourceSummaryMany, albumsLimitedNote,
+        sourceAlbumDone, quickSourceSummaryTwo, quickSourceSummaryMany, albumsLimitedNote, sourceCounting,
     ]
 }

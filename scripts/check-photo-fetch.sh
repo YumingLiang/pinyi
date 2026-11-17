@@ -45,19 +45,57 @@ if [ -n "$matches" ]; then
   fail=1
 fi
 
-# 4) 按集合取图 / 封面要走 isHidden 后置过滤（相簿多选 PR 合并条件）：直接用 PhotoFetch.allImages( / images(in: /
-#    keyAssets( 的只允许 PhotoFetch.swift 自身、PhotoKitAssetGrid.swift（网格用 VisibleIndexMap 跳过隐藏项）和
-#    PhotoKitLibrary.swift（素材扫描缓存 fetch result 分批取，每批经 PhotoFetch.visibleObjects 过滤）；
-#    其余地方用 visibleImages(in:) / visibleObjects / visibleAllImagesCount / visibleKeyAssets。
-matches=$(grep -rEn --include='*.swift' 'PhotoFetch\.(allImages|images\(in:|keyAssets)[[:space:]]*\(?' App 2>/dev/null \
-  | grep -v '^App/InternalTools/' \
-  | grep -v '^App/Adapters/PhotoFetch.swift:' \
-  | grep -v '^App/Adapters/PhotoKitAssetGrid.swift:' \
-  | grep -v '^App/Adapters/PhotoKitLibrary.swift:' \
-  | code_only || true)
-if [ -n "$matches" ]; then
-  echo "::error::collection fetches must use PhotoFetch.visible* (isHidden post-filter):"
-  echo "$matches"
+# 4) 未过滤的取图结果要走 isHidden 后置过滤（相簿多选 PR 合并条件；QA #19 第 7 节收紧）：
+#    PhotoFetch.allImages / images(in:…) / images(withLocalIdentifiers:…) / keyAssets 的原始结果，除 PhotoFetch.swift 自身外，
+#    一律改用 visibleImages(in:) / visibleImages(withLocalIdentifiers:) / visibleObjects / visibleAllImagesCount / visibleKeyAssets。
+#    - 不再整文件放行。确实要拿原始 fetch result 的（网格懒加载、素材扫描分批取），在**同一行**写行级标记
+#      `// photo-fetch: raw-ok <理由>`，理由不能空；该行必须自己保证后续经过 isHidden 过滤（VisibleIndexMap / visibleObjects）。
+#    - 能拦：`PhotoFetch.images( in:` 这类空格变体、`PhotoFetch` 换行后 `.images(in:` 的链式调用、函数引用（不带括号）、按 ID 取图。
+#    - 按 ID 取图的存量（属于 #15 的收口范围，#15 原样改成 visibleImages 后删掉这里的条目）：下面这几个文件各允许 1 处，
+#      多一处或别的文件新增都会报红。
+#    测试：scripts/tests/check-photo-fetch-test.sh（正反例）。
+ROOT_APP="${PHOTO_FETCH_APP_DIR:-App}"
+legacy_by_id=(
+  "App/Works/WorksAdapters.swift"
+  "App/Adapters/PhotoKitResolutionProbe.swift"
+  "App/Adapters/PhotoKitTargetImageLoader.swift"
+  "App/Adapters/PhotoKitThumbnails.swift"
+  "App/Adapters/PhotoKitThumbnailLoader.swift"
+)
+# awk：去掉整行注释；以 `.` 开头的续行（换行链式调用）、上一行以 `.` 结尾的，拼回上一行；输出 path:起始行号:拼好的内容。
+joined=$(find "$ROOT_APP" -name '*.swift' -not -path "$ROOT_APP/InternalTools/*" -not -name 'PhotoFetch.swift' -print0 2>/dev/null \
+  | xargs -0 -r awk '
+    function flush() { if (buf != "") print FILENAME_prev ":" start ":" buf; buf = "" }
+    FNR == 1 { flush(); FILENAME_prev = FILENAME }
+    {
+      line = $0
+      if (line ~ /^[ \t]*\/\//) next
+      if (buf != "" && (line ~ /^[ \t]*\./ || buf ~ /\.[ \t]*$/)) { sub(/^[ \t]+/, "", line); buf = buf line; next }
+      flush(); buf = line; start = FNR
+    }
+    END { flush() }' || true)
+raw_re='PhotoFetch[[:space:]]*\.[[:space:]]*(allImages|images|keyAssets)([^A-Za-z0-9_]|$)'
+hits=$(printf '%s\n' "$joined" | grep -E "$raw_re" || true)
+bad=""
+by_id_seen="|"   # 不用关联数组：macOS 自带 bash 3.2 也能跑
+while IFS= read -r h; do
+  [ -z "$h" ] && continue
+  file=${h%%:*}
+  content=${h#*:*:}
+  # 行级标记（理由不能空）
+  if printf '%s' "$content" | grep -Eq '//[[:space:]]*photo-fetch:[[:space:]]*raw-ok[[:space:]]+[^[:space:]]'; then continue; fi
+  # 按 ID 取图存量（#15）：只放行名单里的文件、各 1 处，且这一行只能是按 ID 取图
+  if printf '%s' "$content" | grep -Eq 'PhotoFetch[[:space:]]*\.[[:space:]]*images[[:space:]]*\([[:space:]]*withLocalIdentifiers' \
+     && ! printf '%s' "$content" | grep -Eq 'PhotoFetch[[:space:]]*\.[[:space:]]*(allImages|keyAssets)|PhotoFetch[[:space:]]*\.[[:space:]]*images[[:space:]]*\([[:space:]]*in[[:space:]]*:'; then
+    for f in "${legacy_by_id[@]}"; do
+      if [ "$file" = "$f" ] && [[ "$by_id_seen" != *"|$f|"* ]]; then by_id_seen+="$f|"; continue 2; fi
+    done
+  fi
+  bad+="$h"$'\n'
+done <<< "$hits"
+if [ -n "$bad" ]; then
+  echo "::error::raw PhotoFetch results must go through PhotoFetch.visible* (isHidden post-filter), or carry '// photo-fetch: raw-ok <reason>' on the same line:"
+  printf '%s' "$bad"
   fail=1
 fi
 

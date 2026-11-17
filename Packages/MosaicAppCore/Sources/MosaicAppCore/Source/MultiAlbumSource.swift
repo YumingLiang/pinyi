@@ -65,6 +65,22 @@ public struct SourceSelectionStore: Sendable {
         guard let data = try? enc.encode(selection) else { return }
         backend.setData(data, forKey: Self.key)
     }
+
+    /// 上次选的相簿名（相簿 ID → 名字），只用于启动时相簿列表加载完之前的素材标签（§2f 补充 3a）。
+    public static let namesKey = "source.selection.names"
+
+    public func loadNames() -> [String: String] {
+        guard let data = backend.data(forKey: Self.namesKey),
+              let names = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        return names
+    }
+
+    public func saveNames(_ names: [String: String]) {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        guard let data = try? enc.encode(names) else { return }
+        backend.setData(data, forKey: Self.namesKey)
+    }
 }
 
 /// 相簿列表里正在勾的那组（§2f）。从「全部照片」进列表时一个都不勾；从相簿来源再进时保留上次的勾选。
@@ -113,8 +129,21 @@ public enum MultiAlbumText {
 
     /// 确认页摘要（§2f、验收 12）：1 个「素材：{name} · {count} 张」；2 个「素材：{name1}、{name2} · {count} 张」；
     /// 3 个及以上「素材：{name1} 等 {n} 个相簿 · {count} 张」。相簿名按勾选顺序。
-    public static func materialSummary(names: [String], count: Int) -> LocalizedLine {
-        let c = CountFormat.grouped(count)
+    /// 张数位置的「正在统计…」（`source.counting`，§2f 补充 3a）。摘要模板里张数后面带「张」，所以张数参数放这个占位，
+    /// 平台层格式化后用 `resolveCounting` 把「占位 张」整体换成「正在统计…」：「素材：旅行 · 正在统计…」。
+    public static let countingArgument = "{source.counting}"
+
+    /// 格式化好的摘要里把「{source.counting} 张」换成 `counting`（「正在统计…」）。没有占位就原样返回。
+    public static func resolveCounting(in formatted: String, counting: String) -> String {
+        guard formatted.contains(countingArgument) else { return formatted }
+        var s = formatted
+        for unit in [" 张", "张"] { s = s.replacingOccurrences(of: countingArgument + unit, with: counting) }
+        return s.replacingOccurrences(of: countingArgument, with: counting)
+    }
+
+    /// - Parameter count: nil = 还在统计（相簿列表没加载完），张数位置显示 `source.counting`。
+    public static func materialSummary(names: [String], count: Int?) -> LocalizedLine {
+        let c = count.map(CountFormat.grouped) ?? countingArgument
         switch names.count {
         case 0, 1: return LocalizedLine(.quickSourceSummary, [names.first ?? "", c])
         case 2: return LocalizedLine(.quickSourceSummaryTwo, [names[0], names[1], c])

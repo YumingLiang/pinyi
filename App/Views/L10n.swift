@@ -17,6 +17,8 @@ extension LocalizedLine {
     var localized: String {
         let format = key.localized
         let args: [CVarArg] = arguments.map { $0 as NSString }
-        return String(format: format, arguments: args)
+        // 「正在统计…」（§2f 补充 3a）：摘要张数位置的占位连同「张」一起换掉
+        return MultiAlbumText.resolveCounting(in: String(format: format, arguments: args),
+                                              counting: L10nKey.sourceCounting.localized)
     }
 }

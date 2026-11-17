@@ -123,11 +123,8 @@ struct SourceStepView: View {
                             Text(L10nKey.sourceAlbumOption)
                             if model.flow.source.selection.isAllPhotos {
                                 Text(L10nKey.sourceAlbumOptionDesc).font(.footnote).foregroundStyle(.secondary)
-                            } else if model.isMaterialCountLoading {
-                                // 相簿列表加载完之前不显示旧数字（§2f 补充 3）
-                                ProgressView().controlSize(.mini)
                             } else {
-                                // 已选相簿：和确认页同一套摘要（1 / 2 / 3 个及以上三种格式）
+                                // 已选相簿：和确认页同一套摘要（1 / 2 / 3 个及以上三种格式；列表加载完之前张数位置「正在统计…」）
                                 Text(model.materialSummary).font(.footnote).foregroundStyle(.secondary)
                             }
                         }
@@ -255,11 +252,8 @@ struct SettingsStepView: View {
             // 确认页（需求 v1.0 §2b）：「素材：{name} · {count} 张」+「换素材」。「裁剪」（§3）在 feat/app-layer 上还没有，接入后放这里。
             Section {
                 HStack {
-                    if model.isMaterialCountLoading {
-                        ProgressView()   // 相簿列表加载完之前不显示旧数字（§2f 补充 3）
-                    } else {
-                        Text(model.materialSummary).font(.subheadline)
-                    }
+                    // 相簿列表加载完之前：上次的相簿名 +「正在统计…」（§2f 补充 3a）
+                    Text(model.materialSummary).font(.subheadline)
                     Spacer()
                     Button { model.flowSend(.changeSource) } label: { Text(L10nKey.quickSourceChange) }
                 }

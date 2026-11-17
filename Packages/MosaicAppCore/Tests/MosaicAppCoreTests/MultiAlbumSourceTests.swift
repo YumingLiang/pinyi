@@ -129,8 +129,9 @@ final class MultiAlbumSourceTests: XCTestCase {
 
     /// 300 张：A = a0..a149，B = a100..a249（重叠 50），C = a0..a29，U 打不开（在列表里但取不到）。
     @MainActor
-    private func harness(prefs: InMemoryPreferenceData = InMemoryPreferenceData(), assets: Int = 300) -> CoordinatorHarness {
-        CoordinatorHarness(assets: assets, preferenceData: prefs, configureLibrary: { lib in
+    private func harness(prefs: InMemoryPreferenceData = InMemoryPreferenceData(), assets: Int = 300,
+                         thumbnails: GatedThumbnails = GatedThumbnails()) -> CoordinatorHarness {
+        CoordinatorHarness(assets: assets, thumbnails: thumbnails, preferenceData: prefs, configureLibrary: { lib in
             lib.state.update { s in
                 s.albums = [AlbumInfo(id: "A", title: "宝宝", assetCount: 150), AlbumInfo(id: "B", title: "旅行", assetCount: 150),
                             AlbumInfo(id: "C", title: "猫", assetCount: 30), AlbumInfo(id: "U", title: "坏的", assetCount: 5)]
@@ -401,5 +402,95 @@ final class MultiAlbumSourceTests: XCTestCase {
         XCTAssertEqual(m.count, 4)
         XCTAssertEqual(onMain.get().count, 6)
         XCTAssertFalse(onMain.get().contains(true), "isHidden 一次都没在主线程上调")
+    }
+
+    // MARK: 2f 补充 3a（00:35）
+
+    /// 「再调一调」期间所选相簿被静默去掉：不算用户改了参数，主按钮仍是「完成」；用户自己改组合才变「开始拼图」。
+    @MainActor
+    func testSilentPruneDuringAdjustKeepsDone() async throws {
+        let h = harness()
+        let c = h.coordinator
+        await ready(h)
+        c.setTarget(try CoordinatorHarness.target())
+        c.openAlbumList(); c.toggleAlbum("A"); c.toggleAlbum("B")
+        XCTAssertTrue(c.finishAlbumSelection())
+        await c.generateTapped(); await c.settle()
+        await waitFor(c, "结果") { if case .result = $0.flow.generation.phase { return true }; return false }
+        c.send(.backToSettings)
+        XCTAssertEqual(c.settingsPrimaryAction, .done)
+        h.library.state.update { s in s.albums.removeAll { $0.id == "B" }; s.albumMembers["B"] = nil }
+        await c.refreshAlbums()
+        XCTAssertEqual(c.state.flow.source.selection, .album(id: "A"), "静默去掉 B")
+        XCTAssertEqual(c.settingsPrimaryAction, .done, "静默去掉不算改参数：仍是「完成」")
+        c.setOverlayAlpha(0.3)
+        XCTAssertEqual(c.settingsPrimaryAction, .done, "只改叠加强度仍是「完成」")
+        await c.adjustDoneTapped(); await c.settle()
+        XCTAssertEqual(c.state.flow.step, .result, "「完成」回原结果（新来源下次重新生成才生效）")
+        c.send(.backToSettings)
+        // 生成前按 ID 核对那条路同样不算改参数
+        h.library.state.update { s in s.albumMembers["A"] = nil }
+        XCTAssertEqual(c.settingsPrimaryAction, .done)
+        // 用户自己改组合 →「开始拼图」
+        h.library.state.update { s in s.albumMembers["A"] = (0..<150).map { "a\($0)" } }
+        await c.refreshAlbums()
+        c.openAlbumList(); c.toggleAlbum("C")
+        XCTAssertTrue(c.finishAlbumSelection())
+        XCTAssertEqual(c.settingsPrimaryAction, .generate)
+        c.stop()
+    }
+
+    /// 加载完之前：素材标签先显示上次选的相簿名，张数位置「正在统计…」（source.counting）；加载完换成真数。
+    @MainActor
+    func testCountingSummaryShowsRememberedNames() async throws {
+        let prefs = InMemoryPreferenceData()
+        let h = harness(prefs: prefs)
+        await ready(h)
+        h.coordinator.openAlbumList(); h.coordinator.toggleAlbum("A"); h.coordinator.toggleAlbum("B")
+        XCTAssertTrue(h.coordinator.finishAlbumSelection())
+        XCTAssertEqual(SourceSelectionStore(backend: prefs).loadNames(), ["A": "宝宝", "B": "旅行"], "名字随选择一起记下")
+        h.coordinator.stop()
+
+        let h2 = harness(prefs: prefs)   // 第二次打开
+        let c = h2.coordinator
+        XCTAssertTrue(c.state.isMaterialCountLoading)
+        let line = c.state.materialSummary(allPhotosTitle: "全部照片")
+        XCTAssertEqual(line, LocalizedLine(.quickSourceSummaryTwo, ["宝宝", "旅行", MultiAlbumText.countingArgument]))
+        XCTAssertEqual(MultiAlbumText.resolveCounting(in: "素材：宝宝、旅行 · \(MultiAlbumText.countingArgument) 张", counting: "正在统计…"),
+                       "素材：宝宝、旅行 · 正在统计…")
+        XCTAssertEqual(MultiAlbumText.resolveCounting(in: "素材：旅行 · 250 张", counting: "正在统计…"), "素材：旅行 · 250 张")
+        c.start(); await c.settle()
+        await waitFor(c, "相簿已加载") { $0.albumsLoaded && $0.flow.source.selectionUnion != nil }
+        XCTAssertEqual(c.state.materialSummary(allPhotosTitle: "全部照片"), LocalizedLine(.quickSourceSummaryTwo, ["宝宝", "旅行", "250"]))
+
+        // 单个相簿同理
+        let p3 = InMemoryPreferenceData()
+        SourceSelectionStore(backend: p3).save(.album(id: "C"))
+        SourceSelectionStore(backend: p3).saveNames(["C": "猫"])
+        let h3 = harness(prefs: p3)
+        XCTAssertEqual(h3.coordinator.state.materialSummary(allPhotosTitle: "全部照片"),
+                       LocalizedLine(.quickSourceSummary, ["猫", MultiAlbumText.countingArgument]))
+        XCTAssertTrue(L10nKey.allUsed.contains(.sourceCounting))
+        h2.coordinator.stop(); h3.coordinator.stop()
+    }
+
+    /// 「加载完」= 相簿列表加载完，不等全量重扫：重扫卡住时，失效相簿也已经去掉、张数不再是「正在统计…」。
+    @MainActor
+    func testAlbumsLoadedPrunesWithoutWaitingForRescan() async throws {
+        let prefs = InMemoryPreferenceData()
+        SourceSelectionStore(backend: prefs).save(.albums(ids: ["A", "gone"]))
+        let scanGate = GatePoint()
+        let h = harness(prefs: prefs, thumbnails: GatedThumbnails(gates: [1: scanGate]))
+        let c = h.coordinator
+        c.start()
+        await scanGate.reached.wait()                       // 全量扫描停在第一张缩略图
+        await waitFor(c, "相簿列表加载完") { $0.albumsLoaded }
+        XCTAssertFalse(SourceListLogic.isScanComplete(c.state.indexStatus), "扫描还没完")
+        XCTAssertEqual(c.state.flow.source.selection, .album(id: "A"), "失效相簿在相簿列表加载完时就去掉")
+        XCTAssertEqual(SourceSelectionStore(backend: prefs).load(), .album(id: "A"))
+        XCTAssertFalse(c.state.isMaterialCountLoading)
+        await scanGate.release.open()
+        await c.settle()
+        c.stop()
     }
 }

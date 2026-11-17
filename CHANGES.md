@@ -21,6 +21,16 @@
 - 补充 4 性能：网格的隐藏照片扫描挪到后台（`VisibleIndexMap.buildInBackground`，`Task.detached`）。表建好前网格 `count == 0`，建好后整体重载；相册变化后台建新表，回主线程一起换 fetch result 和表；连续变化只认最后一次，跳过的改整体重载。素材扫描 / 相簿计数本来就在 `PhotoKitLibrary` actor、目录在 nonisolated async 里，不在主线程。
 - 测试：`MultiAlbumSourceTests` +6（本次单选相簿消失静默 + 摘要即时更新、生成前按 ID 再核对、受限小字只在 .limited、加载完之前开始拼图先等且不拿失效选择生成、启动时全失效回全部照片、网格表在后台线程建）；`SourceAndGateTests.testSourcePickerReconcile` 改为静默。
 
+**追加（00:34–00:35，QA 复核 qa/pr19-album-multiselect-report.md + 产品「2f 补充 3a」）**
+- P1-1 本次手选的单个相簿被删：静默去掉、不弹提示；「开始拼图」前按 ID 再核对，列表还没刷新也先去掉（`awaitAlbumsBeforeGenerate` / 快照失败路径都走 `silentSelectionPruned`）。
+- P1-2 `albums.limited_note` +「增加可用照片」只在 `.limited` 显示（00:15 已做，补 QA 用例覆盖）。
+- P1-3 / 3a-5 加载完之前确认页不再出现「素材：、 · 0 张」：记住来源时同时记下相簿名（`SourceSelectionStore` 新键 `source.selection.names`），加载完之前摘要用上次的名字，张数位置显示新文案 `source.counting`「正在统计…」，如「素材：旅行 · 正在统计…」（copy 从 /workspace/pinyi/copy_v1.1.md 同步，gen-localizable 183 key；`MultiAlbumText.resolveCounting` 连同「张」一起换掉）。来源行 / 确认页去掉 ProgressView，直接显示这行字。
+- 3a-4 「再调一调」途中所选相簿被静默去掉：不算改参数，主按钮仍是「完成」（`notePrunedSelectionForProduct` 同步更新原结果的来源记录）；用户自己改组合才变「开始拼图」。
+- 3a-6「加载完」= 相簿列表加载完（是否存在 / 为空 / 共享已判断），不等全量重扫；在这一刻去掉失效相簿并写回。
+- P2 网格隐藏照片扫描不在主线程（`VisibleIndexMap.buildInBackground`，00:15 已做）。
+- P2 `check-photo-fetch.sh` 规则 4 收紧：不再整文件白名单；先把换行链式调用（下一行以 `.` 开头 / 上一行以 `.` 结尾）拼回一行、去掉整行注释，再匹配 `PhotoFetch␣*.␣*(allImages|images|keyAssets)`（空格变体、函数引用、按 ID 都算）。确有需要的原始调用在同一行写 `// photo-fetch: raw-ok <理由>`（网格 2 处、素材扫描 1 处已标）。按 ID 取图的 5 个存量文件属于 #15，本 PR 不改，脚本里列为过渡基线（每个文件只放过 1 处、且只放过按 ID），#15 合入后删基线。新增 `scripts/tests/check-photo-fetch-test.sh`（25 个正反例），linux-core CI 跑。
+- 测试：`MultiAlbumSourceTests` +3（静默去掉仍是「完成」、正在统计…+上次相簿名、相簿列表加载完即去掉失效相簿不等重扫）。
+
 ## feat/start-new：「再拼一张」+ 未保存提示（quick-start-req v1.0 §2a / §2b / §2e；hd-export-req B10 第 4、11 条）
 
 **依赖 #17（fix/works-delete，48b0569），需先合 #17。** 本分支已 merge `origin/feat/app-layer`（ed58064）和 `origin/fix/works-delete`（48b0569），都是 merge，没有 rebase。未保存提示要用 #17 的 `WorksController.unsavedPrompt` / `.needsUpdate` /「更新原作品」。
