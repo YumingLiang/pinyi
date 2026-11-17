@@ -22,6 +22,7 @@ public enum PresetShapes {
         Entry(id: .circle, path: circle()),
         Entry(id: .birthdayCake, path: birthdayCake()),
         Entry(id: .flower, path: flower()),
+        Entry(id: .moon, path: moon()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -151,6 +152,35 @@ extension PresetShapes {
             b.circle(50 + dist * cos(angle), 50 + dist * sin(angle), petalR)
         }
         b.circle(50, 50, 22)
+        return b.build()
+    }
+}
+
+// MARK: - 月亮
+
+extension ShapePresetID {
+    /// 月亮
+    public static let moon = ShapePresetID(rawValue: "moon")
+}
+
+extension PresetShapes {
+    /// 月亮：弯月，开口朝右，上下对称。外圆 C1（圆心 0,0，半径 50）去掉内圆 C2（圆心 22,0，半径 44）；
+    /// 直接写成一条闭合轮廓（外弧 + 内弧），不靠反向子路径挖孔。中间最厚处 28（外接框高的 28%）。
+    static func moon() -> ShapePath {
+        var b = ShapePathBuilder()
+        let r1 = 50.0, cx2 = 22.0, r2 = 44.0
+        // 两圆交点：x = (r1² − r2² + cx2²) / (2 cx2)，y = ±√(r1² − x²)。
+        let ix = (r1 * r1 - r2 * r2 + cx2 * cx2) / (2 * cx2)
+        let iy = (r1 * r1 - ix * ix).squareRoot()
+        let deg = 180 / Double.pi
+        let a1 = atan2(iy, ix) * deg                 // 外圆上交点（下方）的角度
+        let a2 = atan2(iy, ix - cx2) * deg           // 内圆上同一点的角度
+        b.move(ix, iy)
+        // 外弧：从下交点顺时针（角度增大）经左侧到上交点。
+        b.arc(0, 0, r1, from: a1, to: 360 - a1)
+        // 内弧：从上交点（内圆角度 360 − a2）逆向回到下交点（a2），走内圆左侧。
+        b.arc(cx2, 0, r2, from: 360 - a2, to: a2)
+        b.close()
         return b.build()
     }
 }
