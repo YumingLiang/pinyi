@@ -11,7 +11,7 @@ public protocol CurrentResultSaving: AnyObject {
     func saveCurrentResult() async -> Bool
 }
 
-/// 预览页「再拼一张」（需求 v0.4 §2b / §2e）。判断都在这里（Linux 单测），视图只调方法。
+/// 预览页「再拼一张」（需求 v1.0 §2b / §2e）。判断都在这里（Linux 单测），视图只调方法。
 ///
 /// 流程：点「再拼一张」→（当前结果没存进作品、或存过但强度改了没存时先弹 `quick.unsaved.*`）→ 选目标图 → 确认页（素材沿用上次、
 /// 可「换素材」）→「开始拼图」。选图页 / 确认页返回都回到原预览页，结果和「已存」状态不变；
@@ -35,6 +35,7 @@ extension AppCoordinator {
         let kind = currentUnsavedPrompt
         state.unsavedPromptIsUpdate = { if case .alphaChanged = kind { return true }; return false }()
         state.unsavedPrompt = reason
+        unsavedPromptID += 1
     }
 
     /// 预览页「再拼一张」。生成中 / 导出中 / 不在结果页时忽略（按钮本来也是禁用的）。
@@ -86,10 +87,22 @@ extension AppCoordinator {
 
     /// 未保存提示「保存」：存成功后继续原来的离开方式；存失败留在预览页（错误由「存到我的作品」按钮下方的 `works.save_failed` 显示）。
     public func unsavedPromptSave() async {
-        guard let prompt = state.unsavedPrompt, !state.isSavingBeforeLeaving else { return }
+        guard let task = unsavedPromptSaveTapped() else { return }
+        await task.value
+    }
+
+    /// 「保存」按钮用的同步入口：提示状态当场清掉、标记保存中，再在 Task 里存。这样同一次点击里 SwiftUI 收起弹窗
+    /// （`unsavedPromptDismissed`）不管先到后到都不会把「保存」吞掉。
+    @discardableResult
+    public func unsavedPromptSaveTapped() -> Task<Void, Never>? {
+        guard let prompt = state.unsavedPrompt, !state.isSavingBeforeLeaving else { return nil }
         state.unsavedPrompt = nil
         state.unsavedPromptIsUpdate = false
         state.isSavingBeforeLeaving = true
+        return Task { @MainActor [weak self] in await self?.finishSaveBeforeLeaving(prompt) }
+    }
+
+    private func finishSaveBeforeLeaving(_ prompt: UnsavedResultPrompt) async {
         let ok = await resultSaver?.saveCurrentResult() ?? false
         state.isSavingBeforeLeaving = false
         guard ok else { return }
@@ -110,6 +123,20 @@ extension AppCoordinator {
         state.unsavedPromptIsUpdate = false
     }
 
+    /// 弹窗被收起（点弹窗外面、系统收起；按钮点击时 SwiftUI 也会调）。等这一轮按钮动作做完再看：提示还是同一个、
+    /// 没有在保存，就按「取消」处理——否则提示状态一直挂着，「再拼一张」会一直不可点、弹窗也会反复弹。
+    /// - Returns: 延后执行的 Task（测试用）。
+    @discardableResult
+    public func unsavedPromptDismissed() -> Task<Void, Never>? {
+        guard state.unsavedPrompt != nil else { return nil }
+        let id = unsavedPromptID
+        return Task { @MainActor [weak self] in
+            guard let self, self.state.unsavedPrompt != nil, self.unsavedPromptID == id,
+                  !self.state.isSavingBeforeLeaving else { return }
+            self.unsavedPromptCancel()
+        }
+    }
+
     private func continueLeaving(_ prompt: UnsavedResultPrompt) {
         guard !state.isGenerating, !state.export.isBusy else { return }
         if prompt == .startNewFromAdjust {
@@ -127,13 +154,26 @@ extension AppCoordinator {
     /// 去选目标图。结果、预览、「已存」状态都不动（选图页返回还能回来）。
     private func beginQuickAgain() {
         pendingTarget = nil
+        settingsBeforeQuickAgain = (state.flow.settings, state.flow.source.selection)
         state.flow.send(.quickAgainStarted)
+    }
+
+    /// 「再拼一张」途中返回到原预览页（选图页返回；用系统 PhotosPicker 时确认页返回也直接回来，P2-c）：
+    /// 释放新选的目标图（P3），确认页上改的强度 / 密度 / 素材来源恢复成原结果的（P2-b），不弹未保存提示。
+    func quickAgainCancelled() {
+        pendingTarget = nil
+        if let s = settingsBeforeQuickAgain {
+            state.flow.settings = s.settings
+            state.flow.source.select(s.selection)
+        }
+        settingsBeforeQuickAgain = nil
     }
 
     /// 开始生成新图（由 `send` 在 `.run` 之前调用）：丢弃旧结果，换上新目标图。
     func commitQuickAgain() {
         if let t = pendingTarget { target = t; targetGeneration += 1 }
         pendingTarget = nil
+        settingsBeforeQuickAgain = nil
         discardResult()
         state.flow.commitQuickAgain()
     }

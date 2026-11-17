@@ -162,7 +162,7 @@ final class AppModel: ObservableObject {
     /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
     func retryTapped() { Task { await coordinator.retryTapped() } }
 
-    // MARK: 再拼一张（需求 v0.4 §2e；判断全在 AppCoordinator+QuickAgain）
+    // MARK: 再拼一张（需求 v1.0 §2e；判断全在 AppCoordinator+QuickAgain）
 
     var canStartNewMosaic: Bool { state.canStartNewMosaic }
     var unsavedPrompt: UnsavedResultPrompt? { state.unsavedPrompt }
@@ -178,7 +178,8 @@ final class AppModel: ObservableObject {
     }
     func startNewMosaicTapped() { coordinator.startNewMosaicTapped() }
     func leaveResultTapped() { coordinator.leaveResultTapped() }
-    func unsavedPromptSave() { Task { await coordinator.unsavedPromptSave() } }
+    func unsavedPromptSave() { coordinator.unsavedPromptSaveTapped() }
+    func unsavedPromptDismissed() { coordinator.unsavedPromptDismissed() }
     func unsavedPromptDiscard() { coordinator.unsavedPromptDiscard() }
     func unsavedPromptCancel() { coordinator.unsavedPromptCancel() }
     /// 确认页「素材：{name} · {count} 张」。

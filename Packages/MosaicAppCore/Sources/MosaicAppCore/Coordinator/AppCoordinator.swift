@@ -26,6 +26,11 @@ public final class AppCoordinator {
     public internal(set) var target: PixelBuffer?
     /// 「再拼一张」新选的目标图（开始生成时才替换 `target`）。
     public internal(set) var pendingTarget: PixelBuffer?
+    /// 未保存提示每弹一次 +1：收起弹窗时用来确认收的还是同一个提示（`unsavedPromptDismissed`）。不放进 AppState（不是界面状态）。
+    var unsavedPromptID = 0
+    /// 「再拼一张」开始时的设置和素材来源：确认页上的改动只作用于新图（#18 QA P2-b），返回预览页时恢复，旧结果和
+    /// 「已存」按钮状态不受影响。开始生成新图时丢掉（新图就用确认页上的值）。
+    var settingsBeforeQuickAgain: (settings: GenerationSettings, selection: SourceSelection)?
     /// 「存到我的作品」（`WorksController`）：未保存提示要问它当前结果存没存过、以及「保存」按钮去存。弱引用，不成环。
     public weak var resultSaver: (any CurrentResultSaving)?
     /// 每换一次目标图 +1（PixelBuffer 不做内容比较，用代次判断「目标图换没换」）。
@@ -318,7 +323,9 @@ public final class AppCoordinator {
 
     public func flowSend(_ e: MainFlow.Event) {
         guard !state.export.isBusy else { return }
+        let wasQuickAgain = state.flow.isQuickAgain
         state.flow.send(e)
+        if wasQuickAgain, !state.flow.isQuickAgain, state.flow.step == .result { quickAgainCancelled() }
     }
     public func selectSource(_ s: SourceSelection) { state.flow.source.select(s) }
     public func setDensity(_ d: DensityChoice) { state.flow.settings.density = d }

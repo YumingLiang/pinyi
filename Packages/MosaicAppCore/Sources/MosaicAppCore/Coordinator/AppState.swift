@@ -146,7 +146,7 @@ public struct AppState: Sendable, Hashable {
     /// 生成进行中（含确认取消弹窗）。
     public var isGenerating: Bool { flow.generation.showsProgress }
 
-    /// 确认页素材摘要「素材：{name} · {count} 张」（需求 v0.4 §2b）。`allPhotosTitle`：平台层把
+    /// 确认页素材摘要「素材：{name} · {count} 张」（需求 v1.0 §2b）。`allPhotosTitle`：平台层把
     /// 「全部照片 / 已允许访问的照片」本地化后传进来（逻辑层不产出中文）。张数与来源页该行显示的一致。
     public func materialSummary(allPhotosTitle: String) -> LocalizedLine {
         switch flow.source.selection {
@@ -167,7 +167,7 @@ public struct AppState: Sendable, Hashable {
     }
 }
 
-/// 未保存提示是因为哪种离开方式弹出来的（需求 v0.4 §2e）。
+/// 未保存提示是因为哪种离开方式弹出来的（需求 v1.0 §2e）。
 public enum UnsavedResultPrompt: Sendable, Hashable {
     /// 预览页「再拼一张」。
     case startNew

@@ -346,4 +346,200 @@ final class QuickAgainUnsavedRulesTests: XCTestCase {
         XCTAssertNil(f.c.state.unsavedPrompt, "原结果已存且强度没改：不弹")
         f.stop()
     }
+
+    // MARK: #18 QA 修复：P2-c 确认页返回 / P2-b 确认页设置只作用于新图 / P3 释放新目标图 / 弹窗收起复位
+
+    private func otherTarget() throws -> PixelBuffer {
+        try PixelBuffer(width: 40, height: 40, bytes: [UInt8](repeating: 90, count: 40 * 40 * 4))
+    }
+
+    /// P2-c：系统 PhotosPicker 路径，确认页按一次返回直接回原预览页；结果、「已存」状态不变，不弹提示。
+    func testConfirmBackReturnsToPreviewInOneStepKeepingSavedResult() async throws {
+        let f = Fixture()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        guard case .saved(let id) = f.works.state.saveStatus else { return XCTFail() }
+        let rev = f.c.state.resultRevision
+        f.c.startNewMosaicTapped()
+        f.c.setTarget(try otherTarget())
+        XCTAssertEqual(f.c.state.flow.step, .settings)
+        XCTAssertNotNil(f.c.pendingTarget)
+        f.c.flowSend(.back); f.sync()
+        XCTAssertEqual(f.c.state.flow.step, .result, "一次返回就回预览页")
+        XCTAssertFalse(f.c.state.flow.isQuickAgain)
+        XCTAssertNil(f.c.state.unsavedPrompt, "返回不弹未保存提示")
+        XCTAssertEqual(f.c.state.resultRevision, rev)
+        XCTAssertTrue(f.c.state.hasResult)
+        XCTAssertEqual(f.works.state.saveStatus, .saved(id))
+        XCTAssertNil(f.c.pendingTarget, "P3：返回预览页即释放新目标图")
+        f.stop()
+    }
+
+    func testConfirmBackKeepsUnsavedResultWithoutPrompt() async throws {
+        let f = Fixture()
+        try await f.generate()
+        let rev = f.c.state.resultRevision
+        f.c.startNewMosaicTapped()
+        f.c.unsavedPromptDiscard()                                   // 「不保存」：此时还没丢
+        f.c.setTarget(try otherTarget())
+        f.c.flowSend(.back); f.sync()
+        XCTAssertEqual(f.c.state.flow.step, .result)
+        XCTAssertNil(f.c.state.unsavedPrompt)
+        XCTAssertEqual(f.c.state.resultRevision, rev, "原结果还在")
+        XCTAssertTrue(f.c.state.hasResult)
+        XCTAssertEqual(f.works.state.saveStatus, .idle)
+        XCTAssertEqual(f.works.state.count, 0)
+        XCTAssertNil(f.c.pendingTarget)
+        f.stop()
+    }
+
+    /// 自做选图页接入后的钩子：确认页返回回选图页，再返回才回预览页（有意两步）。
+    func testConfirmBackHookForInAppPickerIsTwoSteps() async throws {
+        let f = Fixture()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        f.c.state.flow.confirmBackReturnsToPicker = true
+        f.c.startNewMosaicTapped()
+        f.c.setTarget(try otherTarget())
+        f.c.flowSend(.back)
+        XCTAssertEqual(f.c.state.flow.step, .target)
+        XCTAssertTrue(f.c.state.flow.isQuickAgain)
+        f.c.flowSend(.back); f.sync()
+        XCTAssertEqual(f.c.state.flow.step, .result)
+        XCTAssertNil(f.c.pendingTarget)
+        f.stop()
+    }
+
+    /// P2-b：确认页上改强度 / 密度 / 素材，返回后旧结果的设置、「已存」按钮、「再调一调」的「完成」都不受影响。
+    func testConfirmPageSettingsDoNotLeakIntoOldResult() async throws {
+        let f = Fixture()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        guard case .saved(let id) = f.works.state.saveStatus else { return XCTFail() }
+        let before = f.c.state.flow.settings
+        let selection = f.c.state.flow.source.selection
+        f.c.startNewMosaicTapped()
+        f.c.setTarget(try otherTarget())
+        f.c.setOverlayAlpha(min(OverlayBlendLimits.maxAlpha, before.overlayAlpha + 0.15))
+        f.c.setDensity(before.density == .fine ? .coarse : .fine)
+        f.sync()
+        f.c.flowSend(.back); f.sync()
+        XCTAssertEqual(f.c.state.flow.settings, before, "确认页的改动只作用于新图")
+        XCTAssertEqual(f.c.state.flow.source.selection, selection)
+        XCTAssertEqual(f.works.state.saveStatus, .saved(id), "按钮仍是「已存」，不是「更新这张作品」")
+        f.c.send(.backToSettings); f.sync()
+        XCTAssertEqual(f.c.settingsPrimaryAction, .done, "再「再调一调」仍可「完成」回原结果")
+        f.stop()
+    }
+
+    /// P2-b 另一面：真的开始拼新图时，用的是确认页上的设置。
+    func testConfirmPageSettingsApplyToNewMosaic() async throws {
+        let f = Fixture()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        let before = f.c.state.flow.settings
+        let newDensity: DensityChoice = before.density == .fine ? .coarse : .fine
+        f.c.startNewMosaicTapped()
+        f.c.setTarget(try otherTarget())
+        f.c.setDensity(newDensity)
+        await f.c.generateTapped(); await f.c.settle()
+        await waitFor(f.c, "新结果") { if case .result = $0.flow.generation.phase { return true }; return false }
+        XCTAssertEqual(f.c.state.flow.step, .result)
+        XCTAssertEqual(f.c.state.flow.settings.density, newDensity)
+        XCTAssertNil(f.c.settingsBeforeQuickAgain)
+        f.stop()
+    }
+
+    /// 自测：点弹窗外面收起 → 提示状态复位，「再拼一张」可点，再点只弹一次。
+    func testDismissResetsPromptSoStartNewStaysUsable() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.startNewMosaicTapped()
+        XCTAssertEqual(f.c.state.unsavedPrompt, .startNew)
+        XCTAssertFalse(f.c.state.canStartNewMosaic)
+        await f.c.unsavedPromptDismissed()?.value
+        XCTAssertNil(f.c.state.unsavedPrompt, "收起 = 取消")
+        XCTAssertFalse(f.c.state.unsavedPromptIsUpdate)
+        XCTAssertTrue(f.c.state.canStartNewMosaic, "「再拼一张」不能一直不可点")
+        XCTAssertEqual(f.c.state.flow.step, .result)
+        XCTAssertNil(f.c.unsavedPromptDismissed(), "已收起：再收一次什么都不做（不会反复弹）")
+        f.c.startNewMosaicTapped()
+        XCTAssertEqual(f.c.state.unsavedPrompt, .startNew, "再点还能正常弹一次")
+        f.stop()
+    }
+
+    /// 点「保存」时 SwiftUI 同时收起弹窗：收起不能吞掉保存（不管先后）。
+    func testDismissDuringSaveDoesNotSwallowSave() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.startNewMosaicTapped()
+        let dismiss = f.c.unsavedPromptDismissed()                  // 收起先到
+        let save = f.c.unsavedPromptSaveTapped()                    // 按钮动作后到（同一轮）
+        XCTAssertNotNil(save)
+        await dismiss?.value
+        await save?.value
+        XCTAssertEqual(f.works.state.count, 1, "保存没被吞")
+        XCTAssertEqual(f.c.state.flow.step, .target, "存好后去选图")
+        XCTAssertNil(f.c.state.unsavedPrompt)
+
+        let g = Fixture()
+        try await g.generate()
+        g.c.startNewMosaicTapped()
+        let save2 = g.c.unsavedPromptSaveTapped()                   // 按钮动作先到
+        XCTAssertNil(g.c.unsavedPromptDismissed(), "提示已清：收起什么都不做")
+        await save2?.value
+        XCTAssertEqual(g.works.state.count, 1)
+        XCTAssertEqual(g.c.state.flow.step, .target)
+        f.stop(); g.stop()
+    }
+
+    /// 收起的延后处理只认同一个提示：中间若已取消并重新弹了新的，不能把新的收掉。
+    func testStaleDismissDoesNotCloseNewPrompt() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.startNewMosaicTapped()
+        let stale = f.c.unsavedPromptDismissed()
+        f.c.unsavedPromptCancel()
+        f.c.startNewMosaicTapped()
+        await stale?.value
+        XCTAssertEqual(f.c.state.unsavedPrompt, .startNew)
+        f.stop()
+    }
+
+    // MARK: P1-a 系统选择器隐藏照片兜底
+
+    func testPickedTargetGate() {
+        XCTAssertTrue(PickedTargetGate.allows(itemIdentifier: "A", lookup: { _ in .visible }))
+        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: "A", lookup: { _ in .hidden }), "isHidden → 读不出来")
+        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: "A", lookup: { _ in .notFound }), "取不到 → 读不出来")
+        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: nil, lookup: { _ in .visible }), "没有 itemIdentifier → 读不出来")
+        XCTAssertFalse(PickedTargetGate.allows(itemIdentifier: "", lookup: { _ in .visible }))
+        var asked: [String] = []
+        _ = PickedTargetGate.allows(itemIdentifier: "X/L0/001", lookup: { asked.append($0); return .visible })
+        XCTAssertEqual(asked, ["X/L0/001"], "按 itemIdentifier 查")
+    }
+
+    /// 兜底拒绝时平台层走 `setTarget(nil)`：主流程显示「读不出来」；「再拼一张」途中只清新目标图，旧结果不动。
+    func testGateRejectionTreatedAsUnreadableInBothFlows() async throws {
+        let f = Fixture()
+        try await f.generate()
+        let rev = f.c.state.resultRevision
+        f.c.startNewMosaicTapped(); f.c.unsavedPromptDiscard()
+        f.c.setTarget(nil)
+        XCTAssertEqual(f.c.state.flow.targetNotice, .targetUnreadable)
+        XCTAssertEqual(f.c.state.flow.step, .target, "留在选图页")
+        XCTAssertNil(f.c.pendingTarget)
+        f.c.flowSend(.back)
+        XCTAssertEqual(f.c.state.flow.step, .result)
+        XCTAssertEqual(f.c.state.resultRevision, rev)
+        f.stop()
+
+        let g = Fixture()
+        g.c.start(); await g.c.settle()
+        g.c.setTarget(nil)
+        XCTAssertEqual(g.c.state.flow.targetNotice, .targetUnreadable)
+        XCTAssertFalse(g.c.state.flow.hasTarget)
+        XCTAssertEqual(g.c.state.flow.step, .target)
+        g.stop()
+    }
 }

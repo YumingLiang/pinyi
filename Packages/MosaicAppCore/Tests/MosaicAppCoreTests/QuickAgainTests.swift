@@ -25,7 +25,7 @@ final class FakeResultSaver: CurrentResultSaving {
     }
 }
 
-/// 预览页「再拼一张」（需求 v0.4 §2b / §2e，验收 2e 第 6–9 条）。
+/// 预览页「再拼一张」（需求 v1.0 §2b / §2e，验收 2e 第 6–9 条）。
 @MainActor
 final class QuickAgainTests: XCTestCase {
     private func generated(_ h: CoordinatorHarness) async throws {
@@ -101,7 +101,7 @@ final class QuickAgainTests: XCTestCase {
     }
 
     /// 选好新目标图直接进确认页（素材沿用），确认页返回 → 选图页 → 预览页；旧目标图一直没被换掉。
-    func testPickingTargetGoesToConfirmAndBackTwiceReturnsToPreview() async throws {
+    func testPickingTargetGoesToConfirmAndBackReturnsToPreview() async throws {
         let h = CoordinatorHarness(assets: 300)
         let c = h.coordinator
         let s = saver(c)
@@ -121,11 +121,10 @@ final class QuickAgainTests: XCTestCase {
         c.flowSend(.changeSource)
         c.flowSend(.back)
         XCTAssertEqual(c.state.flow.step, .settings)
-        // 确认页返回 → 选图页 → 预览页
-        c.flowSend(.back)
-        XCTAssertEqual(c.state.flow.step, .target)
+        // 确认页返回 → 直接回预览页（过渡期系统 PhotosPicker，§2e 23:20 定 / P2-c）
         c.flowSend(.back)
         XCTAssertEqual(c.state.flow.step, .result)
+        XCTAssertNil(c.pendingTarget, "P3：新目标图已释放")
         XCTAssertTrue(c.state.hasResult)
         XCTAssertEqual(c.target?.width, oldTargetWidth)
         c.stop()
@@ -299,8 +298,8 @@ final class QuickAgainTests: XCTestCase {
         guard case .result = c.state.flow.generation.phase else { return XCTFail("\(c.state.flow.generation.phase)") }
         XCTAssertEqual(c.state.flow.step, .settings, "回到确认页")
         XCTAssertTrue(c.state.hasResult)
-        c.flowSend(.back); c.flowSend(.back)
-        XCTAssertEqual(c.state.flow.step, .result)
+        c.flowSend(.back)
+        XCTAssertEqual(c.state.flow.step, .result, "确认页一次返回回预览页")
         c.stop()
     }
 

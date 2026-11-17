@@ -74,13 +74,21 @@ struct TargetStepView: View {
         .padding(24)
         .navigationTitle(Text(L10nKey.targetNavTitle))
         .onAppear {
-            // TODO(需求 v0.4 §4)：自做选图页（记住浏览位置）接入主流程后改为打开它；目前主流程仍是系统 PhotosPicker。
+            // TODO(需求 v1.0 §4)：自做选图页（记住浏览位置）接入主流程后改为打开它；目前主流程仍是系统 PhotosPicker。
             if model.flow.autoOpensTargetPicker { showPicker = true }
         }
         .onChange(of: item) { newItem in
             Task {
                 // ⚠️ 盲写：loadTransferable(type: Data.self) 对 HEIC/RAW 的行为需真机核对；iCloud 原图会触发系统下载（系统进程内，不是本 App 联网）。
-                let data = try? await newItem?.loadTransferable(type: Data.self)
+                // #18 P1-a：系统选择器可能显示隐藏照片（等 T7）。按 itemIdentifier 经 PhotoFetch 再取一次 PHAsset，
+                // 取不到或 isHidden 就按「读不出来」处理，不解码。主流程和「再拼一张」共用这个选图页。
+                guard let newItem else { return }
+                guard PickedTargetGate.allows(itemIdentifier: newItem.itemIdentifier,
+                                              lookup: PhotoFetch.pickedAssetLookup) else {
+                    model.loadTarget(data: nil)
+                    return
+                }
+                let data = try? await newItem.loadTransferable(type: Data.self)
                 model.loadTarget(data: data)
             }
         }
@@ -148,7 +156,7 @@ struct SettingsStepView: View {
             if let n = model.flow.generation.settingsNotice {
                 Section { Text(n).foregroundStyle(.orange) }
             }
-            // 确认页（需求 v0.4 §2b）：「素材：{name} · {count} 张」+「换素材」。「裁剪」（§3）在 feat/app-layer 上还没有，接入后放这里。
+            // 确认页（需求 v1.0 §2b）：「素材：{name} · {count} 张」+「换素材」。「裁剪」（§3）在 feat/app-layer 上还没有，接入后放这里。
             Section {
                 HStack {
                     Text(model.materialSummary).font(.subheadline)
@@ -252,7 +260,7 @@ struct ResultView: View {
                 .controlSize(.large)
                 .disabled(!model.canExport)
             SaveToWorksButton()   // 需求 B2 / B10：次按钮「存到我的作品」（导出不自动存）
-            // 需求 v0.4 §2e：第三级文字按钮，紧挨「存到我的作品」下面，不和「再调一调」「换一种拼法」同排。
+            // 需求 v1.0 §2e：第三级文字按钮，紧挨「存到我的作品」下面，不和「再调一调」「换一种拼法」同排。
             // 生成中 / 导出中 / 提示弹着时不可点（判断在 AppState.canStartNewMosaic）。
             Button { model.startNewMosaicTapped() } label: {
                 Label { Text(L10nKey.quickAgain) } icon: { Image(systemName: "plus") }
@@ -361,7 +369,10 @@ struct UnsavedPromptDialog: ViewModifier {
     func body(content: Content) -> some View {
         content
             .confirmationDialog(Text(model.unsavedPromptIsUpdate ? L10nKey.quickUnsavedUpdateTitle : L10nKey.quickUnsavedTitle),
-                                isPresented: .constant(model.unsavedPrompt != nil),
+                                // 收起（点外面 / 系统收起）走 unsavedPromptDismissed：延后一轮、仍是同一个提示且没在保存时才按「取消」，
+                                // 不会吞掉按钮动作，也不会让提示状态一直挂着（「再拼一张」不可点、弹窗反复弹）。
+                                isPresented: Binding(get: { model.unsavedPrompt != nil },
+                                                     set: { if !$0 { model.unsavedPromptDismissed() } }),
                                 titleVisibility: .visible) {
                 Button { model.unsavedPromptSave() } label: { Text(L10nKey.quickUnsavedSave) }
                 Button(role: .destructive) { model.unsavedPromptDiscard() } label: { Text(L10nKey.quickUnsavedDiscard) }

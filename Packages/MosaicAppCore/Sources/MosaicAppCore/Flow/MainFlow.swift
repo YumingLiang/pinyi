@@ -13,7 +13,7 @@ public struct MainFlow: Sendable, Hashable {
     public var source = SourcePickerState()
     public var settings = GenerationSettings()
     public var generation: GenerationMachine
-    /// 「再拼一张」进行中（需求 v0.4 §2e）：已离开预览页去选新目标图 / 确认页，但上一张结果**还在**——
+    /// 「再拼一张」进行中（需求 v1.0 §2e）：已离开预览页去选新目标图 / 确认页，但上一张结果**还在**——
     /// 在选图页返回就回到原预览页；真正开始生成新图时（协调器 `commitQuickAgain`）才结束这个状态、丢弃旧结果。
     public private(set) var isQuickAgain = false
     /// 进入「再拼一张」前是否已有目标图（返回预览页时恢复）。
@@ -21,6 +21,10 @@ public struct MainFlow: Sendable, Hashable {
     /// 从作品查看页点「再拼一张」、而主流程当时没有停在结果页（quick-start v1.0 §2a）：同样「选一张 → 确认页（素材沿用）→
     /// 开始拼图」，只是没有可返回的预览页。开始生成时结束（`endFreshQuickStart`）。
     public private(set) var isFreshQuickStart = false
+    /// 确认页返回去哪（quick-start v1.0 §2e，23:20 定）。`false`（现在）：目标图用系统 PhotosPicker，选择器不方便重新弹回，
+    /// 「再拼一张」确认页按一次返回直接回原预览页。`true`：自做选图页（§4，记住相簿和滚动位置）接入后改成 true，
+    /// 确认页返回回到选图页，选图页再返回才回预览页（有意两步）。两种情况原结果都保留，不弹未保存提示。
+    public var confirmBackReturnsToPicker = false
     /// 选图页一出现就自动弹出选图（再拼一张 → 选一张 → 开始拼图，≤ 3 次点击）。
     public var autoOpensTargetPicker: Bool { (isQuickAgain || isFreshQuickStart) && step == .target && !hasTarget }
 
@@ -59,12 +63,9 @@ public struct MainFlow: Sendable, Hashable {
             if isQuickAgain {
                 switch step {
                 case .target:
-                    // 回到原预览页：结果、「已存」状态都没动过。
-                    isQuickAgain = false
-                    hasTarget = hasTargetBeforeQuickAgain
-                    targetNotice = nil
-                    step = .result
-                case .settings: step = .target
+                    returnToResultFromQuickAgain()
+                case .settings:
+                    if confirmBackReturnsToPicker { step = .target } else { returnToResultFromQuickAgain() }
                 case .source: step = .settings
                 case .result: break
                 }
@@ -101,6 +102,14 @@ public struct MainFlow: Sendable, Hashable {
             targetNotice = nil
             step = .target
         }
+    }
+
+    /// 回到原预览页：结果、「已存」状态都没动过（协调器同时释放新目标图、恢复设置）。
+    private mutating func returnToResultFromQuickAgain() {
+        isQuickAgain = false
+        hasTarget = hasTargetBeforeQuickAgain
+        targetNotice = nil
+        step = .result
     }
 
     /// 「再拼一张」真正开始生成新图：结束保留旧结果的状态（协调器同时丢弃旧结果和预览位图）。
