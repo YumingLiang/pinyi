@@ -223,6 +223,9 @@ struct ShapePathBuilder {
     mutating func cubic(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double, _ x: Double, _ y: Double) {
         elements.append(.cubic(ShapePoint(x1, y1), ShapePoint(x2, y2), ShapePoint(x, y)))
     }
+    mutating func quad(_ cx: Double, _ cy: Double, _ x: Double, _ y: Double) {
+        elements.append(.quad(ShapePoint(cx, cy), ShapePoint(x, y)))
+    }
     mutating func close() { elements.append(.close) }
 
     /// 追加另一组元素，逐点做仿射变换（旋转 / 缩放 / 平移，保持方向）。

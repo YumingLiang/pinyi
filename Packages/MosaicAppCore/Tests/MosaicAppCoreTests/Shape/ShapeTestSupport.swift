@@ -4,9 +4,9 @@ import MosaicCore
 
 /// 形状测试的小工具。
 enum ShapeTestSupport {
-    /// 4 连通的前景连通块数。
+    /// 前景连通块数（8 连通：马赛克里斜角相接的两格看起来是连着的；背景孔按 4 连通算，两者对偶）。
     static func foregroundComponents(_ m: CellMask) -> Int {
-        components(m, foreground: true).count
+        components(m, foreground: true, diagonal: true).count
     }
 
     /// 不接触网格边界的背景连通块（= 形状内部的孔）的格数列表。
@@ -16,7 +16,9 @@ enum ShapeTestSupport {
 
     struct Component { var size: Int; var touchesBorder: Bool }
 
-    static func components(_ m: CellMask, foreground: Bool) -> [Component] {
+    static func components(_ m: CellMask, foreground: Bool, diagonal: Bool = false) -> [Component] {
+        let steps = diagonal ? [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+                             : [(1, 0), (-1, 0), (0, 1), (0, -1)]
         var seen = [Bool](repeating: false, count: m.cellCount)
         var out: [Component] = []
         for start in 0..<m.cellCount where !seen[start] && m.isActive(start) == foreground {
@@ -27,7 +29,7 @@ enum ShapeTestSupport {
                 comp.size += 1
                 let c = i % m.columns, r = i / m.columns
                 if c == 0 || r == 0 || c == m.columns - 1 || r == m.rows - 1 { comp.touchesBorder = true }
-                for (dc, dr) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                for (dc, dr) in steps {
                     let nc = c + dc, nr = r + dr
                     guard nc >= 0, nc < m.columns, nr >= 0, nr < m.rows else { continue }
                     let j = nr * m.columns + nc

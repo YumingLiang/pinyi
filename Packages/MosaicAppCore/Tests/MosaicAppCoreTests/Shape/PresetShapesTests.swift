@@ -82,10 +82,10 @@ final class PresetShapesTests: XCTestCase {
                 XCTAssertLessThan(g.mask.activeCount, g.mask.cellCount, tag)
                 XCTAssertEqual(S.foregroundComponents(g.mask), 1, "\(tag) 不能断开")
                 XCTAssertEqual(S.interiorHoles(g.mask), [], "\(tag) 内部不留孔")
-                // 0.5 格边距：最外一圈格子覆盖不到一半，必为形状外。
-                for c in 0..<g.mask.columns {
-                    XCTAssertFalse(g.mask.isActive(column: c, row: 0), tag)
-                    XCTAssertFalse(g.mask.isActive(column: c, row: g.mask.rows - 1), tag)
+                // 0.5 格边距：最外一圈格子最多被盖住一半（≤ 32/64）。
+                let cols = g.mask.columns, rows = g.mask.rows
+                for i in 0..<g.mask.cellCount where i % cols == 0 || i % cols == cols - 1 || i / cols == 0 || i / cols == rows - 1 {
+                    XCTAssertLessThanOrEqual(Int(g.raster.coverage[i]), PathRasterizer.insideThreshold, tag)
                 }
             }
         }
