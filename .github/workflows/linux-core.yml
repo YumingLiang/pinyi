@@ -6,7 +6,7 @@ on:
   pull_request:
   push:
     # feat/app-layer：合入后的树也跑一遍（含 perf-gate），见 perf/README.md「触发」。
-    branches: [main, feat/app-layer, ci/perf-gate-on-push]  # 临时：本分支取 CI 证据，PR 前删除
+    branches: [main, feat/app-layer]
   workflow_dispatch:
 
 concurrency:
