@@ -1,5 +1,14 @@
 # CHANGES
 
+## feat/picker-t1t2：收进 QA 的 PickerSupplementTests（QA #8 补丁）
+
+把 QA 写的 `qa/tests/QAPickerSupplementTests.swift` 收进正式测试 `Packages/MosaicAppCore/Tests/MosaicAppCoreTests/PickerSupplementTests.swift`。按项目约定把类名从 `QAPickerSupplementTests` 改为 `PickerSupplementTests`，用例正文未改；`qa/` 原文件不动。8 个用例全部通过，无需改代码或修正测试。
+
+- OverlayDegrade：清单 12 个边界点、门槛处不跳变、0–8192 步长 0.5 单调且与期望公式一致、滑块 {0, 0.1, 0.3} × k {0, 0.25, 0.5, 0.75, 1} 的 `effectiveAlpha`。
+- H 段：全隐藏相簿按空处理（不显示、不可选）；白名单解不出 hidden；锚点被隐藏、相簿全被隐藏时回到「全部照片」顶部。
+- MosaicAppCore `swift test`：252 个，0 失败，1 跳过（在原先 244 个上加 8 个）。
+
+
 ## feat/picker-t1t2：选图页 P0 T1 + T2 + 叠加层静默降级（photo-picker-v0.1 §3、§5、§6.1）
 
 基于 feat/picker-t0（`9cfd07e`），只改 MosaicAppCore，不碰 App 层；T0 的公开接口签名没改。
@@ -12,7 +21,7 @@
   - `isSelectable`：「全部照片」始终可选；`.album(id:)` 要在节里（含文件夹子树）找到、不是文件夹、图片数 > 0；`allPhotosID` 当相簿 id 传进来不算。`entry(id:)` 深度优先查找，含文件夹。`filter` 仍是 P1 占位。
 - **T2 `BrowsePositionStore`**：JSON 存进 `PreferenceDataStore`（key `browse.position.source|target`，两页互不影响）。读：解不开 / 版本 ≠ `currentVersion` / 锚点 id 为空 / 相簿 id 为空或等于 `allPhotosID` → 当作没存过。存：锚点 id 为空或偏移不是有限数时不写，保留上一次。恢复：没存过 → `noSavedPosition`；相簿不可见 → `albumUnavailable`（不去找锚点）；锚点找不到或下标为负 → `anchorMissing`；都回「全部照片」顶部。「全部照片」不问 `isSelectable`。恢复失败不清掉已存的位置。
 - **`OverlayDegrade`（新增 `Picker/OverlayDegrade.swift`）**：`factor(effectiveLongSide:thresholds:)`——s ≥ 1024 → 1；480–1024 从 0.5 线性到 1；160–480 从 0 线性到 0.5；s < 160 → 0；分段连续、单调不减；NaN / 负数 → 0，+∞ → 1。门槛是 `OverlayDegrade.Thresholds.standard`（1024 / 480 / 160），T7 真机实测后改这一处；自定义门槛要满足 `0 ≤ zero < half < full`。`effectiveAlpha(user:effectiveLongSide:)` = min(用户值夹到 [0, 0.3]，`OverlayBlendLimits.maxAlpha` × k)，用户值 NaN → 0、+∞ → 0.3。还没接到渲染 / 导出（App 层，T5/T7 或流式导出 PR 接）。
-- **测试**：`AlbumCatalogTests` 25 个、`BrowsePositionStoreTests` 20 个、`OverlayDegradeTests` 12 个。
+- **测试**：`AlbumCatalogTests` 25 个、`BrowsePositionStoreTests` 20 个、`OverlayDegradeTests` 12 个、`PickerSupplementTests` 8 个（QA 补测收进正式目录）。
 
 ## feat/picker-t0：选图页 P0 T0「定接口」（photo-picker-v0.1 §3、§5）
 
