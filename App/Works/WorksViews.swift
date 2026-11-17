@@ -100,7 +100,7 @@ struct WorkCell: View {
             Text(verbatim: WorksModel.dateFormatter.string(from: summary.createdAt))
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .task(id: summary.id) { image = works.thumbnail(for: summary) }
+        .task(id: summary.previewURL) { image = works.thumbnail(for: summary) }   // 缺图处理重画预览后文件名变了，跟着刷新
     }
 }
 

@@ -31,7 +31,8 @@ actor PhotoKitThumbnails: ThumbnailProviding {
     }
 
     private nonisolated func assets(_ ids: [String]) -> [PHAsset] {
-        PhotoKitLibrary.array(PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil))   // 不用 enumerateObjects 闭包
+        // 显式不含隐藏照片（作品预览 / 高清重导出按 ID 取图，隐藏的按缺图处理，§5.1）。合入 picker-t3 后由 PhotoFetch 取代
+        PhotoKitLibrary.array(PHAsset.fetchAssets(withLocalIdentifiers: ids, options: { let o = PHFetchOptions(); o.includeHiddenAssets = false; return o }()))   // 不用 enumerateObjects 闭包
     }
 
     func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {

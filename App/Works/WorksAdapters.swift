@@ -27,12 +27,18 @@ struct PhotoKitExistenceChecker: PhotoExistenceChecking {
         var start = 0
         while start < identifiers.count {
             let chunk = Array(identifiers[start..<min(identifiers.count, start + Self.batch)])
-            let result = PHAsset.fetchAssets(withLocalIdentifiers: chunk, options: nil)
+            // 显式不含隐藏照片：后来被隐藏的和已删除的一样取不到、按缺图处理（需求 v0.4 §4.8 5a）。合入 picker-t3 后由 PhotoFetch 取代
+            let result = PHAsset.fetchAssets(withLocalIdentifiers: chunk, options: { let o = PHFetchOptions(); o.includeHiddenAssets = false; return o }())
             // 32ec2b5 的教训：不用 enumerateObjects 闭包捕获可变状态，按下标取
             for i in 0..<result.count { found.insert(result.object(at: i).localIdentifier) }
             start += chunk.count
         }
         return found
+    }
+
+    /// 受限访问 / 无权限时没选进来的照片也取不到，不能当成被删 / 被隐藏去改写作品（只计数提示）。
+    func canConfirmMissing() async -> Bool {
+        PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized
     }
 }
 

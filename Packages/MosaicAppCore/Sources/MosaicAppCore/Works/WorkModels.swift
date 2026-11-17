@@ -63,10 +63,18 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public var previewPixelWidth: Int
     public var previewPixelHeight: Int
     public var targetFile: String?
+    /// 已按缺图处理、从布局里去掉的原照片数（删除或后来被隐藏，需求 v0.4 §4.8 5a）。累计，不会减少：
+    /// 照片恢复 / 取消隐藏后格子不改回去（5b）。旧作品缺省 0。
+    public var droppedPhotoCount: Int
+    /// 目标图本机版本的有效长边（px，photo-picker-v0.1 §6.1；内部性能页显示）。旧作品 / 未记录为 nil。
+    public var targetLocalLongSide: Int?
+    /// 叠加降级系数 k（`OverlayDegrade`，另一条线计算；内部性能页显示）。旧作品 / 未记录为 nil。
+    public var overlayDegradeFactor: Double?
 
     public init(formatVersion: Int = WorkMeta.currentFormatVersion, id: WorkID, createdAt: Date, columns: Int, rows: Int,
                 tier: String?, photoCount: Int, missingCount: Int, overlayAlpha: Double, seed: UInt64?, fingerprint: String,
-                origin: WorkOrigin, previewFile: String, previewPixelWidth: Int, previewPixelHeight: Int, targetFile: String?) {
+                origin: WorkOrigin, previewFile: String, previewPixelWidth: Int, previewPixelHeight: Int, targetFile: String?,
+                droppedPhotoCount: Int = 0, targetLocalLongSide: Int? = nil, overlayDegradeFactor: Double? = nil) {
         self.formatVersion = formatVersion
         self.id = id
         self.createdAt = createdAt
@@ -83,11 +91,15 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         self.previewPixelWidth = previewPixelWidth
         self.previewPixelHeight = previewPixelHeight
         self.targetFile = targetFile
+        self.droppedPhotoCount = droppedPhotoCount
+        self.targetLocalLongSide = targetLocalLongSide
+        self.overlayDegradeFactor = overlayDegradeFactor
     }
 
     enum CodingKeys: String, CodingKey {
         case formatVersion, id, createdAt, columns, rows, tier, photoCount, missingCount, overlayAlpha, seed, fingerprint,
-             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile
+             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, droppedPhotoCount, targetLocalLongSide,
+             overlayDegradeFactor
     }
 
     public init(from decoder: any Decoder) throws {
@@ -108,6 +120,9 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         previewPixelWidth = try c.decodeIfPresent(Int.self, forKey: .previewPixelWidth) ?? 0
         previewPixelHeight = try c.decodeIfPresent(Int.self, forKey: .previewPixelHeight) ?? 0
         targetFile = try c.decodeIfPresent(String.self, forKey: .targetFile)
+        droppedPhotoCount = try c.decodeIfPresent(Int.self, forKey: .droppedPhotoCount) ?? 0
+        targetLocalLongSide = try c.decodeIfPresent(Int.self, forKey: .targetLocalLongSide)
+        overlayDegradeFactor = try c.decodeIfPresent(Double.self, forKey: .overlayDegradeFactor)
     }
 }
 
@@ -193,13 +208,38 @@ public protocol WorkImageEncoding: Sendable {
 }
 
 /// 原照片还在不在（App 里是 `PHAsset.fetchAssets(withLocalIdentifiers:)`，一次批量查）。
+///
+/// App 实现必须**不含隐藏照片**（includeHiddenAssets = false）：后来被隐藏的照片和已删除的一样返回「不在」（需求 v0.4 §4.8 5a）。
 public protocol PhotoExistenceChecking: Sendable {
     /// 返回 `identifiers` 里仍然存在、可访问的那部分。
     func existingIdentifiers(among identifiers: [String]) async -> Set<String>
+    /// 「取不到」能不能当成真的没了（完整相册权限时为 true）。受限访问 / 无权限时，没选进来的照片也取不到，
+    /// 这时只计数提示，**不**改写作品（否则会把整张作品清空）。默认 true。
+    func canConfirmMissing() async -> Bool
+}
+
+extension PhotoExistenceChecking {
+    public func canConfirmMissing() async -> Bool { true }
+}
+
+extension MosaicLayout {
+    /// 把用到 `assetIDs` 里照片的格子清成缺图格（空串，渲染 / 导出按「没有分到照片」画）。
+    /// 返回新布局和实际去掉的不同照片数（不在布局里的 ID 不算）。
+    public func clearingAssets(_ assetIDs: Set<String>) -> (layout: MosaicLayout, droppedPhotos: Int) {
+        guard !assetIDs.isEmpty else { return (self, 0) }
+        var out = self
+        var dropped = Set<String>()
+        for i in out.cellAssignments.indices where assetIDs.contains(out.cellAssignments[i].localIdentifier) {
+            dropped.insert(out.cellAssignments[i].localIdentifier)
+            out.cellAssignments[i] = CellAssignment(localIdentifier: "", crop: out.cellAssignments[i].crop)
+        }
+        return (out, dropped.count)
+    }
 }
 
 /// 11-18 预留（需求 F2 / F5「4b」）：把缺失原照片的格子换成本机相近照片，返回新布局。
-/// **本轮不实现**；`WorksController` 只做缺失检测 + 计数。缺失格子不再用预览图放大补（F 节作废）。
+/// **还没实现**；现在 `WorksController.reconcileMissing` 把缺失格子清成缺图格（白格）并重画预览。
+/// 实现 4b 时在那里先调它（替换成功就出 `works.replaced`），失败再退回清格。缺失格子不用预览图放大补（F 节作废）。
 public protocol MissingCellRematching: Sendable {
     func rematch(_ layout: MosaicLayout, missing: Set<String>) async throws -> (layout: MosaicLayout, replacedCells: Int)
 }

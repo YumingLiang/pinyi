@@ -1,5 +1,30 @@
 # CHANGES
 
+## feat/works-hidden：「我的作品」里后来被隐藏的照片按缺图处理 + 重画预览；manifest 加两个可选字段
+
+依据：photo-picker-v0.1 §5.1「我的作品」、§6.1（最后两条）、§6.2；quick-start-req-v0.4 §4.8 5a / 5b、验收 8 / 9。
+
+- **同一条缺图路径**：按 ID 取图显式 `includeHiddenAssets = false`（`PhotoKitExistenceChecker` 与 `PhotoKitThumbnails.assets(_:)` 各一行，
+  注释「合入 picker-t3 后由 PhotoFetch 取代」），后来被隐藏的照片和已删除的一样「取不到」。
+- **`WorksController.reconcileMissing`**（打开作品、查看页导出前都走）：
+  - 没有缺失：什么都不动，不重画预览；
+  - 有缺失且完整相册权限：用到这些照片的格子清成缺图格（`MosaicLayout.clearingAssets`，空串 = 没有分到照片），
+    `FileWorksStore.dropMissingPhotos` 重画预览并写回；再导出用处理后的布局，隐藏照片不会再被取；
+  - 受限访问 / 无权限（`PhotoExistenceChecking.canConfirmMissing() == false`）或写回失败：只计数提示，不改作品（防止受限访问下把整张作品清空）。
+  - 照片恢复 / 取消隐藏后格子不改回去（5b），`works.missing` 张数也不减（累计在 `droppedPhotoCount`）。
+- **写回的原子性**（不整目录替换）：新预览先写 `.tmp-*` 再 rename 成新文件名 `preview-<随机>.jpg` → meta.json 原子替换（新预览、新指纹、累计张数）
+  → layout.json 原子替换 → 删旧预览。被杀在任一步都不会出现「新布局 + 旧预览」；最坏是下次打开再处理一遍。指纹随新布局更新，再导出后自动保存仍查重命中。
+  同一作品的写回串行（打开和导出前同时触发只处理一次）。
+- **列表 / 查看页刷新**：列表缩略图 `.task(id: summary.previewURL)`，查看页预览在 `previewURL` 变化时重新解码。
+- **manifest（meta.json）新字段**：`targetLocalLongSide: Int?`、`overlayDegradeFactor: Double?`（旧作品缺省 nil，nil 不写出；改写作品时保留），
+  另加 `droppedPhotoCount: Int`（缺省 0）。只在内部性能页「我的作品 manifest」显示（最近 10 个，只有作品 id 前 8 位，不含照片 ID）。
+  降级系数不在这里算（OverlayDegrade 另一条线）。
+- **内部工具 TestAlbumWriter**：「隐藏一张测试照片（优先最新作品里用到的）」（`PHAssetChangeRequest.isHidden = true`，只动「马赛克测试」相簿）、
+  「取消隐藏全部测试照片」。
+- **4b 还没做**：缺失格子现在是缺图格（白格），不是「本机相近照片重新匹配」，也没有 `works.replaced` 文案；`MissingCellRematching` 仍只是协议。
+- **没做**：5c（目标图本身被隐藏 / 删除时去掉叠加层）。
+- 测试：`WorksHiddenPhotoTests`（11 个），`WorksControllerTests` 缺失用例按新行为更新 + 新增 1 个。
+
 ## feat/works：去掉旧 render-export 带进来的非作品改动
 
 - 结果页与 feat/app-layer 对齐：保留 ZoomableContainer 和紧急版三档导出按钮，只多一个「保存到我的作品」。去掉 T7 叠加滑杆、实时叠加层（`MosaicWithOverlay` / `overlayImage`）。

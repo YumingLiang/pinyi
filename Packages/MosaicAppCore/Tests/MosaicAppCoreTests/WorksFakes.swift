@@ -48,15 +48,23 @@ final class FakeWorkImages: WorkImageEncoding, Sendable {
     }
 }
 
-/// 假「原照片还在不在」。
+/// 假「原照片还在不在」。`deleted` 里的 ID 取不到——删除和「后来被隐藏」在 App 里是同一件事
+/// （按 ID 取图不含隐藏照片），这里用同一个集合模拟；`hidden` 只是给测试读起来更清楚的别名入口。
 final class FakeExistence: PhotoExistenceChecking, Sendable {
     let deleted = Locked(Set<String>())
     let calls = Locked(0)
+    /// false = 模拟受限访问 / 无权限（取不到也不能确认是真没了）。
+    let fullAccess = Locked(true)
     func existingIdentifiers(among identifiers: [String]) async -> Set<String> {
         calls.update { $0 += 1 }
         let gone = deleted.get()
         return Set(identifiers.filter { !gone.contains($0) })
     }
+    func canConfirmMissing() async -> Bool { fullAccess.get() }
+    /// 模拟在「照片」App 里把照片设为隐藏：PhotoKit 按 ID 取（includeHiddenAssets = false）不再返回它。
+    func hide(_ ids: String...) { deleted.update { $0.formUnion(ids) } }
+    /// 取消隐藏：又能取到了。
+    func unhide(_ ids: String...) { deleted.update { $0.subtract(ids) } }
 }
 
 /// 假墙钟：每次取时间 +1 s（保证新旧顺序确定）。
