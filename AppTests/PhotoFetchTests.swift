@@ -90,5 +90,8 @@ final class PhotoFetchTests: XCTestCase {
         XCTAssertTrue(exp.contains("ExportFillStats.decision(afterHighQuality:"))
         XCTAssertTrue(loader.contains("PhotoFetch.visibleImages(withLocalIdentifiers:"))
         XCTAssertTrue(loader.contains("!a.isHidden"))
+        XCTAssertTrue(fetch.contains("func isPickedAssetAvailable"))
+        XCTAssertTrue(fetch.contains("!visibleImages(withLocalIdentifiers: [id]).isEmpty"),
+                      "isPickedAssetAvailable 应走 visibleImages，不单独 images + isHidden")
     }
 }

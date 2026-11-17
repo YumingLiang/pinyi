@@ -16,9 +16,12 @@ struct MainFlowView: View {
                 case .result: ResultView()
                 }
             }
+            // 未保存提示挂在主流程上：预览页「再拼一张」和「再调一调」设置页（经作品查看页入口，验收 7a）都在这里弹。
+            .modifier(UnsavedPromptDialog())
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if model.flow.step != .target && model.flow.step != .result {
+                    // 「再拼一张」的选图页也有返回（回到原预览页，结果还在）
+                    if (model.flow.step != .target || model.flow.isQuickAgain) && model.flow.step != .result {
                         Button { model.flowSend(.back) } label: { Text(L10nKey.commonBack) }
                     }
                 }
@@ -30,6 +33,8 @@ struct MainFlowView: View {
                 }
             }
         }
+        // 作品查看页「再拼一张」：整个导航栈退回主流程（换 id = 重建栈，弹掉作品列表 / 查看页）。
+        .id(model.navigationResetToken)
         .sheet(isPresented: $model.showScanSheet) { ScanView() }
         .fullScreenCover(isPresented: .constant(model.flow.generation.showsProgress)) { GenerationProgressView() }
         .sheet(item: Binding(get: { model.presentedEmptyState.map(EmptyBox.init) },
@@ -44,6 +49,8 @@ struct MainFlowView: View {
 struct TargetStepView: View {
     @EnvironmentObject var model: AppModel
     @State private var item: PhotosPickerItem?
+    /// 「再拼一张」进来时直接弹出选图（再拼一张 → 选一张 → 开始拼图，≤ 3 次点击）。
+    @State private var showPicker = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -59,18 +66,44 @@ struct TargetStepView: View {
                 Text(buttonKey)
             }
             .buttonStyle(.bordered)
+            .photosPicker(isPresented: $showPicker, selection: $item, matching: .images, photoLibrary: .shared())
             Button { model.flowSend(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(!model.flow.canGoNextFromTarget)
         }
         .padding(24)
         .navigationTitle(Text(L10nKey.targetNavTitle))
+        .onAppear {
+            // TODO(需求 v1.0 §4)：自做选图页（记住浏览位置）接入主流程后改为打开它；目前主流程仍是系统 PhotosPicker。
+            if model.flow.autoOpensTargetPicker { showPicker = true }
+        }
         .onChange(of: item) { newItem in
+            guard let newItem else { return }
+            item = nil   // 下次选同一张也能再触发
             Task {
                 // ⚠️ 盲写：loadTransferable(type: Data.self) 对 HEIC/RAW 的行为需真机核对；iCloud 原图会触发系统下载（系统进程内，不是本 App 联网）。
-                let data = try? await newItem?.loadTransferable(type: Data.self)
-                model.loadTarget(data: data)
+                // #18 P1-a / copy v1.6：系统选择器可能显示隐藏照片（等 T7）。按 itemIdentifier 经 PhotoFetch 再取一次 PHAsset，
+                // 取不到（不管隐藏 / 未授权 / 已删除）或之后读不出来，一律弹 picker.unavailable，不区分原因。
+                // 主流程和「再拼一张」共用这个选图页。
+                guard PickedTargetGate.allows(itemIdentifier: newItem.itemIdentifier,
+                                              isAvailable: PhotoFetch.isPickedAssetAvailable) else {
+                    model.pickedTargetUnavailable()
+                    return
+                }
+                let data = try? await newItem.loadTransferable(type: Data.self)
+                model.loadPickedTarget(data: data)
             }
+        }
+        // 「换一张」：协调器把请求 +1，这里重新打开系统选择器。
+        .onChange(of: model.targetPickerReopenRequest) { _ in showPicker = true }
+        .alert(Text(L10nKey.pickerUnavailable),
+               isPresented: Binding(get: { model.showsPickerUnavailable },
+                                    set: { if !$0 { model.pickerUnavailableDismissed() } })) {
+            Button { model.pickerUnavailableChange() } label: { Text(L10nKey.pickerUnavailableChange) }
+            if model.pickerUnavailableShowsAddAccess {
+                Button { model.pickerUnavailableAddAccess() } label: { Text(L10nKey.pickerUnavailableAddAccess) }
+            }
+            Button(role: .cancel) { model.pickerUnavailableCancel() } label: { Text(L10nKey.commonCancel) }
         }
     }
 }
@@ -135,6 +168,14 @@ struct SettingsStepView: View {
         Form {
             if let n = model.flow.generation.settingsNotice {
                 Section { Text(n).foregroundStyle(.orange) }
+            }
+            // 确认页（需求 v1.0 §2b）：「素材：{name} · {count} 张」+「换素材」。「裁剪」（§3）在 feat/app-layer 上还没有，接入后放这里。
+            Section {
+                HStack {
+                    Text(model.materialSummary).font(.subheadline)
+                    Spacer()
+                    Button { model.flowSend(.changeSource) } label: { Text(L10nKey.quickSourceChange) }
+                }
             }
             Section(header: Text(L10nKey.densitySection)) {
                 ForEach(DensityChoice.allCases, id: \.self) { d in
@@ -241,6 +282,13 @@ struct ResultView: View {
                 .controlSize(.large)
                 .disabled(!model.canExport)
             SaveToWorksButton()   // 需求 B2 / B10：次按钮「存到我的作品」（导出不自动存）
+            // 需求 v1.0 §2e：第三级文字按钮，紧挨「存到我的作品」下面，不和「再调一调」「换一种拼法」同排。
+            // 生成中 / 导出中 / 提示弹着时不可点（判断在 AppState.canStartNewMosaic）。
+            Button { model.startNewMosaicTapped() } label: {
+                Label { Text(L10nKey.quickAgain) } icon: { Image(systemName: "plus") }
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.canStartNewMosaic)
         }
         .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))
@@ -331,6 +379,26 @@ struct ExportResultAlerts: ViewModifier {
             }
             .alert(Text(L10nKey.exportInterrupted), isPresented: .constant(interrupted)) {
                 Button { model.dismissExportResult() } label: { Text(L10nKey.commonOK) }
+            }
+    }
+}
+
+/// 未保存提示（quick.unsaved.*）：当前结果没存进作品（导出过不算存过）时由协调器弹出；存过但只改了叠加强度时
+/// 标题换成 quick.unsaved.update_title，「保存」= 更新原作品（hd-export B10-4/11）。isPresented 只读，按钮各自调协调器。
+struct UnsavedPromptDialog: ViewModifier {
+    @EnvironmentObject var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(Text(model.unsavedPromptIsUpdate ? L10nKey.quickUnsavedUpdateTitle : L10nKey.quickUnsavedTitle),
+                                // 收起（点外面 / 系统收起）走 unsavedPromptDismissed：延后一轮、仍是同一个提示且没在保存时才按「取消」，
+                                // 不会吞掉按钮动作，也不会让提示状态一直挂着（「再拼一张」不可点、弹窗反复弹）。
+                                isPresented: Binding(get: { model.unsavedPrompt != nil },
+                                                     set: { if !$0 { model.unsavedPromptDismissed() } }),
+                                titleVisibility: .visible) {
+                Button { model.unsavedPromptSave() } label: { Text(L10nKey.quickUnsavedSave) }
+                Button(role: .destructive) { model.unsavedPromptDiscard() } label: { Text(L10nKey.quickUnsavedDiscard) }
+                Button(role: .cancel) { model.unsavedPromptCancel() } label: { Text(L10nKey.quickUnsavedCancel) }
             }
     }
 }

@@ -288,5 +288,8 @@ final class HiddenExportTests: XCTestCase {
         XCTAssertTrue(fetch.contains("visibleImages(withLocalIdentifiers:"))
         XCTAssertTrue(fetch.contains("isHidden"))
         XCTAssertTrue(fetch.contains("VisibleAssetFilter.accepting"))
+        XCTAssertTrue(fetch.contains("func isPickedAssetAvailable"))
+        XCTAssertTrue(fetch.contains("!visibleImages(withLocalIdentifiers: [id]).isEmpty"),
+                      "isPickedAssetAvailable 应走 visibleImages，不单独 images + isHidden")
     }
 }

@@ -99,6 +99,23 @@ public struct AppState: Sendable, Hashable {
     /// 结果页提示「照片比较少…」（`shortage.pregenerate`）：生成前按已知数没到 200 的门槛、筛选后才不足 200 时，
     /// 生成前没机会提示，在结果页补一次。
     public var postFilterShortageNotice = false
+    /// 有没有结果（`AppCoordinator.product != nil`）。变成 false 时平台层释放预览位图（约 48 MB）。
+    public var hasResult = false
+    /// 未保存提示（`quick.unsaved.*`）是因为哪种离开方式弹的；nil = 没弹。当前结果没存进作品就弹（导出过不算存过，
+    /// hd-export B10-4）；存过但只改了叠加强度还没存也弹，标题换成 `quick.unsaved.update_title`（B10-11）。
+    public var unsavedPrompt: UnsavedResultPrompt?
+    /// 弹着的提示是不是「存过但强度改了」那种（标题 `quick.unsaved.update_title`，「保存」= 更新原作品）。
+    public var unsavedPromptIsUpdate = false
+    /// 未保存提示标题 key。
+    public var unsavedPromptTitle: L10nKey { unsavedPromptIsUpdate ? .quickUnsavedUpdateTitle : .quickUnsavedTitle }
+    /// 未保存提示里点了「保存」，正在存。
+    public var isSavingBeforeLeaving = false
+    /// 系统选择器选的照片用不了（`picker.unavailable`，copy v1.6）：弹着提示。不记原因。
+    public var showsPickerUnavailable = false
+    /// 「换一张」时 +1：平台层看到变化就重新打开系统选择器。
+    public var targetPickerReopenRequest = 0
+    /// 提示里是否显示「增加可用照片」：只看整个 App 的授权是不是受限访问，不看这张照片。
+    public var pickerUnavailableShowsAddAccess: Bool { authorization == .limited }
 
     public init(initialSeed: UInt64) { flow = MainFlow(initialSeed: initialSeed) }
 
@@ -134,6 +151,36 @@ public struct AppState: Sendable, Hashable {
 
     /// 生成进行中（含确认取消弹窗）。
     public var isGenerating: Bool { flow.generation.showsProgress }
+
+    /// 确认页素材摘要「素材：{name} · {count} 张」（需求 v1.0 §2b）。`allPhotosTitle`：平台层把
+    /// 「全部照片 / 已允许访问的照片」本地化后传进来（逻辑层不产出中文）。张数与来源页该行显示的一致。
+    public func materialSummary(allPhotosTitle: String) -> LocalizedLine {
+        switch flow.source.selection {
+        case .allPhotos:
+            return LocalizedLine(.quickSourceSummary, [allPhotosTitle, CountFormat.grouped(allPhotosRow.count)])
+        case .album:
+            let row = displayedAlbumRows.first { $0.selection == flow.source.selection }
+            return LocalizedLine(.quickSourceSummary, [row?.albumTitle ?? "", CountFormat.grouped(row?.count ?? 0)])
+        }
+    }
+
+    /// 预览页「再拼一张」能不能点：停在结果页、没在生成、没在导出、没在弹未保存提示 / 保存中。
+    public var canStartNewMosaic: Bool {
+        guard hasResult, flow.step == .result, !flow.isQuickAgain, !isGenerating, !export.isBusy,
+              unsavedPrompt == nil, !isSavingBeforeLeaving else { return false }
+        if case .result = flow.generation.phase { return true }
+        return false
+    }
+}
+
+/// 未保存提示是因为哪种离开方式弹出来的（需求 v1.0 §2e）。
+public enum UnsavedResultPrompt: Sendable, Hashable {
+    /// 预览页「再拼一张」。
+    case startNew
+    /// 预览页返回首页等会丢掉当前结果的离开方式。
+    case leaveResult
+    /// 「再调一调」途中（设置页）发起「再拼一张」（经作品查看页入口，验收 7a）：继续 = 直接去选目标图（没有可返回的预览页）。
+    case startNewFromAdjust
 }
 
 /// 某个来源里因手机上版本不够清楚（< 256 px）而没用上的照片（去重）。
