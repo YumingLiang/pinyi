@@ -273,7 +273,13 @@ public final class WorksController {
 
     public func deleteConfirmed() async {
         guard let id = state.pendingDelete else { return }
-        state.pendingDelete = nil
+        await deleteConfirmed(id)
+    }
+
+    /// 弹窗「删除」按钮直接带上作品 id：SwiftUI 收起 confirmationDialog 时会先把 isPresented 置 false
+    /// （→ `deleteCancelled()` 清掉 `pendingDelete`），而按钮里的 `Task` 更晚执行，不能再靠 `pendingDelete` 取 id。
+    public func deleteConfirmed(_ id: WorkID) async {
+        if state.pendingDelete == id { state.pendingDelete = nil }
         do {
             try await store.delete(id)
         } catch WorksStoreError.notFound {

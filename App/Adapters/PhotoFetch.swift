@@ -5,14 +5,15 @@ import MosaicAppCore
 /// **唯一的取照片入口**（photo-picker-v0.1 §5.1；需求 v0.4 §4.8 第 4 条）。
 ///
 /// 硬约束：隐藏照片任何地方都不出现。所以：
-/// - 所有 `PHAsset.fetchAssets(with:)` / `fetchAssets(in:)` / `fetchAssets(withLocalIdentifiers:)` 都必须用
-///   `PhotoFetch.options(...)` 生成的选项，或直接调用下面的 `PhotoFetch.assets...` 包装；**不允许 `options: nil`**。
+/// - 所有 `PHAsset.fetchAssets(with:)` / `fetchAssets(in:)` / `fetchAssets(withLocalIdentifiers:)` 以及
+///   `fetchKeyAssets(in:)` 都必须用 `PhotoFetch.options(...)` 生成的选项，或直接调用下面的包装；**不允许 `options: nil`**。
 /// - `includeHiddenAssets = false` 显式写死，不依赖系统默认值；调用方拿到选项后不得改它。
 /// - `includeAssetSourceTypes` 按场景显式传（见 `Sources`），不留默认。
 /// - 调用方只可以再改 `fetchLimit`（例如判断空相簿用 1）。
 ///
-/// T0 只加入口；现有调用点改走这里、以及 CI 检查（`App/Adapters` 里出现 `fetchAssets(` 而没走 PhotoFetch 就失败，
-/// InternalTools 除外）由 T3 做。
+/// T0 加入口；T3 已把现有调用点改走这里，并加了 CI 检查：`scripts/check-photo-fetch.sh`（`App/` 下除本文件和
+/// InternalTools 外出现 `fetchAssets(` / `fetchKeyAssets(` 就失败）和 `AppTests/PhotoFetchTests.swift`
+/// （断言 `includeHiddenAssets == false`，含 keyAssets 所用选项）。
 /// ⚠️ 盲写（Linux 上无法编译验证，只做 `swiftc -parse`）。
 enum PhotoFetch {
     /// 资产来源类型的场景预设。
@@ -56,7 +57,7 @@ enum PhotoFetch {
         return o
     }
 
-    // MARK: 包装（CI 检查以后只允许 `fetchAssets(` 出现在本文件）
+    // MARK: 包装（CI 检查以后只允许 `fetchAssets(` / `fetchKeyAssets(` 出现在本文件）
 
     /// 「全部照片」。
     static func allImages(order: Order) -> PHFetchResult<PHAsset> {
@@ -69,9 +70,28 @@ enum PhotoFetch {
         PHAsset.fetchAssets(in: collection, options: options(imagesOnly: true, sources: sources, order: order))
     }
 
+    /// 选图页 / 相簿列表里，某个集合取照片该用的来源：iCloud 共享相簿用 `Sources.cloudShared`，其余用 `Sources.library`
+    /// （T3）。共享相簿里的照片来源类型是 `.typeCloudShared`，用 `.library` 去取会是 0 张。
+    static func pickerSources(forSubtype subtype: PHAssetCollectionSubtype) -> PHAssetSourceType {
+        subtype == .albumCloudShared ? Sources.cloudShared : Sources.library
+    }
+
     /// 按 localIdentifier 取回图片。被隐藏 / 删除 / 受限访问移出的照片取不到（调用方当缺图处理）。
     static func images(withLocalIdentifiers ids: [String]) -> PHFetchResult<PHAsset> {
         PHAsset.fetchAssets(withLocalIdentifiers: ids, options: options(imagesOnly: true, sources: Sources.any))
+    }
+
+    /// 集合的代表照片（封面）。选项同样走 `options`（写死 `includeHiddenAssets = false`），不允许 `options: nil`。
+    /// 代表张若被隐藏，结果可能为空；PhotoKit 本身返回可选（取不到时为 nil），调用方按无封面处理。共享相簿要传 `Sources.cloudShared`。
+    static func keyAssets(in collection: PHAssetCollection,
+                          sources: PHAssetSourceType) -> PHFetchResult<PHAsset>? {
+        PHAsset.fetchKeyAssets(in: collection,
+                               options: options(imagesOnly: true, sources: sources, order: .unspecified))
+    }
+
+    /// 选图页 / 相簿列表取封面：来源按 `pickerSources(forSubtype:)` 自动选。
+    static func keyAssets(in collection: PHAssetCollection) -> PHFetchResult<PHAsset>? {
+        keyAssets(in: collection, sources: pickerSources(forSubtype: collection.assetCollectionSubtype))
     }
 }
 

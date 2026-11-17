@@ -20,6 +20,74 @@
 - **待产品确认 / 未做**：确认页「裁剪」（§3）和自做选图页（§4，记住浏览位置）在 feat/app-layer 上都还没有，这次用系统 PhotosPicker 自动弹出；接入后改 `TargetStepView.onAppear`、确认页加「裁剪」。
 - **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`MainFlowView.swift`、`AppModel.swift`。
 
+## fix/works-delete：作品详情页删除不生效（P1）
+
+- **根因**：确认弹窗收起时 SwiftUI 先调 `isPresented` 的 `set(false)` → `deleteCancelled()` 清掉 `pendingDelete`；按钮里的 `Task { await controller.deleteConfirmed() }` 更晚执行，取不到 id 直接 return，删除被静默吞掉。从 PR #6 上线起就存在，不是 #11 / #15 引入的回归。
+- **修法**：新增 `WorksController.deleteConfirmed(_ id: WorkID)`，不依赖共享的 `pendingDelete`；`WorksModel.deleteConfirmed(_:)` 转发；弹窗「删除」按钮直接传当前作品 id。旧的无参入口保留并转调新入口。
+- **测试**：MosaicAppCoreTests 新增 `QAWorksDeleteRegressionTests`（14 条：删后列表、重启、目录清理、打开中删除、并发保存、连删、删后再存、防重复保存及查重口径现状）和 `QAWorksDeleteFixContractTests`（3 条：UI 时序下带 id 删除、交错删除、取消不删）。MosaicAppCore `swift test` 327 个，0 失败，3 跳过。
+- 未做：列表页长按删除（等 AndyL 决定）；查重口径（overlayAlpha/seed 不同算两份）维持现状，等产品决定。
+
+
+## feat/picker-t3：`fetchKeyAssets` 纳入隐藏照片检查（QA #9 补丁）
+
+- **iOS 编译修复**：`PHAsset.fetchKeyAssets(in:options:)` 返回可选，`PhotoFetch.keyAssets(in:)` / `keyAssets(in:sources:)` 改为返回 `PHFetchResult<PHAsset>?`（nil 时调用方按无封面处理）。目前没有调用点。
+
+基于 `fd89694`（已含 app-layer `41dc45f`）。`rg -n fetchKeyAssets` 时仓库里没有现成调用（相簿目录封面尚未用 `fetchKeyAssets`），所以没有调用点可改，只补封装和检查。
+
+- 新增 `PhotoFetch.keyAssets(in:)` / `keyAssets(in:sources:)`，选项走 `PhotoFetch.options`（写死 `includeHiddenAssets = false`）。共享相簿用 `pickerSources(forSubtype:)` 自动选 `.cloudShared`。
+- `scripts/check-photo-fetch.sh` 把 `fetchKeyAssets(` 与 `fetchAssets(` 同等检查：只允许出现在 `PhotoFetch.swift`，InternalTools 除外。脚本原先没有自测机制，未新增。已验证干净树通过；Adapters 里故意加一处 `fetchKeyAssets(` 失败；InternalTools 豁免仍通过；整行注释不算；原有的 `fetchAssets(` 检查不受影响。
+- `AppTests/PhotoFetchTests.testKeyAssetOptionsNeverIncludeHiddenAssets` 断言 keyAssets 所用选项 `includeHiddenAssets == false`、来源显式设置。
+- MosaicAppCore `swift test`：205 个，0 失败，1 跳过。改动的 App 文件 `swiftc -parse`、`check-no-network.sh` 通过。
+
+
+## feat/picker-t3：选图页 P0 T3「App 层 PhotoKit 适配」（photo-picker-v0.1 §2、§3、§5.1、§5.2、§6.1、§6.2）
+
+基于 feat/picker-t0 `9cfd07e`。不碰 `App/Views` 的网格 UI（T4）和 `MosaicAppCore/Picker/*.swift`（T0 / T1 / T2），T0 公开接口签名未改。
+
+- **相簿列表 `App/Adapters/PhotoKitAlbumCatalog.swift`**（实现 `AlbumCatalogProviding`）：全部照片（`PhotoFetch.allImages`，`Sources.library`）；我的相簿 = `fetchTopLevelUserCollections`，保持 PhotoKit 顺序，文件夹递归（最多 8 层），跳过混进来的共享相簿 / 我的照片流 / 智能相簿；8 个白名单智能相簿**逐个子类型去取**，从不枚举全部智能相簿，所以 `smartAlbumAllHidden` 根本不会被请求，取回后再用 `SmartAlbumKind(photoKitSubtype:)` 核一遍；共享相簿 `.albumCloudShared`。所有计数都用 `PhotoFetch` 的 imagesOnly 选项实数 `count`（智能相簿的 `estimatedAssetCount` 是 `NSNotFound`），共享相簿用 `Sources.cloudShared` 数。
+- **网格数据源 `App/Adapters/PhotoKitAssetGrid.swift`**：`PhotoKitAssetGridSourceProvider`（`AssetGridSourceProviding`）+ `PhotoKitAssetGridDataSource`（`AssetGridDataSource`）。直接包 `PHFetchResult`（懒加载，不转数组），创建时间倒序，下标 0 最新；白名单外的智能相簿 id（含「已隐藏」）返回 nil。收到变化时先换成 `fetchResultAfterChanges` 再通知网格。
+- **缩略图 `App/Adapters/PhotoKitThumbnailLoader.swift`**（`GridThumbnailLoading<UIImage>`）：全 App 一个 `PHCachingImageManager`（`shared`），`.opportunistic` / `.fast` / `isNetworkAccessAllowed = false` / `.aspectFill`；取消后迟到的回调丢掉；正式版是 nil 而之前已给过 degraded 图时不把格子清空；按 ID 找 `PHAsset` 走 `PhotoFetch`，结果小缓存（≤ 1000），相册一变就清空。素材扫描的 `PhotoKitThumbnails` 仍用自己的 manager（128 px `.fastFormat`，参数不同）。
+- **变化监听 `App/Adapters/PhotoLibraryObserver.swift`**：共享的 `PHPhotoLibraryChangeObserver`，第一次订阅时才注册；后台回调转主线程，网格数据源各自 `changeDetails(for:)`，增量还是 reload 由 `GridChangePlanner.plan`（MosaicAppCore 纯逻辑）决定：没有增量信息、变化 > 300 项、> 20 项且超过总数一半、或下标 / 计数不自洽都整体 reload（UICollectionView 批量更新数不对会崩）。另有 `addListener` 给相簿列表等「变了就重读」的订阅方。
+- **隐藏照片 = 删除**：所有 fetch result 都来自 `PhotoFetch`（`includeHiddenAssets = false`），照片被设为隐藏后从新结果里消失，changeDetails 里在 `removedIndexes`，网格表现为删除。素材索引：`LibraryChangeObserver` → `libraryDidChange` → 防抖后 `applyFullDiff` → `assetCount()` 重新走 `PhotoFetch.allImages`，隐藏照片不在 `current` 里，`LibraryDiff` 判为 `deleted`（tombstone + 删条目），下次生成不会用到（`PickerSupportTests.testHiddenPhotoDisappearsAsDeletedInLibraryDiff`）。两个监听本 PR 不合并（不动 AppModel），T5/T6 可以合。
+- **目标图取图 `App/Adapters/PhotoKitTargetImageLoader.swift`**（§5.2 + §6.1）：`isNetworkAccessAllowed = false`，长边 4096（不超过原图，不请求 MaximumSize），`PHImageManager.default()`；先 `.highQualityFormat`，拿到 nil 就改 `.opportunistic` 取最后一张（degraded 也收），都没有就返回 nil 让调用方用网格缩略图兜底。结果带本机长边 `localLongSide`、是否 degraded / 见过 InCloud / 是否回退。判定全在 MosaicAppCore 的 `TargetImageFetchMachine`（新文件 `PickerSupport/TargetImageFetch.swift`）：highQuality 10 秒不回调就回退，opportunistic 5 秒没回调按「本机没有」结束，只有 degraded 时等 1.5 秒宽限，取消立即结束；`finish` 只会发生一次，旧请求的迟到回调和旧定时器都被忽略，不会卡在「加载中」。App 侧动作排队执行，PhotoKit 同步重入回调也不会打乱定时器。**不弹任何低清提示**：代码里没有 `picker.low_res` 的提示逻辑（文案表里也没有这个 key），无需删除。
+- **现有取数点全部改走 PhotoFetch**（行为外观不变）：`PhotoKitLibrary.fetchAllImages` → `PhotoFetch.allImages(order: .oldestFirst)`；`albums()` 计数和 `assetIDs(inAlbum:)` → `PhotoFetch.images(in:sources: .library)`；`PhotoKitThumbnails.assets(_:)` 和 `PhotoKitResolutionProbe` → `PhotoFetch.images(withLocalIdentifiers:)`。`PhotoFetch.swift` 加了 `pickerSources(forSubtype:)`（共享相簿 → `.cloudShared`，其余 `.library`）和 `keyAssets(in:)` / `keyAssets(in:sources:)`（封面代表张，选项同样走 `options`），T0 原有签名未动。`InternalTools/TestAlbumWriter` 未改。
+- **CI 检查两层**：① `scripts/check-photo-fetch.sh`，接进 linux-core 的 mosaic-core job（紧跟零网络检查）：`App/` 下（InternalTools、PhotoFetch.swift 除外）代码行出现 `fetchAssets(` 或 `fetchKeyAssets(` 失败；任何地方 `includeHiddenAssets = true` 失败；代码里引用 `smartAlbumAllHidden` 失败（整行注释不算）。已验证在当前代码上通过、故意加一处 `fetchAssets(` / `fetchKeyAssets(`（Adapters）/ `includeHiddenAssets = true` / `smartAlbumAllHidden` 时失败，InternalTools 豁免仍通过。② `AppTests/PhotoFetchTests.swift`（ios.yml 的模拟器单测）：所有 imagesOnly × 来源 × 排序组合下 `includeHiddenAssets == false`、`includeAllBurstAssets == false`、来源显式设置；`keyAssets` 所用选项同样不含隐藏照片；白名单映射不含「已隐藏」；网格和目标图的请求选项都不联网；目标图 targetSize 长边 4096 且不放大。
+- **MosaicAppCore 新文件**（不改 T0 的 `Picker/*.swift`）：`PickerSupport/GridChangePlanner.swift`、`PickerSupport/TargetImageFetch.swift`；测试 `PickerSupportTests.swift` 18 个（`GridChangePlannerTests` 7 个、`TargetImageFetchMachineTests` 11 个，含 500 轮乱序事件下 `finish` 恰好一次）。
+- **新增的 `@unchecked Sendable` / `assumeIsolated`**：`PhotoLibraryObserver.ChangeBox`（`PHChange` 后台 → 主线程转交一次）、`DeliveredThumbnail`、`TargetImageDelivery`、`TargetImageFetchResult`（`UIImage` 不可变，SDK 若已标 Sendable 也无害）；PhotoKit 回调里 `Thread.isMainThread ? assumeIsolated : DispatchQueue.main.async { assumeIsolated }`。
+- **⚠️ App 层盲写**：5 个新文件和 3 个改动文件 Linux 上 `swiftc -parse` 通过；另用手写的 Photos / UIKit 桩模块按 Swift 6 + 严格并发 + warnings-as-errors 做了类型检查（两套桩：SDK 回调标 / 不标 `@Sendable`、`UIImage` / `PHChange` 是否 Sendable，都通过），由此修掉一处 `@MainActor` 类的 static 常量在 nonisolated 函数里引用的错误。真 SDK 签名以 CI 的 Xcode job 为准。
+
+## feat/preview-sharp-quick：结果页预览放大发糊的止血（每格 48–64 px，长边约 4096，插值改为 high）
+
+AndyL 反馈预览放大后小格子很糊。原因是结果页预览每格只有 8–32 px（长边约 2400），SwiftUI 又用 `.interpolation(.none)` 最近邻放大。本卡只改预览绘制和显示，不改生成匹配，也不让生成变慢。
+
+- `MosaicAppCore/Preview/PreviewImageLimits.swift`（新）：预览每格目标 48–64 px，长边上限 4096。格数太多时优先守住长边（例如细档 120 列是 34 px）。给出 `cellPixels` / `size` / `rgbaByteCount`（4096×4096 RGBA = 64 MiB）。
+- `App/Rendering/MosaicPreviewRenderer.swift`：缩略图预览改用上述尺寸；色块占位仍是每格 8 px，避免和正式预览同时占两份大图。
+- `App/Views/MainFlowView.swift`：结果页 `Image` 的插值从 `.none` 改成 `.high`。作品查看页本来就是 `.medium`，这次不动。
+- `App/Models/AppModel.swift`：离开结果页或还没有作品时取消绘制任务并释放 `resultImage`；过期任务用 `resultRevision` 把关，不会把大图写回去。换新结果时先换成小色块，立刻丢掉上一张大图。
+- 测试：`PreviewImageLimitsTests`（尺寸、长边上限、改前改后对照、`PreviewRenderer` 输出尺寸）。`PreviewRenderBenchTests` 只在 `MOSAIC_BENCH=1` 时跑，对照色块预览 / 格点合成的改前改后耗时，以及 `GenerationRunner` 中档生成墙钟。
+
+## feat/gen-perf-fix：生成不再逐张检查清晰度，速度回到 14ac550
+
+AndyL 反馈 d31925f 生成比 14ac550 慢很多。原因是 #5「不能略糊」（35a9f75 / e3e68ec）把逐张 PhotoKit 探测（单张 `fetchAssets` + 256 px `requestImage`，8 并发）和「剔除后整张重新匹配（最多 3 轮）+ 兜底补格」接进了生成链路。AndyL 11-16 决定取消生成前的逐张检查。
+
+- **改动**：
+  - 新增 `GenerationRunner.production(pipeline:perf:)`，固定 `sharpness: nil`。
+  - `App/Adapters/LiveDependencies.swift` 改用它，不再注入 `LocalResolutionChecker(probe: PhotoKitResolutionProbe())`。
+  - 结果：生成只跑一次 `generateOnce`：没有逐张请求、没有重配、没有 refill，`lowRes.enabled == false`。
+- **保留**：
+  - 类型都保留，不删、不改名：`LocalResolutionChecker` / `LocalResolutionPolicy` / `LocalResolutionCache` / `PhotoKitResolutionProbe`。`GenerationRunner` 的可选 `sharpness` 路径和 `SharpnessFilterTests` 也保留。PR #11 作品换照片的 ≥256 检查还要用。
+  - 文案保留：`source.excluded_low_res`、`generate.progress.checking`、结果页筛选后的「照片比较少」。不注入时自然不会显示。
+- **行为**：
+  - 结果与 14ac550 的生成路径逐格相同（测试断言 production 与无探测器的 `GenerationRunner()` 同种子输出一致）。
+  - iCloud-only / 本机只有小图的照片照旧参与匹配。导出时取不到每格像素就退回 128 px 缩略图（blurryFallback，糊格子），再取不到才是白格子。导出端兜底不变，不新增白格子。
+  - 我的作品、导出三档、格子居中裁方（dd61da7）都不动。
+- **测试**：
+  - 新增 `GenerationProductionPathTests` 2 个：production 无探测器；一次生成只有 1 条「生成·总计」，没有「清晰度探测」，没有「重配」，每格都有照片，结果与旧路径一致，换一种拼法也只跑一次。
+  - 新增基准 `GenerationSpeedBenchTests`，默认跳过，用 `PINYI_GEN_BENCH=1 swift test -c release --filter GenerationSpeedBenchTests` 运行。
+- **耗时**（3000 张素材、中密度 4800 格）：
+  - 修复后一次匹配 0.036 s [实测]，与 14ac550 的 0.036 s 相同。
+  - d31925f 探测 + 重配，按每次请求 10 ms 模拟要 3.2–3.7 s，25 ms 时 8.7 s。完整表格见 PR 描述。
+
 ## feat/picker-t4：选图页 P0 T4「共用照片网格」（photo-picker-v0.1 §2、§3）
 
 基于 feat/picker-t0 `9cfd07e`。只依赖 T0 的 `AssetGridDataSource` / `GridThumbnailLoading` 协议，不碰 `App/Adapters`（T3）和 AlbumCatalog / BrowsePosition 的实现（T1 / T2）。没有新增文案，T0 公开接口签名没改。

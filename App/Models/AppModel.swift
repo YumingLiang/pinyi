@@ -73,9 +73,14 @@ final class AppModel: ObservableObject {
         syncTargetPreview(old: state, new: s)
         state = s
         works.controller.resultDidChange(revision: s.resultRevision)
-        if s.resultRevision != renderedRevision {
-            renderedRevision = s.resultRevision
-            renderPreview()
+        if s.flow.step == .result {
+            if s.resultRevision != renderedRevision {
+                renderedRevision = s.resultRevision
+                renderPreview()
+            }
+        } else {
+            // 离开结果页就丢掉预览位图（长边约 4096 时 RGBA 约 64 MB），换新结果时也会先走这里再重画。
+            releasePreviewImage()
         }
         if !s.hasResult, resultImage != nil || previewTask != nil {
             // 结果被丢弃（「再拼一张」开始生成新图 / 返回首页）：取消在途绘制，释放预览位图（可能约 48 MB）。
@@ -200,19 +205,35 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// 取消未完成的缩略图绘制，并释放 `resultImage`。
+    private func releasePreviewImage() {
+        previewTask?.cancel()
+        previewTask = nil
+        if resultImage != nil { resultImage = nil }
+        renderedRevision = 0
+    }
+
     private func renderPreview() {
-        guard let product = coordinator.product, let target = coordinator.target else { return }
+        previewTask?.cancel()
+        previewTask = nil
         resultZoom.reset()
+        guard let product = coordinator.product, let target = coordinator.target else {
+            resultImage = nil
+            return
+        }
+        // 先换成小色块占位，立刻丢掉上一张大预览图。
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
         let alpha = state.flow.settings.overlayAlpha
         let thumbs = thumbnails
         let perf = self.perf
-        previewTask?.cancel()
+        let revision = renderedRevision
         previewTask = Task { [weak self] in
             let t0 = perf.clock.now()
             let img = await MosaicPreviewRenderer.thumbnails(product, target: target, overlayAlpha: alpha, thumbnails: thumbs)
             perf.record(.previewRender, seconds: perf.clock.now() - t0, items: product.generation.layout.cellCount)
-            if let img { self?.resultImage = img }
+            // 离开页面时 revision 已清零；过期任务即使取消信号晚到也不会把大图写回去。
+            guard let self, self.renderedRevision == revision, !Task.isCancelled else { return }
+            if let img { self.resultImage = img }
         }
     }
 }

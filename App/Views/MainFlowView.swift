@@ -230,7 +230,7 @@ struct ResultView: View {
                 let grid = model.previewGrid
                 ZoomableContainer(aspectRatio: Double(img.width) / Double(max(1, img.height)),
                                   columns: grid.columns, rows: grid.rows, zoom: $model.resultZoom) {
-                    Image(decorative: img, scale: 1).resizable().interpolation(.none).scaledToFit()
+                    Image(decorative: img, scale: 1).resizable().interpolation(.high).scaledToFit()
                 }
             }
             Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
