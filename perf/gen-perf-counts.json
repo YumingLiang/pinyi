@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "materialSetVersion": 1,
+  "commit": "66dc745",
+  "note": "生成链路确定性计数基线（66dc745，fake PhotoKit，素材集 v1）。由 Packages/MosaicAppCore/Tests/MosaicAppCoreTests/GenPerf/GenPerfRegressionTests.swift 读取：计数只许 ≤ 基线。耗时不在这里，耗时门禁见 perf/baseline-linux.json。改素材集必须同时改 materialSetVersion 并重采。",
+  "scenarios": {
+    "coarse": {
+      "counts": {
+        "assignPhasesTotal": 2,
+        "cells": 1200,
+        "generatePassesReshuffle": 1,
+        "generatePassesRun": 1,
+        "matchPhasesTotal": 2,
+        "previewDistinctAssets": 1528,
+        "previewMaxRequestsPerAssetPerRender": 1,
+        "previewThumbnailRequests": 1528,
+        "probeMaxPerAsset": 0,
+        "probeRequestsReshuffle": 0,
+        "probeRequestsRun": 0,
+        "refillCalls": 0,
+        "rematchRoundsReshuffle": 0,
+        "rematchRoundsRun": 0,
+        "thumbnailRequestsDuringGenerate": 0
+      }
+    },
+    "fine": {
+      "counts": {
+        "assignPhasesTotal": 2,
+        "cells": 10800,
+        "generatePassesReshuffle": 1,
+        "generatePassesRun": 1,
+        "matchPhasesTotal": 2,
+        "previewDistinctAssets": 2622,
+        "previewMaxRequestsPerAssetPerRender": 1,
+        "previewThumbnailRequests": 2622,
+        "probeMaxPerAsset": 0,
+        "probeRequestsReshuffle": 0,
+        "probeRequestsRun": 0,
+        "refillCalls": 0,
+        "rematchRoundsReshuffle": 0,
+        "rematchRoundsRun": 0,
+        "thumbnailRequestsDuringGenerate": 0
+      }
+    },
+    "medium": {
+      "counts": {
+        "assignPhasesTotal": 2,
+        "cells": 4800,
+        "generatePassesReshuffle": 1,
+        "generatePassesRun": 1,
+        "matchPhasesTotal": 2,
+        "previewDistinctAssets": 2410,
+        "previewMaxRequestsPerAssetPerRender": 1,
+        "previewThumbnailRequests": 2410,
+        "probeMaxPerAsset": 0,
+        "probeRequestsReshuffle": 0,
+        "probeRequestsRun": 0,
+        "refillCalls": 0,
+        "rematchRoundsReshuffle": 0,
+        "rematchRoundsRun": 0,
+        "thumbnailRequestsDuringGenerate": 0
+      }
+    }
+  }
+}
