@@ -147,7 +147,7 @@ struct WorkDetailView: View {
                             isPresented: Binding(get: { works.state.pendingDelete == id },
                                                  set: { if !$0 { works.deleteCancelled() } }),
                             titleVisibility: .visible) {
-            Button(role: .destructive) { works.deleteConfirmed() } label: { Text(L10nKey.worksDeleteConfirmOK) }
+            Button(role: .destructive) { works.deleteConfirmed(id) } label: { Text(L10nKey.worksDeleteConfirmOK) }
             Button(role: .cancel) { works.deleteCancelled() } label: { Text(L10nKey.commonCancel) }
         }
         .alert(Text(works.state.notice ?? .worksOpenFailed), isPresented: .constant(works.state.notice != nil)) {

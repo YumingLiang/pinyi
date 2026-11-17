@@ -39,7 +39,7 @@ final class WorksModel: ObservableObject {
     func exportOpened(_ purpose: ExportPurpose) { Task { await controller.exportOpenedTapped(purpose: purpose) } }
     func deleteTapped(_ id: WorkID) { controller.deleteTapped(id) }
     func deleteCancelled() { controller.deleteCancelled() }
-    func deleteConfirmed() { Task { await controller.deleteConfirmed() } }
+    func deleteConfirmed(_ id: WorkID) { Task { await controller.deleteConfirmed(id) } }
     func dismissNotice() { controller.dismissNotice() }
 
     /// 列表缩略图（降采样解码，约 2 列 × 3x 屏幕密度）。
