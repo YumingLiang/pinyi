@@ -82,15 +82,15 @@ enum PhotoFetch {
     }
 
     /// 集合的代表照片（封面）。选项同样走 `options`（写死 `includeHiddenAssets = false`），不允许 `options: nil`。
-    /// 代表张若被隐藏，结果可能为空。共享相簿要传 `Sources.cloudShared`。
+    /// 代表张若被隐藏，结果可能为空；PhotoKit 本身返回可选（取不到时为 nil），调用方按无封面处理。共享相簿要传 `Sources.cloudShared`。
     static func keyAssets(in collection: PHAssetCollection,
-                          sources: PHAssetSourceType) -> PHFetchResult<PHAsset> {
+                          sources: PHAssetSourceType) -> PHFetchResult<PHAsset>? {
         PHAsset.fetchKeyAssets(in: collection,
                                options: options(imagesOnly: true, sources: sources, order: .unspecified))
     }
 
     /// 选图页 / 相簿列表取封面：来源按 `pickerSources(forSubtype:)` 自动选。
-    static func keyAssets(in collection: PHAssetCollection) -> PHFetchResult<PHAsset> {
+    static func keyAssets(in collection: PHAssetCollection) -> PHFetchResult<PHAsset>? {
         keyAssets(in: collection, sources: pickerSources(forSubtype: collection.assetCollectionSubtype))
     }
 }
