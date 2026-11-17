@@ -77,8 +77,29 @@ enum PhotoFetch {
     }
 
     /// 按 localIdentifier 取回图片。被隐藏 / 删除 / 受限访问移出的照片取不到（调用方当缺图处理）。
+    /// 取回后请再用 `visibleImages(withLocalIdentifiers:)`，不要直接使用本结果里的 PHAsset：
+    /// `fetchAssets(withLocalIdentifiers:)` 对 `includeHiddenAssets` 的行为不完全一致。
     static func images(withLocalIdentifiers ids: [String]) -> PHFetchResult<PHAsset> {
         PHAsset.fetchAssets(withLocalIdentifiers: ids, options: options(imagesOnly: true, sources: Sources.any))
+    }
+
+    /// 按 ID 取回后再滤掉 `isHidden`（双保险）。不用 `enumerateObjects` 闭包。
+    /// 隐藏 / 删除 / 受限访问移出的照片不在结果里，调用方当缺图处理。
+    static func visibleImages(withLocalIdentifiers ids: [String]) -> [PHAsset] {
+        let result = images(withLocalIdentifiers: ids)
+        guard result.count > 0 else { return [] }
+        return VisibleAssetFilter.accepting(
+            result.objects(at: IndexSet(integersIn: 0..<result.count)),
+            isHidden: { $0.isHidden }
+        )
+    }
+
+    /// 系统 PhotosPicker 选完后的兜底（#18 P1-a）：按 `itemIdentifier` 再取一次。取不到（隐藏 / 删除 / 受限未授权）
+    /// 或 `isHidden` 都不能当目标图（`PickedTargetGate`）。
+    /// 只回答可用 / 不可用，不区分原因（copy v1.6）。
+    /// 走 `visibleImages`（#15 的 isHidden 双保险），不单独再滤一遍。
+    static func isPickedAssetAvailable(_ id: String) -> Bool {
+        !visibleImages(withLocalIdentifiers: [id]).isEmpty
     }
 
     /// 集合的代表照片（封面）。选项同样走 `options`（写死 `includeHiddenAssets = false`），不允许 `options: nil`。

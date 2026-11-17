@@ -70,7 +70,7 @@ final class PhotoKitAssetGridDataSource: AssetGridDataSource, PhotoLibraryChange
 
     /// 先按 ID 取回这张照片（走 PhotoFetch，隐藏 / 删除的取不到），再在本 fetch result 里找下标。
     func index(ofAssetID assetID: String) -> Int? {
-        guard let asset = PhotoFetch.images(withLocalIdentifiers: [assetID]).firstObject else { return nil }
+        guard let asset = PhotoFetch.visibleImages(withLocalIdentifiers: [assetID]).first else { return nil }
         let i = fetchResult.index(of: asset)
         return i == NSNotFound ? nil : i
     }

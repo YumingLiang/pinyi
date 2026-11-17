@@ -15,6 +15,8 @@ final class AppModel: ObservableObject {
     private let thumbnails: PhotoKitThumbnails
     /// 「我的作品」（逻辑在 MosaicAppCore 的 `WorksController`）。
     let works: WorksModel
+    /// 结果页预览清晰层（放大后按可见格子取 256 / 512 / 1024 px 方图，盖在底图上）。
+    let detailLayer: PreviewDetailLayer
 
     @Published private(set) var state: AppState
     @Published private(set) var targetPreview: CGImage?
@@ -43,6 +45,7 @@ final class AppModel: ObservableObject {
         self.perf = perf
         self.lifecycle = lifecycle
         self.thumbnails = thumbnails
+        self.detailLayer = PreviewDetailLayer(thumbnails: thumbnails, perf: perf)
         // 导出成功 → 中继 → WorksController（只刷新「存到我的作品」按钮，导出不再自动存，需求 B10-1；
         // AppDependencies 先于协调器创建，所以经中继转）
         let relay = ExportSuccessRelay()
@@ -60,6 +63,7 @@ final class AppModel: ObservableObject {
             return c.workResultContext
         }, relay: relay)
         worksController.exportHandler = CoordinatorWorkExporter(coordinator: coordinator)
+        coordinator.resultSaver = worksController   // 「再拼一张」未保存提示：问存没存过 / 去存（弱引用）
         self.works = WorksModel(controller: worksController)
         self.state = coordinator.state
         coordinator.systemActionHandler = { action in
@@ -72,6 +76,7 @@ final class AppModel: ObservableObject {
     }
 
     private func stateChanged(_ s: AppState) {
+        syncTargetPreview(old: state, new: s)
         state = s
         works.controller.resultDidChange(revision: s.resultRevision)
         // 「存到我的作品」按钮按当前结果 vs 作品库算（B10-5）：叠加强度变了 / 进出结果页时重算
@@ -87,6 +92,11 @@ final class AppModel: ObservableObject {
             }
         } else {
             // 离开结果页就丢掉预览位图（长边约 4096 时 RGBA 约 64 MB），换新结果时也会先走这里再重画。
+            releasePreviewImage()
+        }
+        if !s.hasResult, resultImage != nil || previewTask != nil || detailOverlay != nil {
+            // 结果被丢弃（「再拼一张」开始生成新图 / 返回首页）：取消在途绘制，释放预览位图（可能约 48 MB）。
+            // 走 releasePreviewImage，连清晰层缓存一起清掉。
             releasePreviewImage()
         }
         if case .main = s.route, changeObserver == nil {
@@ -154,6 +164,31 @@ final class AppModel: ObservableObject {
     /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
     func retryTapped() { Task { await coordinator.retryTapped() } }
 
+    // MARK: 再拼一张（需求 v1.0 §2e；判断全在 AppCoordinator+QuickAgain）
+
+    var canStartNewMosaic: Bool { state.canStartNewMosaic }
+    var unsavedPrompt: UnsavedResultPrompt? { state.unsavedPrompt }
+    /// 未保存提示是不是「存过但强度改了」那种（标题 `quick.unsaved.update_title`）。
+    var unsavedPromptIsUpdate: Bool { state.unsavedPromptIsUpdate }
+    /// 每次从作品查看页「再拼一张」+1：主流程导航栈按它重建，退回主流程。
+    @Published private(set) var navigationResetToken = 0
+    /// 作品查看页「再拼一张」（quick-start v1.0 §2a）：退回主流程，再走和预览页一样的「再拼一张」。
+    func startNewFromWork() {
+        guard !state.isGenerating, !state.export.isBusy else { return }
+        coordinator.startNewFromWorkTapped()
+        navigationResetToken += 1
+    }
+    func startNewMosaicTapped() { coordinator.startNewMosaicTapped() }
+    func leaveResultTapped() { coordinator.leaveResultTapped() }
+    func unsavedPromptSave() { coordinator.unsavedPromptSaveTapped() }
+    func unsavedPromptDismissed() { coordinator.unsavedPromptDismissed() }
+    func unsavedPromptDiscard() { coordinator.unsavedPromptDiscard() }
+    func unsavedPromptCancel() { coordinator.unsavedPromptCancel() }
+    /// 确认页「素材：{name} · {count} 张」。
+    var materialSummary: LocalizedLine {
+        state.materialSummary(allPhotosTitle: (allPhotosRow.titleKey ?? .sourceListAll).localized)
+    }
+
     // MARK: 导出（紧急版：只保存到相册；失败/重试走协调器，作品页再导出才能保留 exportSource）
 
     var exportPhase: ExportPhase { state.export }
@@ -169,10 +204,22 @@ final class AppModel: ObservableObject {
 
     // MARK: 平台专属：目标图 / 预览
 
-    func loadTarget(data: Data?) {
+    // MARK: 系统选择器选的照片用不了（copy v1.6，判断在 AppCoordinator+PickerUnavailable）
+
+    var showsPickerUnavailable: Bool { state.showsPickerUnavailable }
+    var pickerUnavailableShowsAddAccess: Bool { state.pickerUnavailableShowsAddAccess }
+    var targetPickerReopenRequest: Int { state.targetPickerReopenRequest }
+    func pickedTargetUnavailable() { coordinator.pickedTargetUnavailable() }
+    func pickerUnavailableChange() { coordinator.pickerUnavailableChangeTapped() }
+    func pickerUnavailableCancel() { coordinator.pickerUnavailableCancelTapped() }
+    func pickerUnavailableAddAccess() { coordinator.pickerUnavailableAddAccessTapped() }
+    func pickerUnavailableDismissed() { coordinator.pickerUnavailableDismissed() }
+
+    /// 系统选择器选好、已过 PickedTargetGate：解码失败同样弹 picker.unavailable（不区分原因）。
+    func loadPickedTarget(data: Data?) {
         let t0 = perf.clock.now()
         guard let data, let pb = ImagePixels.downsampledTarget(from: data) else {
-            coordinator.setTarget(nil)
+            coordinator.pickedTargetUnavailable()
             return
         }
         perf.record(.targetDecode, seconds: perf.clock.now() - t0, items: pb.width * pb.height)
@@ -180,12 +227,39 @@ final class AppModel: ObservableObject {
         coordinator.setTarget(pb)
     }
 
-    /// 取消未完成的缩略图绘制，并释放 `resultImage`。
+    /// 「再拼一张」开始前的目标图缩略图：返回预览页时换回来；开始生成新图后丢掉。
+    private var previousTargetPreview: CGImage?
+
+    /// 「再拼一张」状态变化时同步目标图缩略图（选图页只显示新选的那张）。
+    private func syncTargetPreview(old: AppState, new: AppState) {
+        if !old.flow.isQuickAgain, new.flow.isQuickAgain {
+            previousTargetPreview = targetPreview
+            targetPreview = nil
+        } else if old.flow.isQuickAgain, !new.flow.isQuickAgain {
+            if new.flow.step == .result {
+                targetPreview = previousTargetPreview   // 返回原预览页
+            }
+            previousTargetPreview = nil
+        }
+    }
+
+    /// 取消未完成的缩略图绘制，并释放 `resultImage`；清晰层取消请求、清空缓存。
     private func releasePreviewImage() {
         previewTask?.cancel()
         previewTask = nil
         if resultImage != nil { resultImage = nil }
+        detailOverlay = nil
         renderedRevision = 0
+        detailLayer.reset()
+    }
+
+    /// 清晰层上的目标图叠加（裁剪区，和底图 / 导出同一个 cropRect）；α = 0 或没有作品时为 nil。
+    @Published private(set) var detailOverlay: CGImage?
+
+    /// 结果页缩放 / 平移变化（视图 `onChange(of: resultZoom)` 调）。
+    func resultZoomChanged(displayScale: Double) {
+        guard state.flow.step == .result, coordinator.product != nil else { return }
+        detailLayer.zoomChanged(resultZoom, displayScale: displayScale)
     }
 
     private func renderPreview() {
@@ -199,6 +273,20 @@ final class AppModel: ObservableObject {
         // 先换成小色块占位，立刻丢掉上一张大预览图。
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
         let alpha = state.flow.settings.overlayAlpha
+        // 清晰层：换作品（含换拼法）清空缓存；准备叠加用的目标图裁剪区（与底图同一 cropRect、同一 α）。
+        detailLayer.configure(product: product)
+        detailOverlay = nil
+        if OverlayBlendLimits.clamp(alpha) > 0, let t = ImagePixels.cgImage(target) {
+            let crop = product.generation.layout.cropRect
+            // 长边 > 2048 先缩到 2048 再持有：放大后这一层本来就是糊的，和导出一致，避免结果页一直攥着一份 4096 目标图。
+            var overlay = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height))
+            if let img = overlay, max(img.width, img.height) > 2048,
+               let scaled = ImagePixels.opaqueSRGB(img, maxEdge: 2048),
+               let cg = ImagePixels.cgImage(scaled) {
+                overlay = cg
+            }
+            detailOverlay = overlay
+        }
         let thumbs = thumbnails
         let perf = self.perf
         let revision = renderedRevision

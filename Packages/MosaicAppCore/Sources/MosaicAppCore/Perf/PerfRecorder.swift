@@ -27,6 +27,8 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
     case generateTotal
     /// 预览图绘制。
     case previewRender
+    /// 预览清晰层：一次可见集合更新从发请求到最后一格到位；items = 新取的照片数，note = 档位 / 格数 / 命中缓存数。
+    case previewDetail
     /// 一轮扫描的墙钟总时长（note = `PerfNote.initialScan` / `.incrementalScan`）。
     case scanTotal
     /// 一轮扫描期间提交累计耗时（与 `scanTotal` 同 note；首扫占比 > 5% 是 SQLite 触发条件之一，MF-4 / MF-7）。
@@ -51,6 +53,7 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
         case .generateAssigning: return "生成·分配"
         case .generateTotal: return "生成·总计"
         case .previewRender: return "预览绘制"
+        case .previewDetail: return "预览清晰层"
         case .scanTotal: return "扫描·总计"
         case .scanCommitTotal: return "扫描·提交累计"
         case .sharpnessProbe: return "清晰度探测"

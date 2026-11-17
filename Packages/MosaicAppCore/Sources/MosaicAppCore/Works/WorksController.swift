@@ -468,3 +468,15 @@ public final class WorksController {
         toastTask = nil
     }
 }
+
+// MARK: - 未保存提示（「再拼一张」，quick-start v1.0 §2e + hd-export B10-4/11）
+
+/// `unsavedPrompt` 就是上面按「当前结果 vs 作品库」算的那个（导出过不算存过）。
+extension WorksController: CurrentResultSaving {
+    /// 未保存提示里的「保存」：同「存到我的作品」/「更新这张作品」按钮（只改了强度时更新原作品，成功出 `works.updated`）。
+    public func saveCurrentResult() async -> Bool {
+        await saveCurrentResultTapped()
+        if case .saved = state.saveStatus { return true }
+        return false
+    }
+}
