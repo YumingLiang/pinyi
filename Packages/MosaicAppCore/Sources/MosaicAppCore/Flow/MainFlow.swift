@@ -13,6 +13,11 @@ public struct MainFlow: Sendable, Hashable {
     public var source = SourcePickerState()
     public var settings = GenerationSettings()
     public var generation: GenerationMachine
+    /// 「再拼一张」进行中（需求 v0.4 §2e）：已离开预览页去选新目标图 / 确认页，但上一张结果**还在**——
+    /// 在选图页返回就回到原预览页；真正开始生成新图时（协调器 `commitQuickAgain`）才结束这个状态、丢弃旧结果。
+    public private(set) var isQuickAgain = false
+    /// 进入「再拼一张」前是否已有目标图（返回预览页时恢复）。
+    private var hasTargetBeforeQuickAgain = false
 
     public init(initialSeed: UInt64) { generation = GenerationMachine(initialSeed: initialSeed) }
 
@@ -21,6 +26,10 @@ public struct MainFlow: Sendable, Hashable {
         case targetFailed
         case next
         case back
+        /// 预览页「再拼一张」（未保存提示已处理完之后）：去选目标图，上一张结果保留。
+        case quickAgainStarted
+        /// 确认页「换素材」：去来源页，选完回确认页。
+        case changeSource
     }
 
     public mutating func send(_ e: Event) {
@@ -28,28 +37,70 @@ public struct MainFlow: Sendable, Hashable {
         case .targetLoaded:
             hasTarget = true
             targetNotice = nil
+            // 2b：再拼一张选好照片直接进确认页（素材沿用上次），保证 ≤ 3 次点击。
+            if isQuickAgain, step == .target { step = .settings }
         case .targetFailed:
             hasTarget = false
             targetNotice = .targetUnreadable
         case .next:
             switch step {
-            case .target where hasTarget: step = .source
+            case .target where hasTarget: step = isQuickAgain ? .settings : .source
             case .source: step = .settings
             default: break
             }
         case .back:
+            if isQuickAgain {
+                switch step {
+                case .target:
+                    // 回到原预览页：结果、「已存」状态都没动过。
+                    isQuickAgain = false
+                    hasTarget = hasTargetBeforeQuickAgain
+                    targetNotice = nil
+                    step = .result
+                case .settings: step = .target
+                case .source: step = .settings
+                case .result: break
+                }
+                return
+            }
             switch step {
             case .source: step = .target
             case .settings: step = .source
             case .result: step = .settings
             case .target: break
             }
+        case .quickAgainStarted:
+            guard step == .result, case .result = generation.phase else { return }
+            hasTargetBeforeQuickAgain = hasTarget
+            isQuickAgain = true
+            hasTarget = false
+            targetNotice = nil
+            step = .target
+        case .changeSource:
+            if step == .settings { step = .source }
         }
     }
 
-    /// 生成状态机进入 / 离开结果页时同步导航。
+    /// 「再拼一张」真正开始生成新图：结束保留旧结果的状态（协调器同时丢弃旧结果和预览位图）。
+    public mutating func commitQuickAgain() {
+        isQuickAgain = false
+    }
+
+    /// 离开结果页、回到首页（选目标图）：旧结果已由协调器丢弃。
+    public mutating func returnToStart() {
+        isQuickAgain = false
+        hasTarget = false
+        targetNotice = nil
+        step = .target
+    }
+
+    /// 生成状态机进入 / 离开结果页时同步导航。「再拼一张」期间结果仍在（phase 仍是 `.result`），不把页面拉回预览页。
     public mutating func syncWithGeneration() {
-        if case .result = generation.phase { step = .result } else if step == .result { step = .settings }
+        if case .result = generation.phase {
+            if !isQuickAgain { step = .result }
+        } else if step == .result {
+            step = .settings
+        }
     }
 
     public var targetButtonKey: L10nKey { hasTarget ? .targetReplace : .targetChoose }

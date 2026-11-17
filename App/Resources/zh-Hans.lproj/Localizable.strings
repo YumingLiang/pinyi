@@ -479,3 +479,24 @@
 
 /* 隐私说明正文（copy_v1.1.md:382） */
 "privacy.body" = "拼忆会读取你允许访问的照片，用于生成马赛克图，也可以在你同意后把成品保存到相册。照片不会上传，也不会用于分析或广告。";
+
+/* 预览页按钮区最下方，「存到我的作品」下面（文字按钮，第三级）（copy_v1.1.md:439） */
+"quick.again" = "再拼一张";
+
+/* 确认页素材摘要（全部照片 / 1 个相簿）（copy_v1.1.md:440） 参数: %1$@=name, %2$@=count */
+"quick.source.summary" = "素材：%1$@ · %2$@ 张";
+
+/* 确认页按钮（copy_v1.1.md:441） */
+"quick.source.change" = "换素材";
+
+/* 未保存提示标题（copy_v1.1.md:442） */
+"quick.unsaved.title" = "这张还没保存，要先存到我的作品吗？";
+
+/* 未保存提示按钮（copy_v1.1.md:443） */
+"quick.unsaved.save" = "保存";
+
+/* 未保存提示按钮（copy_v1.1.md:444） */
+"quick.unsaved.discard" = "不保存";
+
+/* 未保存提示按钮（copy_v1.1.md:445） */
+"quick.unsaved.cancel" = "取消";

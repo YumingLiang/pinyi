@@ -104,6 +104,8 @@ public struct GenerationMachine: Sendable, Hashable {
     private var nextSeed: UInt64
     /// 当前运行是否是"回前台后的自动重跑"。
     private var isAutoRetry = false
+    /// 「再拼一张」从结果页直接开始新图时，生成前「照片比较少」提示点「返回」要回到的结果（结果还没丢）。
+    private var shortageReturnOutcome: GenerationOutcome?
 
     /// - Parameter initialSeed: 首次生成的种子（平台层用系统随机数；测试固定）。
     public init(initialSeed: UInt64) { self.nextSeed = initialSeed }
@@ -118,6 +120,16 @@ public struct GenerationMachine: Sendable, Hashable {
     @discardableResult
     public mutating func send(_ event: Event) -> [Effect] {
         switch (phase, event) {
+        case (.result(let o), .startTapped(let n)):
+            // 「再拼一张」：结果页之外的确认页上点「开始拼图」（结果此时仍在，phase 仍是 `.result`）。
+            settingsNotice = nil
+            if MaterialSupply.evaluate(availableCount: n).needsWarning {
+                shortageReturnOutcome = o
+                phase = .confirmingShortage(available: n)
+                return []
+            }
+            if n <= 0 { phase = .failed(.noMaterial); return [] }
+            return start(seed: nextSeed, isReshuffle: false)
         case (.idle, .startTapped(let n)), (.failed, .retryTapped(let n)), (.idle, .retryTapped(let n)):
             settingsNotice = nil
             if MaterialSupply.evaluate(availableCount: n).needsWarning {
@@ -127,9 +139,11 @@ public struct GenerationMachine: Sendable, Hashable {
             if n <= 0 { phase = .failed(.noMaterial); return [] }
             return start(seed: nextSeed, isReshuffle: false)
         case (.confirmingShortage, .shortageContinue):
+            shortageReturnOutcome = nil
             return start(seed: nextSeed, isReshuffle: false)
         case (.confirmingShortage, .shortageBack):
-            phase = .idle
+            phase = shortageReturnOutcome.map { .result($0) } ?? .idle
+            shortageReturnOutcome = nil
             return []
 
         case (.running(let id, _, _), .progressed(let rid, let f)) where id == rid,

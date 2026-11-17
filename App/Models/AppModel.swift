@@ -57,6 +57,7 @@ final class AppModel: ObservableObject {
             return c.workResultContext
         }, relay: relay)
         worksController.exportHandler = CoordinatorWorkExporter(coordinator: coordinator)
+        coordinator.resultSaver = worksController   // 「再拼一张」未保存提示：问存没存过 / 去存（弱引用）
         self.works = WorksModel(controller: worksController)
         self.state = coordinator.state
         coordinator.systemActionHandler = { action in
@@ -69,11 +70,18 @@ final class AppModel: ObservableObject {
     }
 
     private func stateChanged(_ s: AppState) {
+        syncTargetPreview(old: state, new: s)
         state = s
         works.controller.resultDidChange(revision: s.resultRevision)
         if s.resultRevision != renderedRevision {
             renderedRevision = s.resultRevision
             renderPreview()
+        }
+        if !s.hasResult, resultImage != nil || previewTask != nil {
+            // 结果被丢弃（「再拼一张」开始生成新图 / 返回首页）：取消在途绘制，释放预览位图（可能约 48 MB）。
+            previewTask?.cancel()
+            previewTask = nil
+            resultImage = nil
         }
         if case .main = s.route, changeObserver == nil {
             changeObserver = LibraryChangeObserver { [weak self] in
@@ -136,6 +144,20 @@ final class AppModel: ObservableObject {
     /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
     func retryTapped() { Task { await coordinator.retryTapped() } }
 
+    // MARK: 再拼一张（需求 v0.4 §2e；判断全在 AppCoordinator+QuickAgain）
+
+    var canStartNewMosaic: Bool { state.canStartNewMosaic }
+    var unsavedPrompt: UnsavedResultPrompt? { state.unsavedPrompt }
+    func startNewMosaicTapped() { coordinator.startNewMosaicTapped() }
+    func leaveResultTapped() { coordinator.leaveResultTapped() }
+    func unsavedPromptSave() { Task { await coordinator.unsavedPromptSave() } }
+    func unsavedPromptDiscard() { coordinator.unsavedPromptDiscard() }
+    func unsavedPromptCancel() { coordinator.unsavedPromptCancel() }
+    /// 确认页「素材：{name} · {count} 张」。
+    var materialSummary: LocalizedLine {
+        state.materialSummary(allPhotosTitle: (allPhotosRow.titleKey ?? .sourceListAll).localized)
+    }
+
     // MARK: 导出（紧急版：只保存到相册；失败/重试走协调器，作品页再导出才能保留 exportSource）
 
     var exportPhase: ExportPhase { state.export }
@@ -160,6 +182,22 @@ final class AppModel: ObservableObject {
         perf.record(.targetDecode, seconds: perf.clock.now() - t0, items: pb.width * pb.height)
         targetPreview = ImagePixels.cgImage(pb)
         coordinator.setTarget(pb)
+    }
+
+    /// 「再拼一张」开始前的目标图缩略图：返回预览页时换回来；开始生成新图后丢掉。
+    private var previousTargetPreview: CGImage?
+
+    /// 「再拼一张」状态变化时同步目标图缩略图（选图页只显示新选的那张）。
+    private func syncTargetPreview(old: AppState, new: AppState) {
+        if !old.flow.isQuickAgain, new.flow.isQuickAgain {
+            previousTargetPreview = targetPreview
+            targetPreview = nil
+        } else if old.flow.isQuickAgain, !new.flow.isQuickAgain {
+            if new.flow.step == .result {
+                targetPreview = previousTargetPreview   // 返回原预览页
+            }
+            previousTargetPreview = nil
+        }
     }
 
     private func renderPreview() {

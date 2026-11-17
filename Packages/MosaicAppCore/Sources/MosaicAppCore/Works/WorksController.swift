@@ -292,3 +292,20 @@ public final class WorksController {
         relayTask = nil
     }
 }
+
+// MARK: - 未保存提示（「再拼一张」，需求 v0.4 §2e）
+
+extension WorksController: CurrentResultSaving {
+    /// 结果页按钮状态是「已存」且对应的就是这一版结果。
+    public func isCurrentResultSaved(revision: Int) -> Bool {
+        guard case .saved = state.saveStatus else { return false }
+        return lastRevision == nil || lastRevision == revision
+    }
+
+    /// 未保存提示里的「保存」：同「存到我的作品」按钮。
+    public func saveCurrentResult() async -> Bool {
+        await saveCurrentResultTapped()
+        if case .saved = state.saveStatus { return true }
+        return false
+    }
+}

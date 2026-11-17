@@ -431,3 +431,15 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 ### `tf.feedback.title`：怎么反馈
 
 `tf.feedback.body`：请用 TestFlight 的“发送测试反馈”，或直接把截图和机型、系统版本发给我们。若做了性能测试，把「复制结果」一并发来。谢谢你愿意用自己的照片帮忙试。
+
+## v1.4 补充（2026-11-16 20:50）预览页「再拼一张」
+来源：product/quick-start-req-v0.4.md §2b / §2e 与「新增文案 key」一节（产品经理定稿）。`quick.unsaved.*` 只在当前结果既没导出过、也没存到我的作品时弹。
+| key | 位置 | 文案 |
+|---|---|---|
+| `quick.again` | 预览页按钮区最下方，「存到我的作品」下面（文字按钮，第三级） | 再拼一张 |
+| `quick.source.summary` | 确认页素材摘要（全部照片 / 1 个相簿） | 素材：{name} · {count} 张 |
+| `quick.source.change` | 确认页按钮 | 换素材 |
+| `quick.unsaved.title` | 未保存提示标题 | 这张还没保存，要先存到我的作品吗？ |
+| `quick.unsaved.save` | 未保存提示按钮 | 保存 |
+| `quick.unsaved.discard` | 未保存提示按钮 | 不保存 |
+| `quick.unsaved.cancel` | 未保存提示按钮 | 取消 |

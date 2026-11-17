@@ -1,5 +1,25 @@
 # CHANGES
 
+## feat/start-new：预览页「再拼一张」+ 素材相簿多选（需求 v0.4 §2b / §2e / §2f）
+
+基于 `origin/feat/app-layer` `419a9b8`。不改生成、匹配、导出逻辑，不碰 target.heic / 覆盖层，不碰 `LiveDependencies` 的清晰度注入。
+
+### 再拼一张（§2b / §2e）
+
+- **MosaicAppCore `Flow/MainFlow.swift`**：新增 `isQuickAgain` 和事件 `.quickAgainStarted`（只在结果页、phase 为 `.result` 时生效）、`.changeSource`（确认页「换素材」）。「再拼一张」期间：选好目标图直接进确认页（跳过来源页，素材沿用）；确认页返回 → 选图页 → **原预览页**；来源页的「下一步」/返回都回确认页。`syncWithGeneration` 在「再拼一张」期间不把页面拉回结果页。
+- **MosaicAppCore `Flow/GenerationMachine.swift`**：`(.result, .startTapped)` 可以直接开始新图（只有「再拼一张」的确认页会走到）；这时如果先弹「照片比较少」，点「返回」回到原结果（`shortageReturnOutcome`），不丢结果。
+- **MosaicAppCore `Coordinator/AppCoordinator+QuickAgain.swift`**（新）：`startNewMosaicTapped()` / `leaveResultTapped()` / `unsavedPromptSave()` / `unsavedPromptDiscard()` / `unsavedPromptCancel()`，`CurrentResultSaving` 协议（`WorksController` 实现）。
+  - 未保存提示 `quick.unsaved.*`：只有当前结果**既没导出成功过、也没存到我的作品**时弹（`state.resultExportedRevision` + `WorksController.isCurrentResultSaved`）。「保存」存成功才继续，失败留在预览页（错误沿用「存到我的作品」下方的 `works.save_failed`）；「取消」什么都不变；「不保存」继续。
+  - 结果**不在点按钮时清**：选图页 / 确认页返回，结果、预览、「已存」状态都在。新选的目标图先放 `pendingTarget`，旧结果的目标图不动。**真正开始生成新图**（`send` 里出现 `.run`）时才 `commitQuickAgain()`：丢 `product`、`hasResult = false`（平台层据此释放约 48 MB 的预览位图并取消在途绘制）、`resultRevision + 1`（「存到我的作品」按钮复位）、换上新目标图。
+  - `leaveResultTapped()`：「返回首页」类离开方式同样走未保存提示，确认后丢结果回到选目标图。**feat/app-layer 的预览页目前没有这类入口**，接口先备好（2c 首页直达时接）。「再调一调」「换一种拼法」不弹。
+  - `AppState.canStartNewMosaic`：生成中、导出中、提示弹着 / 保存中、不在结果页时为 false；这些状态下调方法直接忽略。
+  - `generateTapped()`：phase 为 `.result` 且不在「再拼一张」时忽略（以前靠状态机忽略，现在状态机允许从结果页开始新图，所以在这里拦）。
+- **App**：`ResultView` 在「存到我的作品」下方加第三级文字按钮「再拼一张」（`+` 图标，`.borderless`），未保存提示用 `confirmationDialog`；`TargetStepView` 在「再拼一张」进来时自动弹出系统选图（再拼一张 → 选一张 → 开始拼图，3 次点击），选图页左上角有返回；`SettingsStepView`（确认页）顶部加「素材：{name} · {count} 张」+「换素材」；`AppModel` 在 `hasResult` 变 false 时释放预览位图，「再拼一张」期间暂存旧目标图缩略图、返回预览页时换回。
+- **文案**：copy_v1.1.md 新增「v1.4 补充 预览页再拼一张」：`quick.again`、`quick.source.summary`、`quick.source.change`、`quick.unsaved.title/.save/.discard/.cancel`（取自 product/quick-start-req-v0.4.md「新增文案 key」，copy 工作稿里还没有），重新生成 Localizable.strings。
+- **测试**：`QuickAgainTests` 16 个：已存 / 已导出不弹、返回恢复结果和「已存」、选图后直接进确认页且旧目标图不动、换素材往返、未保存提示三个分支、保存失败留在预览页、返回首页提示与「再调一调」「换一种拼法」不弹、开始生成新图时才清空（生成中断言）、照片少于 200 张时提示返回不丢结果、导出中 / 无结果时调用被忽略、素材选择保留、真 `WorksController` 联调。
+- **待产品确认 / 未做**：确认页「裁剪」（§3）和自做选图页（§4，记住浏览位置）在 feat/app-layer 上都还没有，这次用系统 PhotosPicker 自动弹出；接入后改 `TargetStepView.onAppear`、确认页加「裁剪」。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`MainFlowView.swift`、`AppModel.swift`。
+
 ## feat/picker-t4：选图页 P0 T4「共用照片网格」（photo-picker-v0.1 §2、§3）
 
 基于 feat/picker-t0 `9cfd07e`。只依赖 T0 的 `AssetGridDataSource` / `GridThumbnailLoading` 协议，不碰 `App/Adapters`（T3）和 AlbumCatalog / BrowsePosition 的实现（T1 / T2）。没有新增文案，T0 公开接口签名没改。

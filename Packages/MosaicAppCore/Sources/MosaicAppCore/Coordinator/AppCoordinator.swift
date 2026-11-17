@@ -14,13 +14,20 @@ public final class AppCoordinator {
     public let index: PhotoIndex
     public let memory: PeakMemoryTracker
 
-    public private(set) var state: AppState {
+    public internal(set) var state: AppState {
         didSet { if state != oldValue { notify() } }
     }
     /// 最近一次生成结果（不放进 `state`：体积大且不是 Hashable）。
-    public private(set) var product: GenerationProduct?
-    /// 当前目标图（平台层解码后交进来）。
-    public private(set) var target: PixelBuffer?
+    public internal(set) var product: GenerationProduct? {
+        didSet { if (product != nil) != state.hasResult { state.hasResult = product != nil } }
+    }
+    /// 当前目标图（平台层解码后交进来）。「再拼一张」期间这是**上一张结果**的目标图（预览叠加 / 存作品要用），
+    /// 新选的目标图先放在 `pendingTarget`，开始生成新图时才换进来。
+    public internal(set) var target: PixelBuffer?
+    /// 「再拼一张」新选的目标图（开始生成时才替换 `target`）。
+    public internal(set) var pendingTarget: PixelBuffer?
+    /// 「存到我的作品」（`WorksController`）：未保存提示要问它当前结果存没存过、以及「保存」按钮去存。弱引用，不成环。
+    public weak var resultSaver: (any CurrentResultSaving)?
     /// 平台层执行系统动作（打开设置、受限选择器）。
     public var systemActionHandler: (@MainActor (SystemAction) -> Void)?
 
@@ -34,6 +41,8 @@ public final class AppCoordinator {
     private var exportTask: Task<Void, Never>?
     private var lastExportPurpose: ExportPurpose = .save
     private var exportSource: ExportSource?
+    /// 本次导出的是不是结果页上的当前结果（作品页再导出不算）。
+    private var exportSourceIsCurrentResult = false
     private var lifecycleTask: Task<Void, Never>?
     private var memorySamplingTask: Task<Void, Never>?
     /// 被取消、尚未结束的任务（`settle()` 等它们收尾）。
@@ -286,7 +295,11 @@ public final class AppCoordinator {
 
     /// 目标图解码结果（平台层解码 + 降采样后交进来；nil = 读不出来）。
     public func setTarget(_ pixels: PixelBuffer?) {
-        target = pixels
+        if state.flow.isQuickAgain {
+            pendingTarget = pixels   // 上一张结果还在，它的目标图不能动
+        } else {
+            target = pixels
+        }
         state.flow.send(pixels == nil ? .targetFailed : .targetLoaded)
     }
 
@@ -309,6 +322,8 @@ public final class AppCoordinator {
     /// 「开始拼图」。并发点击只处理第一次（互斥）；导出进行中忽略。
     public func generateTapped() async {
         guard !generateGatePending, !state.export.isBusy, !state.isGenerating else { return }
+        // 结果页上（phase 仍是 `.result`）只有「再拼一张」的确认页能开始新图。
+        if case .result = state.flow.generation.phase, !state.flow.isQuickAgain { return }
         generateGatePending = true
         defer { generateGatePending = false }
         if let load = loadTask { await load.value }
@@ -377,6 +392,10 @@ public final class AppCoordinator {
             }
         }
         let effects = state.flow.generation.send(e)
+        // 「再拼一张」：真正开始生成新图（有 `.run`）时才丢弃上一张没存的结果和预览位图，换上新目标图。
+        if state.flow.isQuickAgain, effects.contains(where: { if case .run = $0 { return true }; return false }) {
+            commitQuickAgain()
+        }
         state.flow.syncWithGeneration()
         for eff in effects {
             switch eff {
@@ -483,6 +502,7 @@ public final class AppCoordinator {
     public func saveTapped() async {
         guard canExport, let layout = currentLayout() else { return }
         exportSource = ExportSource(layout: layout, target: target)
+        exportSourceIsCurrentResult = true
         await startSave()
     }
 
@@ -490,6 +510,7 @@ public final class AppCoordinator {
     public func shareTapped() {
         guard canExport, let layout = currentLayout() else { return }
         exportSource = ExportSource(layout: layout, target: target)
+        exportSourceIsCurrentResult = true
         startShare()
     }
 
@@ -497,6 +518,7 @@ public final class AppCoordinator {
     public func export(layout: MosaicLayout, target: PixelBuffer?, purpose: ExportPurpose) async {
         guard !state.export.isBusy, !state.isGenerating, layout.isValid else { return }
         exportSource = ExportSource(layout: layout, target: target)
+        exportSourceIsCurrentResult = false
         switch purpose {
         case .save: await startSave()
         case .share: startShare()
@@ -562,6 +584,7 @@ public final class AppCoordinator {
         let exporter = dependencies.exporter
         let library = dependencies.library
         let onSucceeded = dependencies.onExportSucceeded
+        let exportedRevision = exportSourceIsCurrentResult ? state.resultRevision : nil
         let request = ExportRequest(layout: source.layout, target: source.target,
                                     overlayAlpha: source.target == nil ? 0 : source.layout.params.overlayAlpha,
                                     tier: state.exportTier)
@@ -579,9 +602,12 @@ public final class AppCoordinator {
         }
         exportTask = Task { [weak self] in
             let outcome: ExportPhase
+            var exportedOK = false
             do {
                 let url = try await exporter.export(request, progress: progress)
                 await onSucceeded(source.layout, url)
+                // 导出成功（存相册 / 分享任一）：当前结果算「已导出」，「再拼一张」不再弹未保存提示（需求 v0.4 §2e）。
+                exportedOK = true
                 switch purpose {
                 case .share:
                     outcome = .sharing(url)
@@ -605,6 +631,7 @@ public final class AppCoordinator {
             await consumer.value
             guard let self else { return }
             self.state.export = outcome
+            if exportedOK, let rev = exportedRevision { self.state.resultExportedRevision = rev }
             self.endMemory(token)
             self.dependencies.lifecycle.endBackgroundWork(.export)
             self.exportTask = nil

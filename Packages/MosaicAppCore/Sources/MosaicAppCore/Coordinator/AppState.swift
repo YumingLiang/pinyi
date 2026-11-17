@@ -99,6 +99,14 @@ public struct AppState: Sendable, Hashable {
     /// 结果页提示「照片比较少…」（`shortage.pregenerate`）：生成前按已知数没到 200 的门槛、筛选后才不足 200 时，
     /// 生成前没机会提示，在结果页补一次。
     public var postFilterShortageNotice = false
+    /// 有没有结果（`AppCoordinator.product != nil`）。变成 false 时平台层释放预览位图（约 48 MB）。
+    public var hasResult = false
+    /// 哪一版结果（`resultRevision`）在结果页导出成功过（存相册或分享）。「再拼一张」据此判断要不要弹未保存提示。
+    public var resultExportedRevision: Int?
+    /// 未保存提示（`quick.unsaved.*`）：只在当前结果既没导出过、也没存到我的作品时弹。
+    public var unsavedPrompt: UnsavedResultPrompt?
+    /// 未保存提示里点了「保存」，正在存。
+    public var isSavingBeforeLeaving = false
 
     public init(initialSeed: UInt64) { flow = MainFlow(initialSeed: initialSeed) }
 
@@ -134,6 +142,34 @@ public struct AppState: Sendable, Hashable {
 
     /// 生成进行中（含确认取消弹窗）。
     public var isGenerating: Bool { flow.generation.showsProgress }
+
+    /// 确认页素材摘要「素材：{name} · {count} 张」（需求 v0.4 §2b）。`allPhotosTitle`：平台层把
+    /// 「全部照片 / 已允许访问的照片」本地化后传进来（逻辑层不产出中文）。张数与来源页该行显示的一致。
+    public func materialSummary(allPhotosTitle: String) -> LocalizedLine {
+        switch flow.source.selection {
+        case .allPhotos:
+            return LocalizedLine(.quickSourceSummary, [allPhotosTitle, CountFormat.grouped(allPhotosRow.count)])
+        case .album:
+            let row = displayedAlbumRows.first { $0.selection == flow.source.selection }
+            return LocalizedLine(.quickSourceSummary, [row?.albumTitle ?? "", CountFormat.grouped(row?.count ?? 0)])
+        }
+    }
+
+    /// 预览页「再拼一张」能不能点：停在结果页、没在生成、没在导出、没在弹未保存提示 / 保存中。
+    public var canStartNewMosaic: Bool {
+        guard hasResult, flow.step == .result, !flow.isQuickAgain, !isGenerating, !export.isBusy,
+              unsavedPrompt == nil, !isSavingBeforeLeaving else { return false }
+        if case .result = flow.generation.phase { return true }
+        return false
+    }
+}
+
+/// 未保存提示是因为哪种离开方式弹出来的（需求 v0.4 §2e）。
+public enum UnsavedResultPrompt: Sendable, Hashable {
+    /// 预览页「再拼一张」。
+    case startNew
+    /// 预览页返回首页等会丢掉当前结果的离开方式。
+    case leaveResult
 }
 
 /// 某个来源里因手机上版本不够清楚（< 256 px）而没用上的照片（去重）。

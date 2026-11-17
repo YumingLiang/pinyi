@@ -18,7 +18,8 @@ struct MainFlowView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if model.flow.step != .target && model.flow.step != .result {
+                    // 「再拼一张」的选图页也有返回（回到原预览页，结果还在）
+                    if (model.flow.step != .target || model.flow.isQuickAgain) && model.flow.step != .result {
                         Button { model.flowSend(.back) } label: { Text(L10nKey.commonBack) }
                     }
                 }
@@ -44,6 +45,8 @@ struct MainFlowView: View {
 struct TargetStepView: View {
     @EnvironmentObject var model: AppModel
     @State private var item: PhotosPickerItem?
+    /// 「再拼一张」进来时直接弹出选图（再拼一张 → 选一张 → 开始拼图，≤ 3 次点击）。
+    @State private var showPicker = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -59,12 +62,17 @@ struct TargetStepView: View {
                 Text(buttonKey)
             }
             .buttonStyle(.bordered)
+            .photosPicker(isPresented: $showPicker, selection: $item, matching: .images, photoLibrary: .shared())
             Button { model.flowSend(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(!model.flow.canGoNextFromTarget)
         }
         .padding(24)
         .navigationTitle(Text(L10nKey.targetNavTitle))
+        .onAppear {
+            // TODO(需求 v0.4 §4)：自做选图页（记住浏览位置）接入主流程后改为打开它；目前主流程仍是系统 PhotosPicker。
+            if model.flow.isQuickAgain && !model.flow.hasTarget { showPicker = true }
+        }
         .onChange(of: item) { newItem in
             Task {
                 // ⚠️ 盲写：loadTransferable(type: Data.self) 对 HEIC/RAW 的行为需真机核对；iCloud 原图会触发系统下载（系统进程内，不是本 App 联网）。
@@ -135,6 +143,14 @@ struct SettingsStepView: View {
         Form {
             if let n = model.flow.generation.settingsNotice {
                 Section { Text(n).foregroundStyle(.orange) }
+            }
+            // 确认页（需求 v0.4 §2b）：「素材：{name} · {count} 张」+「换素材」。「裁剪」（§3）在 feat/app-layer 上还没有，接入后放这里。
+            Section {
+                HStack {
+                    Text(model.materialSummary).font(.subheadline)
+                    Spacer()
+                    Button { model.flowSend(.changeSource) } label: { Text(L10nKey.quickSourceChange) }
+                }
             }
             Section(header: Text(L10nKey.densitySection)) {
                 ForEach(DensityChoice.allCases, id: \.self) { d in
@@ -228,6 +244,13 @@ struct ResultView: View {
                 .controlSize(.large)
                 .disabled(!model.canExport)
             SaveToWorksButton()   // 需求 B2：次按钮「存到我的作品」（导出成功也会自动存一份）
+            // 需求 v0.4 §2e：第三级文字按钮，紧挨「存到我的作品」下面，不和「再调一调」「换一种拼法」同排。
+            // 生成中 / 导出中 / 提示弹着时不可点（判断在 AppState.canStartNewMosaic）。
+            Button { model.startNewMosaicTapped() } label: {
+                Label { Text(L10nKey.quickAgain) } icon: { Image(systemName: "plus") }
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.canStartNewMosaic)
         }
         .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))
@@ -240,6 +263,13 @@ struct ResultView: View {
             if model.exportPhase.isBusy { ExportBusyOverlay() }
         }
         .modifier(ExportResultAlerts())
+        // 未保存提示（quick.unsaved.*）：只在当前结果既没导出过也没存过时由协调器弹出。isPresented 只读，按钮各自调协调器。
+        .confirmationDialog(Text(L10nKey.quickUnsavedTitle), isPresented: .constant(model.unsavedPrompt != nil),
+                            titleVisibility: .visible) {
+            Button { model.unsavedPromptSave() } label: { Text(L10nKey.quickUnsavedSave) }
+            Button(role: .destructive) { model.unsavedPromptDiscard() } label: { Text(L10nKey.quickUnsavedDiscard) }
+            Button(role: .cancel) { model.unsavedPromptCancel() } label: { Text(L10nKey.quickUnsavedCancel) }
+        }
     }
 }
 
