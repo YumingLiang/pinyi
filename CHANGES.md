@@ -22,6 +22,16 @@ AndyL 反馈 d31925f 生成比 14ac550 慢很多。原因是 #5「不能略糊�
   - 修复后一次匹配 0.036 s [实测]，与 14ac550 的 0.036 s 相同。
   - d31925f 探测 + 重配，按每次请求 10 ms 模拟要 3.2–3.7 s，25 ms 时 8.7 s。完整表格见 PR 描述。
 
+## feat/preview-sharp-quick：结果页预览放大发糊的止血（每格 48–64 px，长边约 4096，插值改为 high）
+
+AndyL 反馈预览放大后小格子很糊。原因是结果页预览每格只有 8–32 px（长边约 2400），SwiftUI 又用 `.interpolation(.none)` 最近邻放大。本卡只改预览绘制和显示，不改生成匹配，也不让生成变慢。
+
+- `MosaicAppCore/Preview/PreviewImageLimits.swift`（新）：预览每格目标 48–64 px，长边上限 4096。格数太多时优先守住长边（例如细档 120 列是 34 px）。给出 `cellPixels` / `size` / `rgbaByteCount`（4096×4096 RGBA = 64 MiB）。
+- `App/Rendering/MosaicPreviewRenderer.swift`：缩略图预览改用上述尺寸；色块占位仍是每格 8 px，避免和正式预览同时占两份大图。
+- `App/Views/MainFlowView.swift`：结果页 `Image` 的插值从 `.none` 改成 `.high`。作品查看页本来就是 `.medium`，这次不动。
+- `App/Models/AppModel.swift`：离开结果页或还没有作品时取消绘制任务并释放 `resultImage`；过期任务用 `resultRevision` 把关，不会把大图写回去。换新结果时先换成小色块，立刻丢掉上一张大图。
+- 测试：`PreviewImageLimitsTests`（尺寸、长边上限、改前改后对照、`PreviewRenderer` 输出尺寸）。`PreviewRenderBenchTests` 只在 `MOSAIC_BENCH=1` 时跑，对照色块预览 / 格点合成的改前改后耗时，以及 `GenerationRunner` 中档生成墙钟。
+
 ## feat/picker-t4：选图页 P0 T4「共用照片网格」（photo-picker-v0.1 §2、§3）
 
 基于 feat/picker-t0 `9cfd07e`。只依赖 T0 的 `AssetGridDataSource` / `GridThumbnailLoading` 协议，不碰 `App/Adapters`（T3）和 AlbumCatalog / BrowsePosition 的实现（T1 / T2）。没有新增文案，T0 公开接口签名没改。
