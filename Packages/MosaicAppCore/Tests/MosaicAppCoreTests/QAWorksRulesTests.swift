@@ -9,7 +9,8 @@ import MosaicCore
 // 依赖 MosaicAppCoreTests 现有 WorksFakes / Fakes / CoordinatorFakes。
 // 用法：拷进 Packages/MosaicAppCore/Tests/MosaicAppCoreTests/ 后 `swift test --filter QAWorksRules`。
 // 全栈接入（fix/works-delete）时的改动都标了「全栈改 / 全栈加」：setAlpha 通知 controller、旧无参删除入口改调实现、
-// seed 用例按 AndyL 口径反转、旧数据重复改用 makeLegacyDuplicate 构造。
+// 旧数据重复改用 makeLegacyDuplicate 构造。seed 用例（testGuard4_SeedStillDistinguishes）已按 QA 原意恢复：
+// 指纹含 seed（AndyL 规则「换拼法后再存就新存一份」，开发协调人按 QA PR #17 复核定口径）。
 
 @MainActor
 final class QAWorksRulesTests: XCTestCase {
@@ -417,15 +418,12 @@ final class QAWorksRulesTests: XCTestCase {
         h.controller.stop()
     }
 
-    /// 全栈改：AndyL 22:20 定「去重只看格子分配、cols/rows 和 targetCrop」（开发协调人转达），seed 不进内容指纹。
-    /// 原 QA 断言「seed 不同算两张」与之相反，按 AndyL 口径改成「格子分配相同、seed 不同 → 同一张」；
-    /// 换拼法得到不同格子分配时照样是两张（testGuard2_* 覆盖）。
-    func testGuard4_SeedNotInFingerprintPerAndyL() async throws {
+    func testGuard4_SeedStillDistinguishes() async throws {
         let h = H()
         await h.controller.start()
         try h.newResult(["a", "b", "c"], seed: 7); _ = await h.saveNow()
         try h.newResult(["a", "b", "c"], seed: 8); _ = await h.saveNow()
-        XCTAssertEqual(h.controller.state.count, 1)
+        XCTAssertEqual(h.controller.state.count, 2)
         h.controller.stop()
     }
 

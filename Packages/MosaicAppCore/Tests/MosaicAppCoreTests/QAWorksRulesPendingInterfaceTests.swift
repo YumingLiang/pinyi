@@ -3,9 +3,9 @@ import XCTest
 import MosaicCore
 @testable import MosaicAppCore
 
-// 全栈接入（fix/works-delete）：A1–A12 按这里的名字实现。按已定规则改了两处断言（标「全栈改」）：
-//   A2 的 seed / 密度名：AndyL 22:20 定「去重只看格子分配、cols/rows 和 targetCrop」，seed、密度名不进内容指纹
-//   （改密度在真实流程里会改 cols/rows，指纹照样不同）。
+// 全栈接入（fix/works-delete）：A1–A12 按这里的名字实现。A2 的 seed 断言按 QA 原意（含 seed）；
+// 密度名一处按 QA PR #17 复核第 3 节②（三档长边格数固定，改密度必然改 cols/rows，密度名本身不进指纹，QA 判可以接受）
+// 改成「不含」，并补了 cols/rows 不同的断言（标「全栈改」）。
 // 规则原文：product/hd-export-req-v0.2.md B5、B7、B9-6~9、B10 第 1–13 条（产品答复 22:40、22:45）。
 // 接口假设（同 qa/works-rules-test-plan.md「给全栈的接口假设」）：
 //   A1  WorkMeta.updatedAt: Date?                    旧数据 nil；更新时写 now()；不参与排序、不显示（B10.7）
@@ -52,19 +52,18 @@ final class QAWorksRulesPendingInterfaceTests: XCTestCase {
 
     // MARK: A2 指纹
 
-    func testFingerprintIgnoresAlphaTierSeedButNotCells() {
+    func testFingerprintIgnoresAlphaAndTierButNotSeedOrCells() {
         var l = sampleLayout(["a", "b", "c"]); l.params.overlayAlpha = 0.1
         var m = l; m.params.overlayAlpha = 0.3
         XCTAssertEqual(FileWorksStore.contentFingerprint(l), FileWorksStore.contentFingerprint(m), "不含强度")
         var s = l; s.params.seed = 8
-        // 全栈改：seed 不进内容指纹（AndyL 22:20：格子分配相同就是同一张）
-        XCTAssertEqual(FileWorksStore.contentFingerprint(l), FileWorksStore.contentFingerprint(s), "不含 seed")
+        XCTAssertNotEqual(FileWorksStore.contentFingerprint(l), FileWorksStore.contentFingerprint(s), "含 seed")
         var c = l; c.cellAssignments.swapAt(0, 1)
         XCTAssertNotEqual(FileWorksStore.contentFingerprint(l), FileWorksStore.contentFingerprint(c), "含格子分配")
         var crop = l; crop.cellAssignments[0].crop = CropRect(x: 0, y: 0, width: 0.5, height: 0.5)
         XCTAssertNotEqual(FileWorksStore.contentFingerprint(l), FileWorksStore.contentFingerprint(crop), "含单格裁剪")
         var d = l; d.params.density = "fine"
-        // 全栈改：密度名本身不进指纹；真实改密度会改 cols/rows，那时指纹不同
+        // 全栈改（QA 复核第 3 节②）：密度名本身不进指纹；真实改密度会改 cols/rows，那时指纹不同
         XCTAssertEqual(FileWorksStore.contentFingerprint(l), FileWorksStore.contentFingerprint(d), "密度名不算")
         let denser = sampleLayout(["a", "b", "c", "d", "e", "f"], cols: 3)
         let coarser = sampleLayout(["a", "b", "c", "d", "e", "f"], cols: 2)
