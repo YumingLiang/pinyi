@@ -18,6 +18,7 @@ public enum PresetShapes {
     /// 已登记的形状（按实现顺序：爱心、星星、圆形、生日蛋糕、花朵，然后月亮、四叶草、小房子、对话框、圆角方块）。
     public static let registry: [Entry] = [
         Entry(id: .heart, path: heart()),
+        Entry(id: .star, path: star()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -44,6 +45,43 @@ extension PresetShapes {
         b.cubic(30, 72, 0, 55, 0, 28)
         b.cubic(0, 12, 10, 0, 25, 0)
         b.cubic(38, 0, 50, 10, 50, 26)
+        b.close()
+        return b.build()
+    }
+}
+
+// MARK: - 星星
+
+extension ShapePresetID {
+    /// 星星
+    public static let star = ShapePresetID(rawValue: "star")
+}
+
+extension PresetShapes {
+    /// 星星：五角星，尖朝上，内外半径比 0.45（比标准 0.382 胖一点）；五个尖用二次曲线略微磨圆，粗档下尖端不碎。
+    static func star() -> ShapePath {
+        var b = ShapePathBuilder()
+        var pts: [ShapePoint] = []
+        for k in 0..<10 {
+            let angle = (-90 + 36 * Double(k)) * Double.pi / 180
+            let r = k % 2 == 0 ? 50.0 : 22.5
+            pts.append(ShapePoint(50 + r * cos(angle), 50 + r * sin(angle)))
+        }
+        // 每个外尖：从入边上距尖 5 个单位处，用二次曲线（控制点 = 尖）连到出边上同样位置。
+        func toward(_ from: ShapePoint, _ to: ShapePoint, _ d: Double) -> ShapePoint {
+            let dx = to.x - from.x, dy = to.y - from.y
+            let len = (dx * dx + dy * dy).squareRoot()
+            return ShapePoint(from.x + dx / len * d, from.y + dy / len * d)
+        }
+        let tip = 5.0
+        b.move(pts[1].x, pts[1].y)
+        for k in stride(from: 2, through: 10, by: 2) {
+            let p = pts[k % 10], prev = pts[k - 1], next = pts[(k + 1) % 10]
+            let a = toward(p, prev, tip), c = toward(p, next, tip)
+            b.line(a.x, a.y)
+            b.quad(p.x, p.y, c.x, c.y)
+            b.line(next.x, next.y)
+        }
         b.close()
         return b.build()
     }
