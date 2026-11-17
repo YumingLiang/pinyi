@@ -16,7 +16,7 @@ import MosaicAppCore
 /// - 「我的作品」兜底格（`request.cellFallbacks`，旧预览裁出的小图）：不取照片，`.high` 插值放大填满该格（不用最近邻），
 ///   计入「糊格子」。
 /// - 实际每格像素、尺寸、上限、可用内存、用时、文件大小，以及退回 128px 缩略图（糊格子）和完全空白（白格子）的数量，写 os_log（subsystem 同 Bundle ID，category "export"）和内测性能页。
-/// - 不做（紧急版范围外）：取消、后台续跑、降档提示、存储预检。作品自动保存由协调器 `onExportSucceeded` 接入。
+/// - 不做（紧急版范围外）：取消、后台续跑、降档提示、存储预检。导出成功经协调器 `onExportSucceeded` 通知「我的作品」（只刷新按钮状态，导出不自动存，需求 B10-1）。
 /// ⚠️ 盲写（Linux 上无法编译 CG / ImageIO / PhotoKit）。
 struct LiveMosaicExporter: MosaicExporting {
     let thumbnails: any ThumbnailProviding

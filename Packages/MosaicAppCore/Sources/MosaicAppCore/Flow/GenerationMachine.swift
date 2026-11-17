@@ -85,6 +85,9 @@ public struct GenerationMachine: Sendable, Hashable {
         case backToSettings
         /// 失败页「再试一次」/ 设置页 auto-retry 提示上的「再试一次」。
         case retryTapped(available: Int)
+        /// 「再调一调」回来后只改了叠加强度：不重新生成，直接回到上一次的结果（布局不变，作品 id 不丢）。
+        /// 由协调器判断「除叠加强度外输入都没变」后发出；没有上一次结果时忽略。
+        case restoreLastResult
     }
 
     public enum Effect: Sendable, Hashable {
@@ -104,6 +107,8 @@ public struct GenerationMachine: Sendable, Hashable {
     private var nextSeed: UInt64
     /// 当前运行是否是"回前台后的自动重跑"。
     private var isAutoRetry = false
+    /// 「再拼一张」从结果页直接开始新图时，生成前「照片比较少」提示点「返回」要回到的结果（结果还没丢）。
+    private var shortageReturnOutcome: GenerationOutcome?
 
     /// - Parameter initialSeed: 首次生成的种子（平台层用系统随机数；测试固定）。
     public init(initialSeed: UInt64) { self.nextSeed = initialSeed }
@@ -118,6 +123,16 @@ public struct GenerationMachine: Sendable, Hashable {
     @discardableResult
     public mutating func send(_ event: Event) -> [Effect] {
         switch (phase, event) {
+        case (.result(let o), .startTapped(let n)):
+            // 「再拼一张」：结果页之外的确认页上点「开始拼图」（结果此时仍在，phase 仍是 `.result`）。
+            settingsNotice = nil
+            if MaterialSupply.evaluate(availableCount: n).needsWarning {
+                shortageReturnOutcome = o
+                phase = .confirmingShortage(available: n)
+                return []
+            }
+            if n <= 0 { phase = .failed(.noMaterial); return [] }
+            return start(seed: nextSeed, isReshuffle: false)
         case (.idle, .startTapped(let n)), (.failed, .retryTapped(let n)), (.idle, .retryTapped(let n)):
             settingsNotice = nil
             if MaterialSupply.evaluate(availableCount: n).needsWarning {
@@ -126,10 +141,17 @@ public struct GenerationMachine: Sendable, Hashable {
             }
             if n <= 0 { phase = .failed(.noMaterial); return [] }
             return start(seed: nextSeed, isReshuffle: false)
+        case (.idle, .restoreLastResult):
+            guard let o = lastOutcome else { return [] }
+            settingsNotice = nil
+            phase = .result(o)
+            return []
         case (.confirmingShortage, .shortageContinue):
+            shortageReturnOutcome = nil
             return start(seed: nextSeed, isReshuffle: false)
         case (.confirmingShortage, .shortageBack):
-            phase = .idle
+            phase = shortageReturnOutcome.map { .result($0) } ?? .idle
+            shortageReturnOutcome = nil
             return []
 
         case (.running(let id, _, _), .progressed(let rid, let f)) where id == rid,
@@ -219,4 +241,13 @@ public struct GenerationMachine: Sendable, Hashable {
         if case .confirmingShortage = phase { return true }
         return false
     }
+}
+
+/// 设置页主按钮（B10.14，QA A11）：`.generate` =「开始拼图」（`generate.cta`）重新生成；
+/// `.done` = `common.done`「完成」，回到原结果只改叠加强度。
+public enum SettingsPrimaryAction: Sendable, Hashable {
+    case generate
+    case done
+
+    public var titleKey: L10nKey { self == .done ? .commonDone : .generateCTA }
 }

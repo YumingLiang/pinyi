@@ -201,7 +201,7 @@ public struct AppDependencies: Sendable {
     public var perf: PerfRecorder
     public var indexConfiguration: PhotoIndex.Configuration
     public var initialSeed: UInt64
-    /// 导出成功（文件已在 tmp/export，保存 / 分享之前）时通知：「我的作品」由这里接入自动保存。默认空实现。
+    /// 导出成功（文件已在 tmp/export，保存 / 分享之前）时通知：「我的作品」由这里刷新「存到我的作品」按钮（导出不自动存，B10-1）。默认空实现。
     public var onExportSucceeded: @Sendable (MosaicLayout, URL) async -> Void
 
     public init(library: any PhotoLibraryClient, thumbnails: any ThumbnailProviding, indexStore: any IndexStore,

@@ -64,13 +64,13 @@ final class WorksStoreTests: XCTestCase {
         let images = FakeWorkImages()
         let store = makeStore(dir, images: images)
         let first = try await store.save(draft(["a", "b", "c"], origin: .savedManually))
-        let again = try await store.save(draft(["a", "b", "c"], origin: .autoSavedOnExport))
+        let again = try await store.save(draft(["a", "b", "c"], origin: .savedManually))
         XCTAssertFalse(again.inserted)
         XCTAssertEqual(again.summary.id, first.summary.id)
         XCTAssertEqual(images.state.get().previews, 1, "命中查重时不再渲染预览")
 
         let reloaded = try await store.load(first.summary.id).layout
-        let roundTrip = try await store.save(WorkDraft(layout: reloaded, target: nil, overlayAlpha: 0.15, origin: .autoSavedOnExport))
+        let roundTrip = try await store.save(WorkDraft(layout: reloaded, target: nil, overlayAlpha: 0.15, origin: .savedManually))
         XCTAssertFalse(roundTrip.inserted)
 
         let other = try await store.save(draft(["a", "c", "b"]))
@@ -79,7 +79,7 @@ final class WorksStoreTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
-    /// 并发保存同一布局（自动保存与手动保存同时到）：actor 串行，只存一份。
+    /// 并发保存同一布局（连点两次同时到）：actor 串行，只存一份。
     func testConcurrentSavesOfSameLayoutStoreOnce() async throws {
         let store = makeStore(makeTempDir())
         let d = draft(["p", "q", "r"])

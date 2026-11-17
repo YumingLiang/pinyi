@@ -34,6 +34,10 @@ jobs:
       - name: Zero-network / zero-dependency guard
         run: ./scripts/check-no-network.sh
 
+      # 隐藏照片守护第一层（photo-picker-v0.1 §6.2）：所有 fetchAssets / fetchKeyAssets 必须走 PhotoFetch；第二层是 AppTests 的 PhotoFetchTests。
+      - name: Hidden-photo guard (all fetchAssets / fetchKeyAssets via PhotoFetch)
+        run: ./scripts/check-photo-fetch.sh
+
       - name: Localizable.strings 与文案表一致
         run: |
           apt-get update -qq && apt-get install -y -qq python3 >/dev/null
@@ -65,6 +69,7 @@ jobs:
 
   # 架构师 G-1：ThreadSanitizer。每个 PR 必跑、阻断合并（需在分支保护里把本 job 设为 required check）。
   # 跳过性能基准（PerformanceTests / IndexBenchTests：TSan 下慢 5–15 倍且只测耗时，不增加竞态覆盖）。
+  # GenPerfSlowPathTests 也跳过：内含 30 s / 60 s 挂起检测，TSan 放慢后会误报；其计数断言在上面的普通 swift test 里阻断。
   # macOS 上的 TSan 不在这里（由运维另行评估，手动触发）。
   tsan:
     name: ThreadSanitizer (swift test --sanitize=thread, Linux)
@@ -90,7 +95,7 @@ jobs:
             "$SWIFT_IMAGE" bash -euo pipefail -c '
               swift --version
               (cd Packages/MosaicCore && swift test --sanitize=thread --skip PerformanceTests)
-              (cd Packages/MosaicAppCore && swift test --sanitize=thread --skip IndexBenchTests)
+              (cd Packages/MosaicAppCore && swift test --sanitize=thread --skip '\''IndexBenchTests|GenPerfSlowPathTests'\'')
             '
 
   # QA A-21：全规模性能基线（10,800 格 × 5 万合成候选，release），单独 job，不拖慢上面的门禁。
@@ -127,3 +132,61 @@ jobs:
           path: |
             Packages/MosaicCore/bench.txt
             Packages/MosaicCore/bench-summary.txt
+
+  # 生成性能回归门禁（AndyL 11-16：「性能要加入到回归中，这个太差了」）。**阻断**，没有 paths 过滤，每次都出结果，
+  # 稳定后设为 feat/app-layer 的 required check。与上面的 A-21（全量 bench，只记录）分开：这里只跑少量门禁指标。
+  # 口径：release；每指标预热 1 次 + 测 MOSAIC_PERF_REPEAT 次取中位数，对照仓库里的 perf/baseline-linux.json，
+  # 中位数 > 基线 × ratio 且绝对差 > min_delta_ms 才失败（数值与依据见 perf/README.md）。
+  # 收录规则：任何包里名为 *PerfGateTests.swift 的测试文件都会被跑（--filter PerfGateTests），QA 的端到端用例照此接入。
+  perf-gate:
+    name: Generation perf regression
+    runs-on: ubuntu-latest
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
+    timeout-minutes: 25
+    env:
+      MOSAIC_PERF_GATE: "1"
+      MOSAIC_PERF_REPEAT: "5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner info
+        run: |
+          nproc
+          grep -m1 'model name' /proc/cpuinfo || true
+          swift --version
+          echo "runner：$(nproc) 核，$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2-)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: python3（门禁脚本用）
+        run: apt-get update -qq && apt-get install -y -qq python3 >/dev/null
+
+      - name: Run *PerfGateTests (release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MOSAIC_PERF_OUT="$GITHUB_WORKSPACE/perf-results.jsonl"
+          # 第一行记 runner 的 CPU 型号：ubuntu-latest 机型是混的，脚本按同机型基线比（没有才退回全局归一化）。
+          python3 -c 'import json,os,re; m=re.search(r"model name\s*:\s*(.*)", open("/proc/cpuinfo").read()); print(json.dumps({"runner_cpu": m.group(1).strip() if m else "", "nproc": os.cpu_count()}))' > "$MOSAIC_PERF_OUT"
+          found=0
+          for pkg in Packages/*/; do
+            # 不用 find | grep -q：pipefail 下 find 收到 SIGPIPE 会被当成「没找到」（同 ios.yml 41dc45f 的教训）。
+            if [ -d "$pkg/Tests" ] && [ -n "$(find "$pkg/Tests" -name '*PerfGateTests.swift' -print -quit)" ]; then
+              found=1
+              echo "::group::$pkg"
+              (cd "$pkg" && swift test -c release --filter PerfGateTests 2>&1 | tee -a "$GITHUB_WORKSPACE/perf-log.txt")
+              echo "::endgroup::"
+            fi
+          done
+          [ "$found" = 1 ] || { echo "::error::没找到任何 *PerfGateTests.swift"; exit 1; }
+          cat "$MOSAIC_PERF_OUT"
+
+      - name: Compare with baseline (median, relative)
+        run: python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload perf results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results-${{ github.run_attempt }}
+          path: |
+            perf-results.jsonl
+            perf-log.txt

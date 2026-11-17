@@ -9,12 +9,10 @@ import MosaicAppCore
 /// ⚠️ 盲写（Linux 上无法编译验证），见 CHANGES「App 层盲写风险」。
 actor PhotoKitLibrary: PhotoLibraryClient {
     /// 只取图像；按创建时间升序，顺序稳定（diff 与断点续扫依赖它）。
+    /// 走 `PhotoFetch`（photo-picker-v0.1 §5.1）：不含隐藏照片——照片后来被隐藏，下次 diff 时它不在结果里，
+    /// `LibraryDiff` 把它判为删除（tombstone），生成时就不会再用到。来源是 `Sources.library`（本机图库 + iTunes 同步）。
     private func fetchAllImages() -> PHFetchResult<PHAsset> {
-        let opts = PHFetchOptions()
-        opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
-        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-        opts.includeHiddenAssets = false
-        return PHAsset.fetchAssets(with: opts)
+        PhotoFetch.allImages(order: .oldestFirst)
     }
 
     /// 缓存同一个 fetch result，分批取元数据时不重复 fetch；每轮 diff 开始（`assetCount()`）时重新 fetch。
@@ -89,8 +87,8 @@ actor PhotoKitLibrary: PhotoLibraryClient {
     func albums() async -> [AlbumInfo] {
         // Swift 6 region isolation：不用 enumerateObjects 闭包（SDK 里可能标 @Sendable / sending），
         // PHFetchResult 先转数组再 for-in，可变状态只在本函数内。
-        let imageOnly = PHFetchOptions()
-        imageOnly.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        // 计数走 PhotoFetch（只数图片、不含隐藏照片）。来源用 `Sources.library`：和素材索引（`fetchAllImages`）一致，
+        // 共享相簿里的照片不在索引里，这里也照旧数不到（行为与改动前相同；选图页的相簿列表另用 `PhotoKitAlbumCatalog`）。
         var collections = Self.array(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))  // 用户相簿
         // 少量智能相簿（技术方案 §2.7）：个人收藏、自拍、人像
         for sub in [PHAssetCollectionSubtype.smartAlbumFavorites, .smartAlbumSelfPortraits, .smartAlbumDepthEffect] {
@@ -99,7 +97,7 @@ actor PhotoKitLibrary: PhotoLibraryClient {
         var out: [AlbumInfo] = []
         out.reserveCapacity(collections.count)
         for c in collections {
-            let n = PHAsset.fetchAssets(in: c, options: imageOnly).count
+            let n = PhotoFetch.images(in: c, sources: PhotoFetch.Sources.library, order: .unspecified).count
             out.append(AlbumInfo(id: c.localIdentifier, title: c.localizedTitle ?? "", assetCount: n))
         }
         return out
@@ -114,8 +112,8 @@ actor PhotoKitLibrary: PhotoLibraryClient {
     func assetIDs(inAlbum albumID: String) async throws -> [String] {
         let cols = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumID], options: nil)
         guard let c = cols.firstObject else { throw PhotoIndexError.albumUnreadable }
-        let opts = PHFetchOptions()
-        opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
-        return Self.array(PHAsset.fetchAssets(in: c, options: opts)).map(\.localIdentifier)
+        // 走 PhotoFetch：只取图片、不含隐藏照片；来源与 `albums()` 计数一致。
+        return Self.array(PhotoFetch.images(in: c, sources: PhotoFetch.Sources.library, order: .unspecified))
+            .map(\.localIdentifier)
     }
 }

@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     }
 
     private var renderedRevision = 0
+    /// 上次通知 WorksController 时的结果页现状（是否在结果页、revision、叠加强度），变了才重算按钮状态。
+    private var lastWorksContext: (onResult: Bool, revision: Int, overlayAlpha: Double)?
     private var previewTask: Task<Void, Never>?
     private var changeObserver: LibraryChangeObserver?
 
@@ -41,7 +43,8 @@ final class AppModel: ObservableObject {
         self.perf = perf
         self.lifecycle = lifecycle
         self.thumbnails = thumbnails
-        // 导出成功 → 中继 → WorksController 自动存（AppDependencies 先于协调器创建，所以经中继转）
+        // 导出成功 → 中继 → WorksController（只刷新「存到我的作品」按钮，导出不再自动存，需求 B10-1；
+        // AppDependencies 先于协调器创建，所以经中继转）
         let relay = ExportSuccessRelay()
         let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
                                                              onExportSucceeded: relay.handler))
@@ -69,6 +72,7 @@ final class AppModel: ObservableObject {
             return c.workResultContext
         }, relay: relay)
         worksController.exportHandler = CoordinatorWorkExporter(coordinator: coordinator)
+        coordinator.resultSaver = worksController   // 「再拼一张」未保存提示：问存没存过 / 去存（弱引用）
         self.works = WorksModel(controller: worksController)
         self.state = coordinator.state
         coordinator.systemActionHandler = { action in
@@ -81,11 +85,29 @@ final class AppModel: ObservableObject {
     }
 
     private func stateChanged(_ s: AppState) {
+        syncTargetPreview(old: state, new: s)
         state = s
         works.controller.resultDidChange(revision: s.resultRevision)
-        if s.resultRevision != renderedRevision {
-            renderedRevision = s.resultRevision
-            renderPreview()
+        // 「存到我的作品」按钮按当前结果 vs 作品库算（B10-5）：叠加强度变了 / 进出结果页时重算
+        let worksContext = (onResult: s.flow.step == .result, revision: s.resultRevision, overlayAlpha: s.flow.settings.overlayAlpha)
+        if lastWorksContext.map({ $0 != worksContext }) ?? true {
+            lastWorksContext = worksContext
+            works.controller.resultContextDidChange()
+        }
+        if s.flow.step == .result {
+            if s.resultRevision != renderedRevision {
+                renderedRevision = s.resultRevision
+                renderPreview()
+            }
+        } else {
+            // 离开结果页就丢掉预览位图（长边约 4096 时 RGBA 约 64 MB），换新结果时也会先走这里再重画。
+            releasePreviewImage()
+        }
+        if !s.hasResult, resultImage != nil || previewTask != nil {
+            // 结果被丢弃（「再拼一张」开始生成新图 / 返回首页）：取消在途绘制，释放预览位图（可能约 48 MB）。
+            previewTask?.cancel()
+            previewTask = nil
+            resultImage = nil
         }
         if case .main = s.route, changeObserver == nil {
             changeObserver = LibraryChangeObserver { [weak self] in
@@ -145,8 +167,37 @@ final class AppModel: ObservableObject {
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
+    /// 设置页主按钮（B10.14）：只改了叠加强度 →「完成」回原结果；否则「开始拼图」。
+    var settingsPrimaryAction: SettingsPrimaryAction { coordinator.settingsPrimaryAction }
+    /// 设置页「完成」：回到原结果，不重新生成（进结果页时按新强度重画预览）。
+    func adjustDoneTapped() { Task { await coordinator.adjustDoneTapped() } }
     /// 失败页「再试一次」：走协调器，用筛选后的可用张数（不要直接 `send(.retryTapped(available: indexStatus.available))`）。
     func retryTapped() { Task { await coordinator.retryTapped() } }
+
+    // MARK: 再拼一张（需求 v1.0 §2e；判断全在 AppCoordinator+QuickAgain）
+
+    var canStartNewMosaic: Bool { state.canStartNewMosaic }
+    var unsavedPrompt: UnsavedResultPrompt? { state.unsavedPrompt }
+    /// 未保存提示是不是「存过但强度改了」那种（标题 `quick.unsaved.update_title`）。
+    var unsavedPromptIsUpdate: Bool { state.unsavedPromptIsUpdate }
+    /// 每次从作品查看页「再拼一张」+1：主流程导航栈按它重建，退回主流程。
+    @Published private(set) var navigationResetToken = 0
+    /// 作品查看页「再拼一张」（quick-start v1.0 §2a）：退回主流程，再走和预览页一样的「再拼一张」。
+    func startNewFromWork() {
+        guard !state.isGenerating, !state.export.isBusy else { return }
+        coordinator.startNewFromWorkTapped()
+        navigationResetToken += 1
+    }
+    func startNewMosaicTapped() { coordinator.startNewMosaicTapped() }
+    func leaveResultTapped() { coordinator.leaveResultTapped() }
+    func unsavedPromptSave() { coordinator.unsavedPromptSaveTapped() }
+    func unsavedPromptDismissed() { coordinator.unsavedPromptDismissed() }
+    func unsavedPromptDiscard() { coordinator.unsavedPromptDiscard() }
+    func unsavedPromptCancel() { coordinator.unsavedPromptCancel() }
+    /// 确认页「素材：{name} · {count} 张」。
+    var materialSummary: LocalizedLine {
+        state.materialSummary(allPhotosTitle: (allPhotosRow.titleKey ?? .sourceListAll).localized)
+    }
 
     // MARK: 导出（紧急版：只保存到相册；失败/重试走协调器，作品页再导出才能保留 exportSource）
 
@@ -163,10 +214,22 @@ final class AppModel: ObservableObject {
 
     // MARK: 平台专属：目标图 / 预览
 
-    func loadTarget(data: Data?) {
+    // MARK: 系统选择器选的照片用不了（copy v1.6，判断在 AppCoordinator+PickerUnavailable）
+
+    var showsPickerUnavailable: Bool { state.showsPickerUnavailable }
+    var pickerUnavailableShowsAddAccess: Bool { state.pickerUnavailableShowsAddAccess }
+    var targetPickerReopenRequest: Int { state.targetPickerReopenRequest }
+    func pickedTargetUnavailable() { coordinator.pickedTargetUnavailable() }
+    func pickerUnavailableChange() { coordinator.pickerUnavailableChangeTapped() }
+    func pickerUnavailableCancel() { coordinator.pickerUnavailableCancelTapped() }
+    func pickerUnavailableAddAccess() { coordinator.pickerUnavailableAddAccessTapped() }
+    func pickerUnavailableDismissed() { coordinator.pickerUnavailableDismissed() }
+
+    /// 系统选择器选好、已过 PickedTargetGate：解码失败同样弹 picker.unavailable（不区分原因）。
+    func loadPickedTarget(data: Data?) {
         let t0 = perf.clock.now()
         guard let data, let pb = ImagePixels.downsampledTarget(from: data) else {
-            coordinator.setTarget(nil)
+            coordinator.pickedTargetUnavailable()
             return
         }
         perf.record(.targetDecode, seconds: perf.clock.now() - t0, items: pb.width * pb.height)
@@ -174,19 +237,51 @@ final class AppModel: ObservableObject {
         coordinator.setTarget(pb)
     }
 
+    /// 「再拼一张」开始前的目标图缩略图：返回预览页时换回来；开始生成新图后丢掉。
+    private var previousTargetPreview: CGImage?
+
+    /// 「再拼一张」状态变化时同步目标图缩略图（选图页只显示新选的那张）。
+    private func syncTargetPreview(old: AppState, new: AppState) {
+        if !old.flow.isQuickAgain, new.flow.isQuickAgain {
+            previousTargetPreview = targetPreview
+            targetPreview = nil
+        } else if old.flow.isQuickAgain, !new.flow.isQuickAgain {
+            if new.flow.step == .result {
+                targetPreview = previousTargetPreview   // 返回原预览页
+            }
+            previousTargetPreview = nil
+        }
+    }
+
+    /// 取消未完成的缩略图绘制，并释放 `resultImage`。
+    private func releasePreviewImage() {
+        previewTask?.cancel()
+        previewTask = nil
+        if resultImage != nil { resultImage = nil }
+        renderedRevision = 0
+    }
+
     private func renderPreview() {
-        guard let product = coordinator.product, let target = coordinator.target else { return }
+        previewTask?.cancel()
+        previewTask = nil
         resultZoom.reset()
+        guard let product = coordinator.product, let target = coordinator.target else {
+            resultImage = nil
+            return
+        }
+        // 先换成小色块占位，立刻丢掉上一张大预览图。
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
         let alpha = state.flow.settings.overlayAlpha
         let thumbs = thumbnails
         let perf = self.perf
-        previewTask?.cancel()
+        let revision = renderedRevision
         previewTask = Task { [weak self] in
             let t0 = perf.clock.now()
             let img = await MosaicPreviewRenderer.thumbnails(product, target: target, overlayAlpha: alpha, thumbnails: thumbs)
             perf.record(.previewRender, seconds: perf.clock.now() - t0, items: product.generation.layout.cellCount)
-            if let img { self?.resultImage = img }
+            // 离开页面时 revision 已清零；过期任务即使取消信号晚到也不会把大图写回去。
+            guard let self, self.renderedRevision == revision, !Task.isCancelled else { return }
+            if let img { self.resultImage = img }
         }
     }
 }

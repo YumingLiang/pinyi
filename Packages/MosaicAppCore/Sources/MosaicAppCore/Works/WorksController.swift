@@ -1,13 +1,67 @@
 import Foundation
 import MosaicCore
 
-/// 「存到我的作品」按钮状态（结果页，需求 B2）。
+/// 「存到我的作品」按钮状态（结果页，需求 B2 / B10-5、6）。
+///
+/// 由「当前结果 vs 作品库」算出来（`WorksController.refreshSaveStatus()`），不靠记住「点过保存」：
+/// 当前结果的内容指纹（`WorkFingerprint`）在库里 → 叠加强度也一样 `.saved`（`preview.saved_to_works`，不可点），
+/// 只差叠加强度 → `.needsUpdate`（`works.update`「更新这张作品」，点了直接覆盖原作品，不弹确认）。
+/// 所以从作品打开的结果、上次存过又重新生成出同一张的结果，规则都一样。
 public enum WorkSaveStatus: Sendable, Hashable {
+    /// 没存过：`preview.save_to_works`「存到我的作品」，点了新存一份。
     case idle
     case saving
-    /// 当前结果已在库里（手动存过或导出时自动存过；重复点只存一份）。
+    /// 当前结果已存且没改动：`preview.saved_to_works`「已存到我的作品」，不可点。
     case saved(WorkID)
+    /// 当前结果就是这份作品，只改了叠加强度：`works.update`「更新这张作品」，点了更新原作品（不另存、不弹确认）。
+    case needsUpdate(WorkID)
+    /// 上次保存 / 更新失败（结果没变就一直显示 `works.save_failed`，可重试）。
     case failed
+
+    /// 点了会新存一份。
+    public var canSave: Bool {
+        switch self {
+        case .idle, .failed: return true
+        default: return false
+        }
+    }
+
+    /// 点了会更新原作品。
+    public var canUpdate: Bool {
+        if case .needsUpdate = self { return true }
+        return false
+    }
+
+    /// 按钮能不能点。
+    public var isEnabled: Bool { canSave || canUpdate }
+
+    /// 按钮文案（QA A12）：没存 / 存失败 / 保存中 → `preview.save_to_works`；已存 → `preview.saved_to_works`（不可点）；
+    /// 只改了叠加强度 → `works.update`。保存中界面显示转圈，key 仍按「存到我的作品」给。
+    public var buttonKey: L10nKey {
+        switch self {
+        case .saved: return .previewSavedToWorks
+        case .needsUpdate: return .worksUpdate
+        case .idle, .saving, .failed: return .previewSaveToWorks
+        }
+    }
+}
+
+/// 未保存提示的种类（B10-4 / B10-11；QA works-rules A8）。弹窗由 feat/start-new「再拼一张」接线，本分支只提供判断。
+public enum UnsavedPrompt: Sendable, Hashable {
+    /// 不用弹：没有结果，或当前结果已存且没改动。
+    case none
+    /// 当前结果没存进作品（导出过不算存过）→ `quick.unsaved.title`；「保存」= 新存。
+    case unsaved
+    /// 存过的作品只改了叠加强度还没存 → `quick.unsaved.update_title`；「保存」= 更新这份。
+    case alphaChanged(WorkID)
+
+    public var titleKey: L10nKey? {
+        switch self {
+        case .none: return nil
+        case .unsaved: return .quickUnsavedTitle
+        case .alphaChanged: return .quickUnsavedUpdateTitle
+        }
+    }
 }
 
 /// 打开中的作品（查看页）。
@@ -37,13 +91,19 @@ public struct WorksState: Sendable, Hashable {
     /// 删除二次确认弹窗（`works.delete.confirm`）对应的作品。
     public var pendingDelete: WorkID?
     public var saveStatus: WorkSaveStatus = .idle
-    /// 打开 / 删除失败等一次性提示。
+    /// 打开 / 删除失败等一次性提示（需要点「好」关掉的 alert）。
     public var notice: L10nKey?
+    /// 约 2 秒自动消失的轻提示（目前只有更新成功的 `works.updated`，B10-6）。
+    public var toast: L10nKey?
 
     public init() {}
 
     public var count: Int { summaries.count }
     public var isEmpty: Bool { isLoaded && summaries.isEmpty }
+    /// 结果页「存到我的作品」按钮当前文案（QA A12，= `saveStatus.buttonKey`）。
+    public var saveButtonKey: L10nKey { saveStatus.buttonKey }
+    /// 结果页「存到我的作品」按钮能不能点（QA A12，= `saveStatus.isEnabled`；平台层另外在导出中置灰）。
+    public var isSaveButtonEnabled: Bool { saveStatus.isEnabled }
     /// 列表底部常驻提示（需求 B8）。
     public static let keepHintKey = L10nKey.worksKeepHint
     /// 查看页的兜底提示（`works.missing`，参数：格数；只出一次）。
@@ -78,7 +138,7 @@ public final class ExportSuccessRelay: Sendable {
     public func finish() { continuation.finish() }
 }
 
-/// 结果页的现状（手动保存 / 自动保存都从这里取目标图、叠加强度、档位）。
+/// 结果页的现状（「存到我的作品」和按钮状态都从这里取布局、目标图、叠加强度）。
 public struct WorkResultContext: Sendable {
     public var layout: MosaicLayout?
     public var target: PixelBuffer?
@@ -101,11 +161,11 @@ public protocol WorkExportHandling: AnyObject {
     func exportWork(layout: MosaicLayout, target: PixelBuffer?, fallbacks: [Int: PixelBuffer], purpose: ExportPurpose) async
 }
 
-/// 「我的作品」编排（需求 B / F1-3；design/works-storage-v0.1）：自动保存、手动保存、列表、打开、缺失检测、删除确认、再导出。
+/// 「我的作品」编排（需求 B / B10；design/works-storage-v0.1）：手动保存、列表、打开、缺失检测、删除确认、再导出。
 ///
-/// - 自动保存只由「导出成功」触发（`ExportSuccessRelay`）；「换一种拼法」不触发保存（它只出新结果，`resultRevision` 变了，
-///   按钮状态回到 `.idle`）。
-/// - 同一布局只存一份：存储层按布局指纹查重；从作品再导出成功后再次触发自动保存也不会重复。
+/// - **导出不自动存**（AndyL 11-16 22:20，B10-1）：导出成功事件（`ExportSuccessRelay`）只用来刷新按钮状态，不写作品库。
+/// - 只有「存到我的作品」才存。同一张（`WorkFingerprint`：格子分配 + cols/rows + targetCrop）只存一份；
+///   只改了叠加强度 → 更新原作品（叠加强度、预览图），日期和列表位置不变；「换一种拼法」等 → 新的一张。
 /// - 缺失原照片（删除或后来被隐藏）：打开 / 导出前批量查一次，用本机相近照片补格（4b，`MissingCellRematching`）并重画预览
 ///   （`reconcileMissing`），提示 `works.replaced`；找不到替代的格子用旧预览裁切放大兜底（`WorkFallbackImages`），提示 `works.missing`。
 ///   两种提示都按格计、只在本次真的发生时出一次。
@@ -132,6 +192,30 @@ public final class WorksController {
     private var relayTask: Task<Void, Never>?
     private var lastRevision: Int?
     private var openToken = 0
+    /// 当前结果的指纹缓存（按 revision + 网格 + 首尾格子校验；同一 revision 内格子分配不变，拖叠加滑杆不重算）。
+    private var fingerprintCache: (key: FingerprintKey, value: String)?
+    /// 保存失败时的结果（revision + 叠加强度）：结果没变就一直显示失败，变了才回到按库计算的状态。
+    private var failedKey: StatusKey?
+    /// 轻提示自动消失的时长（测试可调短）。
+    public var toastDuration: Duration = .seconds(2)
+    private var toastTask: Task<Void, Never>?
+    /// 结果页记住的「当前结果对应的作品」（B10-13）：存 / 更新成功后记下，和结果版本号绑定。
+    /// 「再调一调」只改叠加强度再回来不重新生成、版本号不变 → 一直记得；换拼法 / 重新生成（版本号变了）才清掉。
+    private var remembered: (revision: Int, id: WorkID)?
+
+    private struct FingerprintKey: Equatable {
+        var revision: Int
+        var cols: Int
+        var rows: Int
+        var count: Int
+        var first: String?
+        var last: String?
+    }
+
+    private struct StatusKey: Equatable {
+        var revision: Int
+        var overlayAlpha: Double
+    }
 
     public init(store: any WorksStore, existence: any PhotoExistenceChecking, images: any WorkImageEncoding,
                 rematcher: (any MissingCellRematching)? = nil,
@@ -187,48 +271,109 @@ public final class WorksController {
         let list = await store.list()
         state.summaries = list
         state.isLoaded = true
+        refreshSaveStatus()
     }
 
-    /// 结果变了（新生成 / 换一种拼法）：按钮回到「存到我的作品」。平台层在 `resultRevision` 变化时调。
+    /// 结果变了（新生成 / 换一种拼法）：按新结果重算按钮状态（通常回到「存到我的作品」）。平台层在 `resultRevision` 变化时调。
     public func resultDidChange(revision: Int) {
         guard revision != lastRevision else { return }
         lastRevision = revision
-        state.saveStatus = .idle
+        if let r = remembered, r.revision != revision { remembered = nil }
+        refreshSaveStatus()
+    }
+
+    /// 结果页现状变了（叠加强度、进出结果页）：重算按钮状态。平台层在叠加强度 / 结果页 / revision 变化时调，可重复调。
+    public func resultContextDidChange() { refreshSaveStatus() }
+
+    /// 按「当前结果 vs 作品库」算按钮状态（B10-5）：
+    /// 库里有同指纹作品（结果页记住的作品优先，否则取 updatedAt/createdAt 最新的一份，和存储层查重同一个 `WorkSummary.saveTarget`）→ 叠加强度相同 `.saved`，不同 `.needsUpdate`；没有 → `.idle`。
+    /// 正在存时不动；存失败后结果没变就保持 `.failed`。
+    public func refreshSaveStatus() {
+        if case .saving = state.saveStatus { return }
+        let ctx = resultContext()
+        let key = StatusKey(revision: ctx.resultRevision, overlayAlpha: ctx.overlayAlpha)
+        if case .failed = state.saveStatus, failedKey == key { return }
+        failedKey = nil
+        state.saveStatus = computeSaveStatus(ctx)
+    }
+
+    /// 当前结果记住的作品 id（只对同一结果版本号有效）。
+    public var currentWorkID: WorkID? { rememberedID(for: resultContext().resultRevision) }
+
+    private func rememberedID(for revision: Int) -> WorkID? {
+        guard let r = remembered, r.revision == revision else { return nil }
+        return r.id
+    }
+
+    private func computeSaveStatus(_ ctx: WorkResultContext) -> WorkSaveStatus {
+        guard let layout = ctx.layout else { return .idle }
+        let fp = currentFingerprint(layout, revision: ctx.resultRevision)
+        guard let match = WorkSummary.saveTarget(in: state.summaries, fingerprint: fp,
+                                                 preferred: rememberedID(for: ctx.resultRevision)) else { return .idle }
+        return WorkFingerprint.sameOverlay(match.meta.overlayAlpha, ctx.overlayAlpha) ? .saved(match.id) : .needsUpdate(match.id)
+    }
+
+    private func currentFingerprint(_ layout: MosaicLayout, revision: Int) -> String {
+        let key = FingerprintKey(revision: revision, cols: layout.cols, rows: layout.rows, count: layout.cellAssignments.count,
+                                 first: layout.cellAssignments.first?.localIdentifier,
+                                 last: layout.cellAssignments.last?.localIdentifier)
+        if let c = fingerprintCache, c.key == key { return c.value }
+        let fp = WorkFingerprint.of(layout)
+        fingerprintCache = (key, fp)
+        return fp
     }
 
     // MARK: 保存
 
-    /// 结果页「存到我的作品」。重复点只存一份。
+    /// 现在离开结果页要不要弹未保存提示（按「当前结果 vs 作品库」算，和按钮状态同一口径；保存中按「没存」算）。
+    public var unsavedPrompt: UnsavedPrompt {
+        let ctx = resultContext()
+        guard ctx.layout != nil else { return .none }
+        switch computeSaveStatus(ctx) {
+        case .saved: return .none
+        case .needsUpdate(let id): return .alphaChanged(id)
+        default: return .unsaved
+        }
+    }
+
+    /// 叠加强度变了（QA works-rules 接口名 A6；等同 `resultContextDidChange()`，强度以 `resultContext` 为准）。
+    public func overlayAlphaDidChange(_ alpha: Double) {
+        _ = alpha
+        refreshSaveStatus()
+    }
+
+    /// 结果页「存到我的作品」/「更新这张作品」（B10）：没存过 → 新存一份；只改了叠加强度 → 更新原作品（不弹确认），
+    /// 成功后出约 2 秒的轻提示 `works.updated`；已存且没改 → 什么都不写。
     public func saveCurrentResultTapped() async {
         if case .saving = state.saveStatus { return }
         let ctx = resultContext()
         guard let layout = ctx.layout else { return }
-        await save(WorkDraft(layout: layout, target: ctx.target, overlayAlpha: ctx.overlayAlpha, tier: nil,
-                             seed: layout.params.seed, origin: .savedManually), revision: ctx.resultRevision, showsStatus: true)
-    }
-
-    /// 导出成功（结果页或作品页）：自动存一份；已存在则不重复。
-    public func exportSucceeded(layout: MosaicLayout) async {
-        let ctx = resultContext()
-        // 目标图：导出的是当前结果就用当前目标图；从作品再导出时，库里已有这份布局（查重直接命中，不会用到目标图）
-        // 比较格子分配（不比参数：导出后又拖了叠加滑杆，也仍是这张结果）
-        let isCurrent = ctx.layout.map { $0.cols == layout.cols && $0.rows == layout.rows && $0.cellAssignments == layout.cellAssignments } ?? false
-        let target = isCurrent ? ctx.target : nil
-        await save(WorkDraft(layout: layout, target: target, overlayAlpha: layout.params.overlayAlpha,
-                             tier: isCurrent ? ctx.tier : nil, seed: layout.params.seed, origin: .autoSavedOnExport),
-                   revision: isCurrent ? ctx.resultRevision : nil, showsStatus: isCurrent)
-    }
-
-    private func save(_ draft: WorkDraft, revision: Int?, showsStatus: Bool) async {
-        if showsStatus { state.saveStatus = .saving }
-        let store = self.store
+        let key = StatusKey(revision: ctx.resultRevision, overlayAlpha: ctx.overlayAlpha)
+        state.saveStatus = .saving
         do {
-            let (summary, inserted) = try await store.save(draft)
-            if inserted { await reload() }
-            if showsStatus, revision == nil || revision == resultContext().resultRevision { state.saveStatus = .saved(summary.id) }
+            let result = try await store.save(WorkDraft(layout: layout, target: ctx.target, overlayAlpha: ctx.overlayAlpha, tier: nil,
+                                                        seed: layout.params.seed, origin: .savedManually,
+                                                        preferredWorkID: rememberedID(for: ctx.resultRevision)))
+            remembered = (ctx.resultRevision, result.summary.id)
+            if result.outcome == .updatedOverlay { showToast(.worksUpdated) }
+            // 刷新列表（新增 / 预览图换了），再按库重算按钮状态（期间结果可能又变了，按最新的算）
+            let list = await store.list()
+            state.summaries = list
+            state.isLoaded = true
+            failedKey = nil
+            state.saveStatus = computeSaveStatus(resultContext())
         } catch {
-            if showsStatus { state.saveStatus = .failed }
+            failedKey = key
+            state.saveStatus = .failed
+            await reload()
         }
+    }
+
+    /// 导出成功（结果页或作品页）。**不再自动存**（AndyL 11-16 22:20，需求 B10-1：导出只写系统相册，不动「我的作品」）；
+    /// 只按作品库重算一次按钮状态。保留这个入口是因为导出线仍经 `ExportSuccessRelay` 通知。
+    public func exportSucceeded(layout: MosaicLayout) async {
+        _ = layout
+        refreshSaveStatus()
     }
 
     // MARK: 查看
@@ -260,9 +405,31 @@ public final class WorksController {
 
     public func dismissNotice() { state.notice = nil }
 
-    /// 缺失的原照片张数（去重后）。
+    /// 轻提示：显示 `toastDuration` 后自动消失；新的会顶掉旧的。
+    private func showToast(_ key: L10nKey) {
+        toastTask?.cancel()
+        state.toast = key
+        let duration = toastDuration
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled, let self else { return }
+            if self.state.toast == key { self.state.toast = nil }
+        }
+    }
+
+    public func dismissToast() {
+        toastTask?.cancel()
+        toastTask = nil
+        state.toast = nil
+    }
+
+    /// 原照片现在用不了的**格数**（copy v1.3：`works.missing` 按格计，同一张照片用在几格就算几格；空格子不算）。
     public func missingCount(_ layout: MosaicLayout) async -> Int {
-        await missingAssetIDs(layout).count
+        let missing = await missingAssetIDs(layout)
+        guard !missing.isEmpty else { return 0 }
+        return layout.cellAssignments.reduce(0) { n, cell in
+            n + (!cell.localIdentifier.isEmpty && missing.contains(cell.localIdentifier) ? 1 : 0)
+        }
     }
 
     /// 布局里取不到的原照片 ID。App 的 `PhotoExistenceChecking` 不含隐藏照片，所以后来被隐藏的和已删除的一样算缺失
@@ -379,9 +546,19 @@ public final class WorksController {
     public func deleteTapped(_ id: WorkID) { state.pendingDelete = id }
     public func deleteCancelled() { state.pendingDelete = nil }
 
-    public func deleteConfirmed() async {
+    @available(*, deprecated, message: "确认按钮请直接带 id 调 deleteConfirmed(_:)：弹窗收起时 pendingDelete 会先被 deleteCancelled() 清掉")
+    public func deleteConfirmed() async { await confirmPendingDelete() }
+
+    /// 按 `pendingDelete` 删除（无参旧入口的实现；没有待确认的就什么都不做）。只给测试和旧入口用，UI 不要用。
+    func confirmPendingDelete() async {
         guard let id = state.pendingDelete else { return }
-        state.pendingDelete = nil
+        await deleteConfirmed(id)
+    }
+
+    /// 弹窗「删除」按钮直接带上作品 id：SwiftUI 收起 confirmationDialog 时会先把 isPresented 置 false
+    /// （→ `deleteCancelled()` 清掉 `pendingDelete`），而按钮里的 `Task` 更晚执行，不能再靠 `pendingDelete` 取 id。
+    public func deleteConfirmed(_ id: WorkID) async {
+        if state.pendingDelete == id { state.pendingDelete = nil }
         do {
             try await store.delete(id)
         } catch WorksStoreError.notFound {
@@ -390,13 +567,26 @@ public final class WorksController {
             state.notice = .worksDeleteFailed
         }
         if state.opened?.id == id { close() }
-        if case .saved(let saved) = state.saveStatus, saved == id { state.saveStatus = .idle }
-        await reload()
+        await reload()   // 按库重算按钮：删掉的是当前结果对应的作品 → 回到可存
     }
 
     /// 停掉中继订阅（测试结束时释放）。
     public func stop() {
         relayTask?.cancel()
         relayTask = nil
+        toastTask?.cancel()
+        toastTask = nil
+    }
+}
+
+// MARK: - 未保存提示（「再拼一张」，quick-start v1.0 §2e + hd-export B10-4/11）
+
+/// `unsavedPrompt` 就是上面按「当前结果 vs 作品库」算的那个（导出过不算存过）。
+extension WorksController: CurrentResultSaving {
+    /// 未保存提示里的「保存」：同「存到我的作品」/「更新这张作品」按钮（只改了强度时更新原作品，成功出 `works.updated`）。
+    public func saveCurrentResult() async -> Bool {
+        await saveCurrentResultTapped()
+        if case .saved = state.saveStatus { return true }
+        return false
     }
 }

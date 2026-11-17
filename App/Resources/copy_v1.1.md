@@ -346,7 +346,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `works.empty` | 作品列表空状态 | 还没有作品，拼好的图可以存在这里 |
 | `works.keep_hint` | 作品列表底部常驻提示 | 删除 App 后作品会一起删除，想长期保留请导出到相册 |
 | `preview.save_to_works` | 结果页次按钮 | 存到我的作品 |
-| `preview.saved_to_works` | 结果页次按钮（已存过，不可再点） | 已存到我的作品 |
+| `preview.saved_to_works` | 预览页「存到我的作品」按钮：当前结果已存且没有改动时，不可点（B10-5/6，22:45 统一用这个 key） | 已存到我的作品 |
 | `works.save_failed` | 存作品失败（结果页） | 没能存到我的作品，请再试一次 |
 | `works.export` | 作品查看页按钮 | 导出 |
 | `works.delete` | 作品查看页按钮 | 删除 |
@@ -356,6 +356,51 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `works.replaced` | 查看页：本次原照片用不了、已换成本机相近照片的格数（4b；按格计；只在本次发生时出一次） | 有 {count} 格原来的照片现在用不了，已换成相近的照片 |
 | `works.open_failed` | 作品读不出来 | 这张作品打不开了 |
 | `works.delete_failed` | 删除失败 | 没能删除，请再试一次 |
+| `works.update` | 存过的作品只改了叠加强度时的按钮（v1.5，不弹确认） | 更新这张作品 |
+| `works.updated` | 更新成功轻提示，约 2 秒自动消失（v1.5） | 已更新这张作品 |
+
+- 作品列表长按菜单唯一一项复用 `works.delete`「删除」，红色破坏性样式，不新增 key（v1.5 22:40 改，原先的 works.menu.delete 作废）。点了沿用 `works.delete.confirm` 确认框，按钮用「删除」（红色）和「取消」。
+- `works.missing` / `works.replaced` 都按「格」计数（同一张照片可能用在好几格），统一用「现在用不了」，不写「删掉」「隐藏」（v1.3）。`works.replaced` 是一次性提示，作品查看页、导出前、结果页共用这一条。
+- 导出不再自动存（AndyL 22:20 定），不需要「已自动存到我的作品」一类的提示（v1.5）。
+- 已存状态统一用已有的 `preview.saved_to_works`；v1.5 写过的 `works.saved` 作废，不新增（产品 22:45）。
+
+### 5.6 相簿多选（v1.4，20:55，同步自产品文案表）
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `source.selection.summary` | 相簿列表底部栏 | 已选 {n} 个相簿 · 共 {count} 张 |
+| `source.selection.none` | 底部栏，未勾选 | 还没选相簿 |
+| `source.selection.dedup_note` | 底部栏小字 | 同一张照片在几个相簿里只算一次 |
+| `source.selection.summary_pending` | 底部栏，扫描未完成时 | 已选 {n} 个相簿 · 约 {count} 张 |
+| `source.album.done` | 底部主按钮 | 完成 |
+| `quick.source.summary_two` | 确认页，2 个相簿 | 素材：{name1}、{name2} · {count} 张 |
+| `quick.source.summary_many` | 确认页，3 个及以上 | 素材：{name1} 等 {n} 个相簿 · {count} 张 |
+
+### 5.7 「再拼一张」（v1.4，21:20 定稿；quick-start-req-v1.0.md 22:58 定稿沿用，同步自产品文案表）
+
+未保存提示的弹出规则以 hd-export-req-v0.2 B10-4 为准：当前结果没存进作品，或存过的作品改了叠加强度还没存，就弹；导出过不算存过。
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `quick.again` | 预览页、作品查看页的文字按钮 | 再拼一张 |
+| `quick.source.summary` | 确认页，1 个相簿或全部照片 | 素材：{name} · {count} 张 |
+| `quick.source.change` | 确认页 | 换素材 |
+| `quick.unsaved.title` | 未保存确认弹窗 | 这张还没保存，要先存到我的作品吗？ |
+| `quick.unsaved.save` | 弹窗按钮 | 保存 |
+| `quick.unsaved.discard` | 弹窗按钮 | 不保存 |
+| `quick.unsaved.cancel` | 弹窗按钮 | 取消 |
+| `quick.unsaved.update_title` | 存过但叠加强度改了没存时的未保存提示标题（v1.5，B10-11；「保存」等于更新） | 叠加强度改了还没保存，要更新这张作品吗？ |
+
+### 5.8 选图后读不出照片（v1.6，23:55，#18）
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `picker.unavailable` | 用系统选择器选了一张照片，经过共用过滤入口却取不到（隐藏、未授权、已删除、本机读不出来，这几种情况一律用这一句） | 这张照片现在用不了，换一张试试 |
+| `picker.unavailable.change` | 按钮：重新打开选择器 | 换一张 |
+| `picker.unavailable.add_access` | 按钮，只在受限访问（.limited）时显示，点了调用系统的「增加可用照片」 | 增加可用照片 |
+
+- 另一个按钮复用 `common.cancel`「取消」：回到发起页，当前结果保留。
+- 不区分原因，也不出现「隐藏」「授权」「删除」这些字眼。是否显示「增加可用照片」只看整个 App 的权限状态，不看这张照片的情况，所以用户无法从提示里推断某张照片是隐藏的。
 
 ---
 

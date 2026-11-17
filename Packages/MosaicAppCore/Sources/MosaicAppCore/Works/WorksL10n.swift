@@ -11,16 +11,25 @@ public extension L10nKey {
     static let worksDelete = L10nKey(rawValue: "works.delete")
     static let worksDeleteConfirm = L10nKey(rawValue: "works.delete.confirm")
     static let worksDeleteConfirmOK = L10nKey(rawValue: "works.delete.confirm.ok")
-    /// 参数：格数（`%1$@`）：本次找不到合格相近照片、用旧预览兜底的格子。
+    /// 参数：格数（`%1$@`，按格计，不按张）：本次找不到合格相近照片、用旧预览兜底的格子。
     static let worksMissing = L10nKey(rawValue: "works.missing")
-    /// 参数：格数（`%1$@`）：本次换成相近照片的格子。
+    /// 一次性提示：原照片用不了的格子已换成相近照片（参数：格数 `%1$@`，按格计）。作品查看页 / 导出前 / 结果页共用。
+    /// 调用点：`WorksController` 打开 / 导出前处理缺图时真的发生替换才出一次（#11）。
     static let worksReplaced = L10nKey(rawValue: "works.replaced")
     static let worksOpenFailed = L10nKey(rawValue: "works.open_failed")
     static let worksDeleteFailed = L10nKey(rawValue: "works.delete_failed")
+    /// 存过的作品只改了叠加强度时的按钮（v1.5，B10-6）。
+    static let worksUpdate = L10nKey(rawValue: "works.update")
+    /// 更新成功轻提示，约 2 秒自动消失（v1.5，B10-6）。
+    static let worksUpdated = L10nKey(rawValue: "works.updated")
+    /// 未保存提示：存过但叠加强度改了没存时的标题（v1.5，B10-11；弹窗本身由 feat/start-new 接线）。
+    /// 放在这里而不是 QuickL10n.swift：那个文件与 feat/start-new 保持逐字相同，合并时不冲突。
+    static let quickUnsavedUpdateTitle = L10nKey(rawValue: "quick.unsaved.update_title")
 
     /// 本模块用到的全部 key（`WorksL10nTests` 断言都在 Localizable.strings 里）。
     static let allWorks: [L10nKey] = [
         worksEntry, worksNavTitle, worksEmpty, worksKeepHint, previewSaveToWorks, previewSavedToWorks, worksSaveFailed,
         worksExport, worksDelete, worksDeleteConfirm, worksDeleteConfirmOK, worksMissing, worksReplaced, worksOpenFailed, worksDeleteFailed,
+        worksUpdate, worksUpdated, quickUnsavedUpdateTitle,
     ]
 }

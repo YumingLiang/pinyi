@@ -76,6 +76,234 @@
 - 5c（目标图本身被隐藏 / 删除时去掉叠加层）：已定为不处理。
 - 测试：`WorksHiddenPhotoTests`（11 个），`WorksControllerTests` 缺失用例按新行为更新 + 新增 1 个。
 
+## feat/start-new：「再拼一张」+ 未保存提示（quick-start-req v1.0 §2a / §2b / §2e；hd-export-req B10 第 4、11 条）
+
+**依赖 #17（fix/works-delete，48b0569），需先合 #17。** 本分支已 merge `origin/feat/app-layer`（ed58064）和 `origin/fix/works-delete`（48b0569），都是 merge，没有 rebase。未保存提示要用 #17 的 `WorksController.unsavedPrompt` / `.needsUpdate` /「更新原作品」。
+**追加（23:10，验收 7 / 7a）**
+- 「再调一调」途中（设置页，结果还留着：`AppCoordinator.isAdjustingResult`）从作品查看页点「再拼一张」：按同一套判断弹未保存提示（新 reason `UnsavedResultPrompt.startNewFromAdjust`）。没存（含只导出过）→ `quick.unsaved.title`；存过但只改了强度 → `quick.unsaved.update_title`，「保存」= 更新原作品；已存且没改 → 不弹，直接去选图。「不保存」/存好后 → 直接去选目标图（fresh quick start）；「取消」→ 留在设置页，「完成」仍可回原结果。结果页 / 没有结果时的详情页入口行为不变。
+- 为此 `workResultContext` 在「再调一调」途中也带上原结果布局（保存 / 更新要用）；未保存提示对话框从结果页挪到主流程根视图（`UnsavedPromptDialog`），设置页上也能弹。
+- 新增文案 `works.replaced`「有 {count} 格原来的照片现在用不了，已换成相近的照片」（按格计，一次性提示，查看页 / 导出前 / 结果页共用）：copy_v1.1.md + gen-localizable + `L10nKey.worksReplaced` / `allWorks`。**只加了 key，没有调用点**：代码里还没有「把取不到的格子换成相近照片」的逻辑（`MissingCellRematching` 只是 11-18 预留接口；生成时的 refill 是清晰度重配，不是这件事），按要求不在本分支新写。`works.missing` 已是 v1.3（按格计）。
+- 测试：`QuickAgainUnsavedRulesTests` +6（7a：没存弹/取消/保存/不保存、已存不弹、只改强度 update_title 并更新原作品、改了密度仍按原结果判断）。
+
+**追加（23:15–23:20，#18 QA 复核 qa/pr18-another-report.md）**
+- P1-a 隐藏照片兜底：系统 PhotosPicker 选完后按 `itemIdentifier` 经 `PhotoFetch.pickedAssetLookup`（`images(withLocalIdentifiers:)`，写死不含隐藏）再取一次 PHAsset，取不到或 `isHidden` 就不解码、按「读不出来」处理（`setTarget(nil)` → `target.unreadable`）。判断在 `PickedTargetGate`（MosaicAppCore，可单测）。主流程和「再拼一张」共用同一个选图页，两处都生效。**发版前仍需 T7 真机**（系统选择器是否显示隐藏照片；受限访问下未授权照片会取不到 → 读不出来，提示口径待产品对齐）。
+- P1-b seed 回指纹：已 merge `origin/fix/works-delete`（9d35937，含 aebe091），未保存提示与保存按钮同一口径。
+- P2-a 「再调一调」途中从作品查看页「再拼一张」：见上一节 7a。
+- P2-b 确认页设置只作用于新图：进「再拼一张」时记下设置（密度、强度）和素材来源，返回原预览页时恢复，旧结果、「已存 / 更新这张作品」按钮、「完成」都不变；真正开始拼图时用确认页上的值。
+- P2-c 确认页返回（§2e 23:20 定）：过渡期用系统 PhotosPicker，确认页按一次返回直接回原预览页，原结果保留，不弹未保存提示。自做选图页（§4）的两步返回留了钩子 `MainFlow.confirmBackReturnsToPicker`（现为 false），接入时改 true 即可。
+- P3：回到原预览页即释放新选的目标图（`pendingTarget`）；本 PR 涉及的注释「需求 v0.4」改成 v1.0。
+- 未保存提示收起：`confirmationDialog` 的 isPresented 改成可写绑定，收起走 `unsavedPromptDismissed()`：延后一轮、仍是同一个提示（`unsavedPromptID`）且没在保存时按「取消」。「保存」改成同步入口 `unsavedPromptSaveTapped()`（先清提示、标记保存中再进 Task），收起先到后到都不会吞掉保存。
+- 测试：`QuickAgainUnsavedRulesTests` +10（确认页一次返回 ×2、两步返回钩子、P2-b ×2、收起复位 / 收起不吞保存 / 旧收起不关新提示、PickedTargetGate、兜底拒绝按读不出来）；`QuickAgainTests` 两条按 P2-c 改为一次返回。
+
+**追加（23:55，copy v1.6：选图后读不出照片）**
+- 系统选择器选的照片经 PhotoFetch 取不到（不管隐藏 / 未授权 / 已删除），或之后解码失败，一律弹同一个提示 `picker.unavailable`「这张照片现在用不了，换一张试试」。`PickedTargetGate` 只输出可用 / 不可用（`PhotoFetch.isPickedAssetAvailable`），代码里不区分原因；系统选择器这条路不再用 `target.unreadable`。
+- 按钮：`picker.unavailable.change`「换一张」重新打开选择器（`targetPickerReopenRequest`）；`common.cancel`「取消」回到发起页、当前结果保留（「再拼一张」途中回原预览页；主流程 / 作品查看页进来的留在选图页，已选的目标图不动）；`picker.unavailable.add_access`「增加可用照片」只在 App 整体 `authorization == .limited` 时显示，点了调 `presentLimitedLibraryPicker`。点外面收起按「取消」，不会吞掉按钮动作。
+- 文案：copy_v1.1.md §5.8 + gen-localizable（181 key）+ `QuickL10n.allQuick`；`common.cancel` 复用。
+- 测试 +6（只输出可用/不可用、key 在 allUsed、再拼一张取消保留结果和已存状态、换一张、主流程同一提示、受限才显示「增加可用照片」、收起复位且不吞按钮）；原两条 P1-a 测试按新接口改写。
+
+相簿多选（1a、2f）不在本分支，另开 feat/album-multiselect。原来这里的 WIP 提交 73a8a14（只有 `MaterialSource.swift`）没推过，已从本分支拿掉，存在 `/workspace/multiselect-wip/`（patch + 文件）和本地分支 `wip/multiselect-73a8a14`。不改生成、匹配、导出的逻辑。
+
+### 再拼一张（§2b / §2e）
+- **`MainFlow`**：`isQuickAgain`、`.quickAgainStarted`、`.changeSource`。选好目标图直接进确认页（跳过来源页，素材沿用）；确认页返回 → 选图页 → **原预览页**；来源页的「下一步」和返回都回确认页。`autoOpensTargetPicker`：选图页出现时自动弹出系统选图。
+- **`GenerationMachine`**：`(.result, .startTapped)` 可以直接开始新图（只有「再拼一张」的确认页走得到）；如果先弹「照片比较少」，点「返回」回到原结果，结果不丢。
+- **`AppCoordinator+QuickAgain`**：`startNewMosaicTapped()` / `unsavedPromptSave()` / `unsavedPromptDiscard()` / `unsavedPromptCancel()`。结果不在点按钮时清掉：新目标图先放 `pendingTarget`；**真正开始生成新图时**（`send` 里出现 `.run`）才 `commitQuickAgain()`：丢掉 `product`（`hasResult = false` → 平台层释放预览位图）、`resultRevision + 1`（「存到我的作品」按钮复位，作品 id 清掉）、换上新目标图（目标图代次 +1，所以确认页主按钮是「开始拼图」，不是「完成」）。
+- `generateTapped()`：phase 为 `.result` 而且不在「再拼一张」时忽略。`AppState.canStartNewMosaic`：生成中、导出中、提示弹着、保存中、不在结果页时为 false。
+
+### 未保存提示（B10-4 / 11）
+- 只接在「再拼一张」上（预览页还没有返回首页的入口；`leaveResultTapped()` 先备好，等 2c）。「再调一调」和「换一种拼法」不弹。
+- 判断交给 `CurrentResultSaving.unsavedPrompt`（`WorksController` 实现，和「存到我的作品」按钮同一口径）。**导出过不算存过**（去掉了原来的 `resultExportedRevision`）：
+  - 已存且没改 → 不弹，直接去选图；
+  - 没存 → `quick.unsaved.title`；
+  - 存过但只改了叠加强度 → `AppState.unsavedPromptIsUpdate = true`，标题换成 `quick.unsaved.update_title`，「保存」走 `saveCurrentResultTapped()` = 更新原作品（出 `works.updated` 轻提示），不另存。
+- 「保存」：存或更新成功后继续去选图；失败就留在预览页，错误显示在「存到我的作品」下方的 `works.save_failed`。「不保存」：继续，作品库不动。「取消」：什么都不变。按钮文案是 `quick.unsaved.save` / `.discard` / `.cancel`。
+
+### 作品查看页「再拼一张」（§2a）
+- 查看页加第三级文字按钮 `quick.again`。`AppModel.startNewFromWork()` 调协调器的 `startNewFromWorkTapped()`，并把主流程的 `NavigationStack` 换个 id 重建，退回主流程。
+  - 主流程停在结果页：和预览页「再拼一张」完全一样（同样的提示，选图页返回回到那张预览）；
+  - 已经在「再拼一张」途中：不动；
+  - 其他情况（没有结果，或在「再调一调」的设置页）：`MainFlow.isFreshQuickStart`，选一张直接进确认页（素材沿用），没有可返回的预览页，开始生成后回到普通流程。「再调一调」途中的结果不弹提示，和那里点「开始拼图」一样。
+  - 生成中、导出中忽略。
+
+### App
+- `ResultView`：「存到我的作品」下方加「再拼一张」（`+` 图标，`.borderless`）。未保存提示用 `confirmationDialog`，标题按 `unsavedPromptIsUpdate` 在 `quick.unsaved.title` / `quick.unsaved.update_title` 之间切换。`TargetStepView` 按 `autoOpensTargetPicker` 自动弹出系统 PhotosPicker（过渡方案，3 次点击）。确认页顶部显示「素材：{name} · {count} 张」+「换素材」。`AppModel` 在「再拼一张」期间暂存旧目标图缩略图，返回预览页时换回来。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`MainFlowView.swift`、`AppModel.swift`、`WorksViews.swift`。
+
+### 文案
+- copy_v1.1.md：删掉本分支原来的「v1.4 补充 预览页再拼一张」节（和 #17 同步进来的 §5.7 重复）；以 §5.5–5.7 为准（v1.3–v1.5，含 `quick.unsaved.update_title`），和 /workspace/pinyi/copy_v1.1.md 的文案一致。`gen-localizable.py` 重新生成。
+
+### 测试
+- `QuickAgainTests`（16 条，按新规则改）：「已导出不弹」改成 `testExportedButUnsavedResultStillPrompts`（导出过照样弹）；替身 `FakeResultSaver` 改成按 `unsavedPrompt` 回答。
+- 新增 `QuickAgainUnsavedRulesTests`（13 条，用真的 `WorksController`）：
+  - 已存不弹；
+  - 没存时「保存 → 新存并继续 / 不保存 / 取消」，导出过照样弹；
+  - needsUpdate 时标题是 update、「保存」更新同一张并出轻提示后继续、「不保存」原作品不动、「取消」仍是 needsUpdate；强度改回原值不弹；
+  - 新图生成后作品 id 清掉、按钮回到未存；
+  - 作品页入口：停在结果页时同样弹提示、没有结果时直接进选图 → 确认页、生成中忽略。
+- 结果：
+  - MosaicAppCore `swift test --no-parallel` 438 个，0 失败，3 跳过；MosaicCore 153 个，0 失败。
+  - `check-no-network.sh`、`check-photo-fetch.sh`、`gen-localizable.py --check` 通过；改过的 App 文件 `swiftc -parse` 通过。
+
+### 待确认 / 未做
+- 过渡用系统 PhotosPicker 有个前提（v1.0 第 0 节硬规则 3）：T7 真机确认系统选择器不显示隐藏照片，确认之前不能上线。已加 isHidden 兜底（P1-a），能否代替 T7 待产品定。
+- v1.0 §2e 验收 7 写着「已导出或已存的结果不弹」，和第 0 节、第 11 条的「导出过不算存过」矛盾。按后者（和 B10-4）做了。
+- 确认页的「裁剪」（§3）和自做选图页（§4）不在本轮。
+- 多选来源时确认页摘要的三种格式（v1.0 第 12 条）在 feat/album-multiselect 里做。
+
+## fix/works-delete：作品详情页删除不生效（P1）
+
+## fix/works-delete（续）：「我的作品」保存规则（AndyL 的作品规则 + 产品 hd-export-req B5、B7、B10 第 1–14 条）
+
+删除修复（a9c17b9）已随 #16 合进 feat/app-layer（ed58064）；本节是之后的改动，已 merge（不是 rebase）ed58064，之后又 merge 了 72d6109（#14 perf gate）。
+
+### QA 复核 48b0569 之后（qa/pr17-works-rules-report.md，开发协调人按 AndyL 规则「换拼法后再存就新存一份，只改强度算同一张」定口径）
+
+- **P1 seed 放回指纹**：`WorkFingerprint` = 格子分配 + cols/rows + targetCrop + **seed**；不含叠加强度、导出档位、密度名（QA 复核第 3 节②：三档长边格数固定，改密度必然改 cols/rows）、targetSize。之前「去重只看格子分配」那句是我的建议被转述，不是 AndyL 原话，代码和测试注释里的这个出处都删了。只有 1 张素材时「换一种拼法」格子不变但 seed 变 → 新存一份；之后改强度只更新换拼法后的那张，原作品不动。「完成」不换 seed，所以只改强度仍是同一张。
+  - 指纹加前缀 `s2-`（`WorkFingerprint.prefix` / `isCurrent`），用来认出 #17 早期内测包写的、不带 seed 的 v2 指纹：和 v1 一样在内存里按 layout.json 补算。
+- **P3 v1 只在命中并更新时写成 v2**（QA A3）：`list()` / 打开列表只在内存里补算指纹（`recomputedFingerprints`），不写 meta.json，`formatVersion` 保持磁盘上的值；只有 `updateOverlay` 命中并写新强度时才写 v2。装回旧内测包，没更新过的旧作品还能看到。
+- **P3 更新途中被杀**：meta.json 改成唯一提交点，加提交日志 `WorkMeta.pendingPreviewFile`（平时为 nil，不进 JSON）：① 新预览画在 `.tmp-*`，挪进作品目录叫 `.preview-pending-<uuid>.jpg`；② 原子写 meta（新强度 + 日志）= 提交；③ `rename(2)` 换到 `preview.jpg`；④ 原子写 layout.json；⑤ 清日志。② 之前被杀 → 还是旧强度旧预览，`removeIncomplete` 删没登记的临时预览；② 之后被杀 → 下次读 meta 时前滚（换预览、对齐 layout、清日志）。`load` 对更新过的作品（`updatedAt != nil`）以 meta 的强度为准。文件名、文件集合都不变。
+- **重选同一张目标图仍显示「开始拼图」**：按协调人决定接受，不改。
+- **测试**：
+  - 按 QA 原意恢复：`QAWorksRulesTests.testGuard4_SeedStillDistinguishes`（2 份）；pending `testFingerprintIgnoresAlphaAndTierButNotSeedOrCells`（含 seed；密度名一处按 QA 复核②保留「不含」并注明出处）；delete 回归 `testCharacterize_SameCellsDifferentSeedBecomesTwoWorks`（2 份）。delete 回归里错标的「B4/B5/B6」改成 B10-3 / B10-2 / B9-7。
+  - `WorksSaveRulesTests`：指纹口径改成含 seed（`testFingerprintIncludesSeed`、前缀断言）；`testDifferentSeedSameCellsIsNewWork`（单素材：换拼法新存，改强度不碰原作品）；`testLegacyFingerprintRecomputedInMemoryAndWrittenOnlyOnUpdate`、`testPreSeedV2FingerprintRecomputedInMemory`；`WorksSaveButtonStateTests.testSingleMaterialReshuffleSavesNewAndAlphaNeverTouchesOriginal`（真 controller）；原有用例里依赖「seed 不进指纹」的 seed 参数改成同 seed。
+  - 新增 `WorksAtomicUpdateTests`（5 条）：正常更新不留日志；提交前被杀；提交后预览未换；预览已换 layout 未改；load 以 meta 强度为准。
+
+- **列表长按删除**（B5，D 节 22:45：这一轮做）：`WorksListView` 格子加 `contextMenu`，只有一项，复用 `works.delete`「删除」（`role: .destructive`，不新增 key；`works.menu.delete` 作废）→ 列表自己的 `works.delete.confirm` 确认框。被选中的 id 存在视图本地 `@State deleteCandidate`，确认按钮直接调 `deleteConfirmed(id)`，不依赖共享的 `pendingDelete`。无参 `deleteConfirmed()` 标 deprecated（内部实现 `confirmPendingDelete()`）。
+- **导出不自动存**（B10-1）：`exportSucceeded` 只刷新按钮状态；`AppCoordinator` 里 `onSucceeded` 挪到写相册成功 / 进入分享之后（写相册失败不再通知）。`WorkOrigin.autoSavedOnExport` 只为读旧作品保留。
+- **同一张的口径**（B10-2/3/10）：`WorkFingerprint`（v2）看每格照片 ID + 裁剪、cols/rows、targetCrop、seed（seed 是 QA 复核后放回的，见上）；不含叠加强度、密度名、targetSize、导出档位。规范字节流 FNV-1a 64，浮点按 1e-6 量化。
+- **保存**（`FileWorksStore.save` → `WorkSaveResult{summary, outcome: inserted / updatedOverlay / unchanged}`）：没有同指纹 → 新存；同指纹同强度 → 不写盘；同指纹只差强度 → 原地更新（B10-3/8）：重画预览、更新 layout.json 的 `params.overlayAlpha` 和 meta 的强度 / 预览尺寸 / `updatedAt`；id、createdAt、列表位置、格子、文件名不变，不留历史。文件先写临时名再 `rename(2)` 替换，meta.json 最后写（提交点）；中途失败原作品完整；更新中被删报 notFound、不复活。同指纹保存按 `inFlight` 排队。
+- **命中哪一份**（B10-9/12）：`WorkSummary.saveTarget(in:fingerprint:preferred:)`，存储层和按钮状态共用：结果页记住的作品（还在且同指纹）优先；否则同指纹里 `updatedAt ?? createdAt` 最大的那份。旧数据重复不合并、不删。排序仍按 createdAt 倒序（B10-7）。
+- **旧数据迁移**：`WorkMeta.currentFormatVersion = 2`，新增 `updatedAt`。读到 v1 时按 layout.json 在内存里补算新指纹，命中并更新时才写回 v2（见上）。
+- **按钮状态**（B10-5/6）：`WorkSaveStatus` = `idle / saving / saved(id) / needsUpdate(id) / failed`，`canSave` / `canUpdate` / `isEnabled`。已存且没改 →「已存到我的作品」用已有的 `preview.saved_to_works`，不可点（`works.saved` 作废，没有新增）；只改强度 →「更新这张作品」`works.update`，不弹确认，成功后约 2 秒轻提示 `works.updated`（`WorksState.toast`），新存一张不提示。保存失败时结果不变就一直显示失败。结果页按钮文案 / 可点由 `WorksState.saveButtonKey` / `isSaveButtonEnabled`（QA A12，= `WorkSaveStatus.buttonKey` / `isEnabled`）给出，视图直接用。`unsavedPrompt`（`.none / .unsaved / .alphaChanged(id)`）只给 feat/start-new 用，本分支不接线。
+- **「再调一调」只改强度不重新生成**（B10-13/14，协调人方案①，QA A10）：
+  - `GenerationMachine` 新事件 `.restoreLastResult`：只在 `.idle` 且有 `lastOutcome` 时回到 `.result(lastOutcome)`，没有 effect，不消耗种子；生成中 / 取消确认框上忽略；导出中忽略。
+  - `AppCoordinator` 记下当前 `product` 是用哪组输入生成的（目标图代次（换图 / 重新裁剪都会 +1）、来源、密度；不含叠加强度）。`settingsPrimaryAction: SettingsPrimaryAction { .done, .generate }`（QA A11）：输入没变 → `.done`（`common.done`「完成」），否则 `.generate`（`generate.cta`）。`adjustDoneTapped() async` 回到原结果：格子、种子、`resultRevision` 都不变，AppModel 回结果页时按新强度重画预览。`generateTapped()` 仍是「开始拼图」，总是重新生成。设置页主按钮按 `settingsPrimaryAction` 显示和分派。
+  - 调整期间保留的只有原来就保留的那一份 `product`（`backToSettings` 原本也不释放它），预览位图离开结果页照常释放，所以没有额外内存。改了密度开始生成后取消：旧结果和 product 不变，把密度改回去又能「完成」。
+  - `WorksController` 记住「当前结果对应的作品 id」（和 `resultRevision` 绑定；存 / 更新成功时记下），「再调一调」来回不丢；换拼法 / 重新生成（revision 变了）才清掉。`currentWorkID` 可读。保存时把它作为 `WorkDraft.preferredWorkID` 传给存储层。
+  - 作品查看页这一轮没有强度入口（B10-13）。
+- **缺图计数**（B7）：`works.missing` 用 v1.3「有 {count} 格原来的照片现在用不了，这几格会稍模糊」，`missingCount` 按格计数（`cellAssignments` 里照片不在的格子数，同一张照片占多格算多格）。导出时取不到的格子保持原有兜底，没有新增 128px 逻辑。
+- **文案**：`copy_v1.1.md` §5.5 删 `works.menu.delete`、`works.saved`，加 `works.update`、`works.updated`、`quick.unsaved.update_title`（键先同步，接线在 feat/start-new）；同步 v1.4 相簿多选、`quick.*`；`gen-localizable.py` 重新生成。`common.done` 已在文案表里。
+- **测试**：
+  - 新增 `AdjustRoundTripTests`（12 条）：状态机 restore 的前置条件 / 不消耗种子 / 生成中和取消框上无效；只改强度往返格子、种子、revision 不变且不调生成器；`generateTapped` 总是重新生成；改密度 → `.generate` 重新生成、改回 → `.done`；换目标图 → `.generate`；生成中取消后旧结果仍可「完成」回去；存过 → 往返 → `needsUpdate(id)` → 更新同一张 + 轻提示 → 换拼法清掉 id；没存过的往返仍是未存；改密度后另存；`saveTarget` 命中规则（记住的优先、`updatedAt ?? createdAt` 最大）。
+  - `WorksSaveRulesTests`：指纹口径、原地更新、并发、更新中被删、更新失败、旧数据迁移和重复、按钮状态 / 轻提示。
+  - QA 测试计划 v0.4 的 `QAWorksRulesTests`（34 条）和 `pending/QAWorksRulesPendingInterfaceTests`（19 条，A1–A12 全部按计划里的名字实现）接入，改动都标了「全栈改 / 全栈加」：`setAlpha` 通知 controller；旧数据重复用 `makeLegacyDuplicate` 构造；pending 的 A2 密度名断言改成「不含」。（曾按查不到出处的「AndyL 口径」反转 seed 断言，QA 复核后已恢复，见上。）
+  - 结果：MosaicAppCore `swift test --no-parallel` 409 个，0 失败，3 跳过；`check-photo-fetch.sh`、`check-no-network.sh` 通过；MosaicCore 153 个，0 失败。App 层改动 Linux 上编译不了，未在真机 / Xcode 编过。
+
+
+## feat/picker-t3：`fetchKeyAssets` 纳入隐藏照片检查（QA #9 补丁）
+
+- **iOS 编译修复**：`PHAsset.fetchKeyAssets(in:options:)` 返回可选，`PhotoFetch.keyAssets(in:)` / `keyAssets(in:sources:)` 改为返回 `PHFetchResult<PHAsset>?`（nil 时调用方按无封面处理）。目前没有调用点。
+
+基于 `fd89694`（已含 app-layer `41dc45f`）。`rg -n fetchKeyAssets` 时仓库里没有现成调用（相簿目录封面尚未用 `fetchKeyAssets`），所以没有调用点可改，只补封装和检查。
+
+- 新增 `PhotoFetch.keyAssets(in:)` / `keyAssets(in:sources:)`，选项走 `PhotoFetch.options`（写死 `includeHiddenAssets = false`）。共享相簿用 `pickerSources(forSubtype:)` 自动选 `.cloudShared`。
+- `scripts/check-photo-fetch.sh` 把 `fetchKeyAssets(` 与 `fetchAssets(` 同等检查：只允许出现在 `PhotoFetch.swift`，InternalTools 除外。脚本原先没有自测机制，未新增。已验证干净树通过；Adapters 里故意加一处 `fetchKeyAssets(` 失败；InternalTools 豁免仍通过；整行注释不算；原有的 `fetchAssets(` 检查不受影响。
+- `AppTests/PhotoFetchTests.testKeyAssetOptionsNeverIncludeHiddenAssets` 断言 keyAssets 所用选项 `includeHiddenAssets == false`、来源显式设置。
+- MosaicAppCore `swift test`：205 个，0 失败，1 跳过。改动的 App 文件 `swiftc -parse`、`check-no-network.sh` 通过。
+
+
+## feat/picker-t3：选图页 P0 T3「App 层 PhotoKit 适配」（photo-picker-v0.1 §2、§3、§5.1、§5.2、§6.1、§6.2）
+
+基于 feat/picker-t0 `9cfd07e`。不碰 `App/Views` 的网格 UI（T4）和 `MosaicAppCore/Picker/*.swift`（T0 / T1 / T2），T0 公开接口签名未改。
+
+- **相簿列表 `App/Adapters/PhotoKitAlbumCatalog.swift`**（实现 `AlbumCatalogProviding`）：全部照片（`PhotoFetch.allImages`，`Sources.library`）；我的相簿 = `fetchTopLevelUserCollections`，保持 PhotoKit 顺序，文件夹递归（最多 8 层），跳过混进来的共享相簿 / 我的照片流 / 智能相簿；8 个白名单智能相簿**逐个子类型去取**，从不枚举全部智能相簿，所以 `smartAlbumAllHidden` 根本不会被请求，取回后再用 `SmartAlbumKind(photoKitSubtype:)` 核一遍；共享相簿 `.albumCloudShared`。所有计数都用 `PhotoFetch` 的 imagesOnly 选项实数 `count`（智能相簿的 `estimatedAssetCount` 是 `NSNotFound`），共享相簿用 `Sources.cloudShared` 数。
+- **网格数据源 `App/Adapters/PhotoKitAssetGrid.swift`**：`PhotoKitAssetGridSourceProvider`（`AssetGridSourceProviding`）+ `PhotoKitAssetGridDataSource`（`AssetGridDataSource`）。直接包 `PHFetchResult`（懒加载，不转数组），创建时间倒序，下标 0 最新；白名单外的智能相簿 id（含「已隐藏」）返回 nil。收到变化时先换成 `fetchResultAfterChanges` 再通知网格。
+- **缩略图 `App/Adapters/PhotoKitThumbnailLoader.swift`**（`GridThumbnailLoading<UIImage>`）：全 App 一个 `PHCachingImageManager`（`shared`），`.opportunistic` / `.fast` / `isNetworkAccessAllowed = false` / `.aspectFill`；取消后迟到的回调丢掉；正式版是 nil 而之前已给过 degraded 图时不把格子清空；按 ID 找 `PHAsset` 走 `PhotoFetch`，结果小缓存（≤ 1000），相册一变就清空。素材扫描的 `PhotoKitThumbnails` 仍用自己的 manager（128 px `.fastFormat`，参数不同）。
+- **变化监听 `App/Adapters/PhotoLibraryObserver.swift`**：共享的 `PHPhotoLibraryChangeObserver`，第一次订阅时才注册；后台回调转主线程，网格数据源各自 `changeDetails(for:)`，增量还是 reload 由 `GridChangePlanner.plan`（MosaicAppCore 纯逻辑）决定：没有增量信息、变化 > 300 项、> 20 项且超过总数一半、或下标 / 计数不自洽都整体 reload（UICollectionView 批量更新数不对会崩）。另有 `addListener` 给相簿列表等「变了就重读」的订阅方。
+- **隐藏照片 = 删除**：所有 fetch result 都来自 `PhotoFetch`（`includeHiddenAssets = false`），照片被设为隐藏后从新结果里消失，changeDetails 里在 `removedIndexes`，网格表现为删除。素材索引：`LibraryChangeObserver` → `libraryDidChange` → 防抖后 `applyFullDiff` → `assetCount()` 重新走 `PhotoFetch.allImages`，隐藏照片不在 `current` 里，`LibraryDiff` 判为 `deleted`（tombstone + 删条目），下次生成不会用到（`PickerSupportTests.testHiddenPhotoDisappearsAsDeletedInLibraryDiff`）。两个监听本 PR 不合并（不动 AppModel），T5/T6 可以合。
+- **目标图取图 `App/Adapters/PhotoKitTargetImageLoader.swift`**（§5.2 + §6.1）：`isNetworkAccessAllowed = false`，长边 4096（不超过原图，不请求 MaximumSize），`PHImageManager.default()`；先 `.highQualityFormat`，拿到 nil 就改 `.opportunistic` 取最后一张（degraded 也收），都没有就返回 nil 让调用方用网格缩略图兜底。结果带本机长边 `localLongSide`、是否 degraded / 见过 InCloud / 是否回退。判定全在 MosaicAppCore 的 `TargetImageFetchMachine`（新文件 `PickerSupport/TargetImageFetch.swift`）：highQuality 10 秒不回调就回退，opportunistic 5 秒没回调按「本机没有」结束，只有 degraded 时等 1.5 秒宽限，取消立即结束；`finish` 只会发生一次，旧请求的迟到回调和旧定时器都被忽略，不会卡在「加载中」。App 侧动作排队执行，PhotoKit 同步重入回调也不会打乱定时器。**不弹任何低清提示**：代码里没有 `picker.low_res` 的提示逻辑（文案表里也没有这个 key），无需删除。
+- **现有取数点全部改走 PhotoFetch**（行为外观不变）：`PhotoKitLibrary.fetchAllImages` → `PhotoFetch.allImages(order: .oldestFirst)`；`albums()` 计数和 `assetIDs(inAlbum:)` → `PhotoFetch.images(in:sources: .library)`；`PhotoKitThumbnails.assets(_:)` 和 `PhotoKitResolutionProbe` → `PhotoFetch.images(withLocalIdentifiers:)`。`PhotoFetch.swift` 加了 `pickerSources(forSubtype:)`（共享相簿 → `.cloudShared`，其余 `.library`）和 `keyAssets(in:)` / `keyAssets(in:sources:)`（封面代表张，选项同样走 `options`），T0 原有签名未动。`InternalTools/TestAlbumWriter` 未改。
+- **CI 检查两层**：① `scripts/check-photo-fetch.sh`，接进 linux-core 的 mosaic-core job（紧跟零网络检查）：`App/` 下（InternalTools、PhotoFetch.swift 除外）代码行出现 `fetchAssets(` 或 `fetchKeyAssets(` 失败；任何地方 `includeHiddenAssets = true` 失败；代码里引用 `smartAlbumAllHidden` 失败（整行注释不算）。已验证在当前代码上通过、故意加一处 `fetchAssets(` / `fetchKeyAssets(`（Adapters）/ `includeHiddenAssets = true` / `smartAlbumAllHidden` 时失败，InternalTools 豁免仍通过。② `AppTests/PhotoFetchTests.swift`（ios.yml 的模拟器单测）：所有 imagesOnly × 来源 × 排序组合下 `includeHiddenAssets == false`、`includeAllBurstAssets == false`、来源显式设置；`keyAssets` 所用选项同样不含隐藏照片；白名单映射不含「已隐藏」；网格和目标图的请求选项都不联网；目标图 targetSize 长边 4096 且不放大。
+- **MosaicAppCore 新文件**（不改 T0 的 `Picker/*.swift`）：`PickerSupport/GridChangePlanner.swift`、`PickerSupport/TargetImageFetch.swift`；测试 `PickerSupportTests.swift` 18 个（`GridChangePlannerTests` 7 个、`TargetImageFetchMachineTests` 11 个，含 500 轮乱序事件下 `finish` 恰好一次）。
+- **新增的 `@unchecked Sendable` / `assumeIsolated`**：`PhotoLibraryObserver.ChangeBox`（`PHChange` 后台 → 主线程转交一次）、`DeliveredThumbnail`、`TargetImageDelivery`、`TargetImageFetchResult`（`UIImage` 不可变，SDK 若已标 Sendable 也无害）；PhotoKit 回调里 `Thread.isMainThread ? assumeIsolated : DispatchQueue.main.async { assumeIsolated }`。
+- **⚠️ App 层盲写**：5 个新文件和 3 个改动文件 Linux 上 `swiftc -parse` 通过；另用手写的 Photos / UIKit 桩模块按 Swift 6 + 严格并发 + warnings-as-errors 做了类型检查（两套桩：SDK 回调标 / 不标 `@Sendable`、`UIImage` / `PHChange` 是否 Sendable，都通过），由此修掉一处 `@MainActor` 类的 static 常量在 nonisolated 函数里引用的错误。真 SDK 签名以 CI 的 Xcode job 为准。
+
+## feat/preview-sharp-quick：结果页预览放大发糊的止血（每格 48–64 px，长边约 4096，插值改为 high）
+
+AndyL 反馈预览放大后小格子很糊。原因是结果页预览每格只有 8–32 px（长边约 2400），SwiftUI 又用 `.interpolation(.none)` 最近邻放大。本卡只改预览绘制和显示，不改生成匹配，也不让生成变慢。
+
+- `MosaicAppCore/Preview/PreviewImageLimits.swift`（新）：预览每格目标 48–64 px，长边上限 4096。格数太多时优先守住长边（例如细档 120 列是 34 px）。给出 `cellPixels` / `size` / `rgbaByteCount`（4096×4096 RGBA = 64 MiB）。
+- `App/Rendering/MosaicPreviewRenderer.swift`：缩略图预览改用上述尺寸；色块占位仍是每格 8 px，避免和正式预览同时占两份大图。
+- `App/Views/MainFlowView.swift`：结果页 `Image` 的插值从 `.none` 改成 `.high`。作品查看页本来就是 `.medium`，这次不动。
+- `App/Models/AppModel.swift`：离开结果页或还没有作品时取消绘制任务并释放 `resultImage`；过期任务用 `resultRevision` 把关，不会把大图写回去。换新结果时先换成小色块，立刻丢掉上一张大图。
+- 测试：`PreviewImageLimitsTests`（尺寸、长边上限、改前改后对照、`PreviewRenderer` 输出尺寸）。`PreviewRenderBenchTests` 只在 `MOSAIC_BENCH=1` 时跑，对照色块预览 / 格点合成的改前改后耗时，以及 `GenerationRunner` 中档生成墙钟。
+
+## feat/gen-perf-fix：生成不再逐张检查清晰度，速度回到 14ac550
+
+AndyL 反馈 d31925f 生成比 14ac550 慢很多。原因是 #5「不能略糊」（35a9f75 / e3e68ec）把逐张 PhotoKit 探测（单张 `fetchAssets` + 256 px `requestImage`，8 并发）和「剔除后整张重新匹配（最多 3 轮）+ 兜底补格」接进了生成链路。AndyL 11-16 决定取消生成前的逐张检查。
+
+- **改动**：
+  - 新增 `GenerationRunner.production(pipeline:perf:)`，固定 `sharpness: nil`。
+  - `App/Adapters/LiveDependencies.swift` 改用它，不再注入 `LocalResolutionChecker(probe: PhotoKitResolutionProbe())`。
+  - 结果：生成只跑一次 `generateOnce`：没有逐张请求、没有重配、没有 refill，`lowRes.enabled == false`。
+- **保留**：
+  - 类型都保留，不删、不改名：`LocalResolutionChecker` / `LocalResolutionPolicy` / `LocalResolutionCache` / `PhotoKitResolutionProbe`。`GenerationRunner` 的可选 `sharpness` 路径和 `SharpnessFilterTests` 也保留。PR #11 作品换照片的 ≥256 检查还要用。
+  - 文案保留：`source.excluded_low_res`、`generate.progress.checking`、结果页筛选后的「照片比较少」。不注入时自然不会显示。
+- **行为**：
+  - 结果与 14ac550 的生成路径逐格相同（测试断言 production 与无探测器的 `GenerationRunner()` 同种子输出一致）。
+  - iCloud-only / 本机只有小图的照片照旧参与匹配。导出时取不到每格像素就退回 128 px 缩略图（blurryFallback，糊格子），再取不到才是白格子。导出端兜底不变，不新增白格子。
+  - 我的作品、导出三档、格子居中裁方（dd61da7）都不动。
+- **测试**：
+  - 新增 `GenerationProductionPathTests` 2 个：production 无探测器；一次生成只有 1 条「生成·总计」，没有「清晰度探测」，没有「重配」，每格都有照片，结果与旧路径一致，换一种拼法也只跑一次。
+  - 新增基准 `GenerationSpeedBenchTests`，默认跳过，用 `PINYI_GEN_BENCH=1 swift test -c release --filter GenerationSpeedBenchTests` 运行。
+- **耗时**（3000 张素材、中密度 4800 格）：
+  - 修复后一次匹配 0.036 s [实测]，与 14ac550 的 0.036 s 相同。
+  - d31925f 探测 + 重配，按每次请求 10 ms 模拟要 3.2–3.7 s，25 ms 时 8.7 s。完整表格见 PR 描述。
+
+## feat/picker-t4：选图页 P0 T4「共用照片网格」（photo-picker-v0.1 §2、§3）
+
+基于 feat/picker-t0 `9cfd07e`。只依赖 T0 的 `AssetGridDataSource` / `GridThumbnailLoading` 协议，不碰 `App/Adapters`（T3）和 AlbumCatalog / BrowsePosition 的实现（T1 / T2）。没有新增文案，T0 公开接口签名没改。
+
+- **MosaicAppCore `Picker/AssetGrid.swift`**：实现 T0 留给 T4 的 `ThumbnailCacheWindow.update / reset`。期望区 = 可见区 ±1 屏（快速滑动时只有可见区），保留区 = 可见区 ±2 屏，新窗口 = (旧窗口 ∩ 保留区) ∪ 期望区；两段不相接（跳转 / 快速滑过）时直接取期望区。返回的 start / stop 互不重叠、都在 `0..<count` 内。
+- **MosaicAppCore `Picker/AssetGridLayout.swift`**（新）：
+  - `AssetGridLayout`：列数（格子最小 90 pt、至少 3 列；440 / 375 pt 宽都是 4 列）、格子边长（向下取整到整像素，正好整除时让出 1 px 防流式布局折行）、`targetPixelSize = cell × scale` 向上取整（17 Pro Max 约 325 px）、内容高度、可见下标区间、一屏格数。
+  - 锚点换算：`anchor(visibleTop:count:)` 取顶部可见行的第一格和偏移（`BrowsePosition` 语义：格子上边缘 − 可见区上边缘，被遮住为负）；`contentOffsetY(for:…)` 反算并夹到可滚范围。`GridAnchor`（下标 + 偏移）。
+  - `GridScrollSpeedMeter`：相邻两次滚动回调估速，超过每秒 4 屏算快速滑动。
+  - `AssetGridUpdatePlan.plan(for:oldCount:newCount:isOnScreen:)`：`AssetGridChange` → 什么都不做 / `performBatchUpdates`（删、插、移，之后单独 reload changed）/ `reloadData`。下标与前后数量对不上、同一格既删又移、网格不在屏幕上、从空到有、操作超过 300 个，都直接 reloadData。
+- **App `Views/Picker/AssetGridViewController.swift`**（新）：UICollectionView + 流式布局，`AssetGridView`（UIViewControllerRepresentable）给 SwiftUI 用。
+  - cell 复用 / 移出时 cancel 请求；开了 cell 预取时，移出后又被直接显示的 cell 补发请求。`.opportunistic` 的低清回调先显示，正式图到了替换；`image == nil` 只显示占位色，不提示（§5.2）。
+  - 缓存窗口：每次滚动按 `ThumbnailCacheWindow` 增减 `startCaching / stopCaching`，按照片 ID 记账；相册变化、换数据源、布局尺寸变化、离开页面、进后台时按 ID 整体 stop（不调 `stopCachingAll`，共享的缓存管理器别人可能也在用）。`prefetchDataSource` 只给窗口外的格子额外 start，快速滑动时不预取。
+  - 实况角标（SF Symbol `livephoto`，右上角）。`selectionMode`：`.single` 点一张回调 `onSelect(assetID, index)`；`.none` 只浏览。
+  - 相册变化按 `AssetGridUpdatePlan` 做 batch updates 或 reloadData；用户不在最顶上时，变化后按变化前顶部那张照片的 ID 把位置拉回来（新照片插到顶部时正在看的那张不动）；在最顶上时让新照片直接露出来。
+  - `scroll(to: GridAnchor)` 按锚点精确设 contentOffset（布局没好先记下）；`currentAnchor()` 和 `onAnchorChange`（滑动停下时报一次，位置没变不重复报）给出「相簿 + 顶部照片 ID + 偏移」，T5 直接存成 `BrowsePosition`。列数变化时按变化前的锚点恢复。
+- **App `InternalTools/FakePhotoGrid.swift`**（新，只在 `INTERNAL_TOOLS`）：5 万项假数据源 `FakeAssetGridDataSource`（ID 现算，不建数组；每 7 张一张实况；可模拟顶部新增、删最新、整体 reload）、假加载器 `FakeGridThumbnailLoader`（先同步回低清，延迟后回正式色块图；每 13 张一张本机没有；记缓存 / 请求 / 取消数）、内部工具页「照片网格（假数据 5 万张）」。T3 合入前用它单独跑网格。
+- **测试**：MosaicAppCore 新增 `ThumbnailCacheWindowTests` 11 个（首屏、±1 屏、两屏外才 stop、来回滚不抖动、跳转、快速滑不扩大、随机 500 步 start/stop 记账一致、count 变小、reset）和 `AssetGridLayoutTests` 20 个（列数和整像素、退化输入、可见区间、锚点读写往返、列数变化后锚点仍在屏内、速度判定、变化 → 批量 / reload 的各种边界）。App 单测 `AssetGridViewControllerTests` 6 个（用假数据源：5 万项、缓存窗口启动、锚点设置读回、点选回调、顶部插入保持位置、删除 / reload、换数据源回顶部并 stop 旧缓存），只在模拟器跑。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`，另用自写的 UIKit / SwiftUI 桩在 Swift 6 严格并发下做过类型检查，桩的签名是照记忆写的）：`AssetGridViewController.swift`、`FakePhotoGrid.swift`、`AssetGridViewControllerTests.swift`。
+
+## feat/picker-t1t2：收进 QA 的 PickerSupplementTests（QA #8 补丁）
+
+把 QA 写的 `qa/tests/QAPickerSupplementTests.swift` 收进正式测试 `Packages/MosaicAppCore/Tests/MosaicAppCoreTests/PickerSupplementTests.swift`。按项目约定把类名从 `QAPickerSupplementTests` 改为 `PickerSupplementTests`，用例正文未改；`qa/` 原文件不动。8 个用例全部通过，无需改代码或修正测试。
+
+- OverlayDegrade：清单 12 个边界点、门槛处不跳变、0–8192 步长 0.5 单调且与期望公式一致、滑块 {0, 0.1, 0.3} × k {0, 0.25, 0.5, 0.75, 1} 的 `effectiveAlpha`。
+- H 段：全隐藏相簿按空处理（不显示、不可选）；白名单解不出 hidden；锚点被隐藏、相簿全被隐藏时回到「全部照片」顶部。
+- MosaicAppCore `swift test`：252 个，0 失败，1 跳过（在原先 244 个上加 8 个）。
+
+
+## feat/picker-t1t2：选图页 P0 T1 + T2 + 叠加层静默降级（photo-picker-v0.1 §3、§5、§6.1）
+
+基于 feat/picker-t0（`9cfd07e`），只改 MosaicAppCore，不碰 App 层；T0 的公开接口签名没改。
+
+- **T1 `AlbumCatalog.sections / isSelectable / entry`**：
+  - 节顺序固定为 全部照片 → 我的相簿 → 媒体类型 → 共享相簿；空节不输出，「全部照片」始终输出（负数按 0）。
+  - 空相簿（`imageCount ≤ 0`）不显示；文件夹递归去掉空子项后没东西就整个隐藏（含多层嵌套、只含空相簿的文件夹）。
+  - 我的相簿和文件夹子项保持 PhotoKit 顺序；媒体类型按白名单 `SmartAlbumKind.allCases` 顺序，同一种只留快照里第一个；共享相簿单独一组，按标题 `localizedStandardCompare` 升序、同名按 id，同 id 去重。
+  - 每节只收自己种类的条目（数据源塞错的直接丢，不挪到别的节）；非文件夹的 `children` 清空。已隐藏相簿在类型上表达不了，白名单永远只有 8 个。
+  - `isSelectable`：「全部照片」始终可选；`.album(id:)` 要在节里（含文件夹子树）找到、不是文件夹、图片数 > 0；`allPhotosID` 当相簿 id 传进来不算。`entry(id:)` 深度优先查找，含文件夹。`filter` 仍是 P1 占位。
+- **T2 `BrowsePositionStore`**：JSON 存进 `PreferenceDataStore`（key `browse.position.source|target`，两页互不影响）。读：解不开 / 版本 ≠ `currentVersion` / 锚点 id 为空 / 相簿 id 为空或等于 `allPhotosID` → 当作没存过。存：锚点 id 为空或偏移不是有限数时不写，保留上一次。恢复：没存过 → `noSavedPosition`；相簿不可见 → `albumUnavailable`（不去找锚点）；锚点找不到或下标为负 → `anchorMissing`；都回「全部照片」顶部。「全部照片」不问 `isSelectable`。恢复失败不清掉已存的位置。
+- **`OverlayDegrade`（新增 `Picker/OverlayDegrade.swift`）**：`factor(effectiveLongSide:thresholds:)`——s ≥ 1024 → 1；480–1024 从 0.5 线性到 1；160–480 从 0 线性到 0.5；s < 160 → 0；分段连续、单调不减；NaN / 负数 → 0，+∞ → 1。门槛是 `OverlayDegrade.Thresholds.standard`（1024 / 480 / 160），T7 真机实测后改这一处；自定义门槛要满足 `0 ≤ zero < half < full`。`effectiveAlpha(user:effectiveLongSide:)` = min(用户值夹到 [0, 0.3]，`OverlayBlendLimits.maxAlpha` × k)，用户值 NaN → 0、+∞ → 0.3。还没接到渲染 / 导出（App 层，T5/T7 或流式导出 PR 接）。
+- **测试**：`AlbumCatalogTests` 25 个、`BrowsePositionStoreTests` 20 个、`OverlayDegradeTests` 12 个、`PickerSupplementTests` 8 个（QA 补测收进正式目录）。
+
+## feat/picker-t0：选图页 P0 T0「定接口」（photo-picker-v0.1 §3、§5）
+
+只定接口和数据类型，不做实现逻辑；T1–T4 按这里的协议并行实现。占位函数体是 `fatalError("Tn: …")`，谁实现谁替换。
+
+- **MosaicAppCore `Picker/AlbumCatalog.swift`**：`SmartAlbumKind`（8 个智能相簿白名单，类型上就没有「已隐藏」）、`AlbumKind`（全部照片 / 用户相簿 / 文件夹 / 智能相簿 / 共享相簿）、`AlbumEntry`（localIdentifier、标题、种类、图片数、文件夹子项、对应的 `SourceSelection`）、`AlbumCatalogSnapshot`（数据源读出的原始列表）、`AlbumCatalogProviding`（App 层数据源协议，**T3**）、`AlbumSection` 和 `AlbumCatalog.sections / isSelectable / entry`（空相簿隐藏、排序、白名单，**T1**；`filter` 留给 P1）。
+- **MosaicAppCore `Picker/BrowsePosition.swift`**：`BrowsePage`（source / target，偏好 key `browse.position.<page>`）、`BrowsePosition`（相簿 + 锚点照片 + 锚点偏移 pt + 版本号，Codable）、`BrowseFallbackReason`、`BrowseRestoreResult`（回到锚点 / 回到「全部照片」顶部及原因）、`PreferenceDataStore`（偏好里存 Data；`PreferenceStore` 只存布尔）、`BrowsePositionStoring` 和 `BrowsePositionStore`（**T2**）。
+- **MosaicAppCore `Picker/AssetGrid.swift`**：`AssetGridDataSource`（count、按下标取 assetID、是否实况、按 ID 找下标、变化通知；按创建时间倒序）、`AssetGridChange`（增量删 / 插 / 改 / 移，或整体 reload）、`AssetGridSourceProviding`（按来源打开数据源）、`GridThumbnailLoading<Image>`（request / cancel / startCaching / stopCaching / stopCachingAll）、`ThumbnailCacheWindow`（缓存窗口纯逻辑，**T4**）。数据源与加载器 **T3** 用 PhotoKit 实现，**T4** 的网格只依赖协议。
+- **App `Adapters/PhotoFetch.swift`**：唯一取照片入口 `PhotoFetch.options(imagesOnly:sources:order:)`，`includeHiddenAssets = false` 显式写死，`includeAllBurstAssets = false`，`imagesOnly` 时加 `mediaType == image` 谓词，`includeAssetSourceTypes` 按场景显式传（`Sources.library = [.typeUserLibrary, .typeiTunesSynced]` / `cloudShared` / `any`）；附 `allImages`、`images(in:)`、`images(withLocalIdentifiers:)` 三个包装和 `SmartAlbumKind` ↔ `PHAssetCollectionSubtype` 映射（白名单外含 `.smartAlbumAllHidden` 一律丢弃）。**T0 不改现有调用点**，由 T3 改。
+- **App `Adapters/UserDefaultsPreferenceData.swift`**：`PreferenceDataStore` 的 `UserDefaults` 实现（尚未注入，T5 接）。
+- **测试**：`PickerInterfaceTests` 11 个（白名单正好 8 个且不含 hidden、相簿条目构造与 `selection`、条目树和位置值 Codable 往返、偏好 key、假数据源 / 假加载器能符合协议）。测试替身 `InMemoryPreferenceData`、`FakeGridDataSource`、`FakeGridLoader` 给 T2 / T4 复用。
+- **⚠️ App 层盲写**（Linux 只做 `swiftc -parse`）：`PhotoFetch.swift`、`UserDefaultsPreferenceData.swift`。
+
 ## feat/works：去掉旧 render-export 带进来的非作品改动
 
 - 结果页与 feat/app-layer 对齐：保留 ZoomableContainer 和紧急版三档导出按钮，只多一个「保存到我的作品」。去掉 T7 叠加滑杆、实时叠加层（`MosaicWithOverlay` / `overlayImage`）。

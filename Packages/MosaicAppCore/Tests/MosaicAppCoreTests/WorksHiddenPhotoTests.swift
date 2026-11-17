@@ -77,7 +77,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
         let reopened = try await FileWorksStore(directory: h.dir, images: h.images).load(id)
         XCTAssertEqual(reopened.layout, cleared)
         XCTAssertEqual(reopened.summary.previewURL, opened.summary.previewURL)
-        XCTAssertEqual(reopened.meta.fingerprint, FileWorksStore.fingerprint(try FileWorksStore.encoder().encode(cleared)))
+        XCTAssertEqual(reopened.meta.fingerprint, WorkFingerprint.of(cleared), "#17 起指纹是 WorkFingerprint")
         XCTAssertEqual(reopened.meta.droppedPhotoCount, 1)
         XCTAssertEqual(reopened.meta.photoCount, 3)
         XCTAssertEqual(reopened.meta.missingCount, 0, "都处理过了")

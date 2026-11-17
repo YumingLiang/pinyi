@@ -23,11 +23,11 @@ final class WorksModel: ObservableObject {
 
     private func stateChanged(_ s: WorksState) {
         let previousOpened = state.opened?.id
-        let previousPreview = state.opened?.summary.previewURL
+        let previousSummary = state.opened?.summary   // 更新叠加后预览文件名不变，按 meta 判断要不要重解码
         state = s
         if s.opened?.id != previousOpened { detailZoom.reset() }
-        // 换了作品，或缺图处理后预览重画了（文件名会变）：重新解码
-        if s.opened?.id != previousOpened || s.opened?.summary.previewURL != previousPreview {
+        // 换了作品、缺图处理后预览重画了（文件名会变），或只改叠加强度更新了原作品（meta 变）：重新解码
+        if s.opened?.id != previousOpened || s.opened?.summary != previousSummary {
             openedPreview = s.opened.flatMap { ImageIOWorkImages.loadImage($0.summary.previewURL, maxPixel: WorkImageLimits.previewLongEdge) }
         }
     }
@@ -41,7 +41,7 @@ final class WorksModel: ObservableObject {
     func exportOpened(_ purpose: ExportPurpose) { Task { await controller.exportOpenedTapped(purpose: purpose) } }
     func deleteTapped(_ id: WorkID) { controller.deleteTapped(id) }
     func deleteCancelled() { controller.deleteCancelled() }
-    func deleteConfirmed() { Task { await controller.deleteConfirmed() } }
+    func deleteConfirmed(_ id: WorkID) { Task { await controller.deleteConfirmed(id) } }
     func dismissNotice() { controller.dismissNotice() }
 
     /// 列表缩略图（降采样解码，约 2 列 × 3x 屏幕密度）。
