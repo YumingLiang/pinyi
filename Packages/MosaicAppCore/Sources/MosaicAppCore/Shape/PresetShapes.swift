@@ -21,6 +21,7 @@ public enum PresetShapes {
         Entry(id: .star, path: star()),
         Entry(id: .circle, path: circle()),
         Entry(id: .birthdayCake, path: birthdayCake()),
+        Entry(id: .flower, path: flower()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -129,6 +130,27 @@ extension PresetShapes {
             b.cubic(cx - 6.5, 10, cx - 3, 6, cx, 0)
             b.close()
         }
+        return b.build()
+    }
+}
+
+// MARK: - 花朵
+
+extension ShapePresetID {
+    /// 花朵
+    public static let flower = ShapePresetID(rawValue: "flower")
+}
+
+extension PresetShapes {
+    /// 花朵：5 片圆形花瓣（一片朝上）+ 花心，左右对称。
+    static func flower() -> ShapePath {
+        var b = ShapePathBuilder()
+        let petalR = 21.0, dist = 29.0
+        for k in 0..<5 {
+            let angle = (-90 + 72 * Double(k)) * Double.pi / 180
+            b.circle(50 + dist * cos(angle), 50 + dist * sin(angle), petalR)
+        }
+        b.circle(50, 50, 22)
         return b.build()
     }
 }
