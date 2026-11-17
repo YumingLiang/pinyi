@@ -15,6 +15,8 @@ final class AppModel: ObservableObject {
     private let thumbnails: PhotoKitThumbnails
     /// 「我的作品」（逻辑在 MosaicAppCore 的 `WorksController`）。
     let works: WorksModel
+    /// 结果页预览清晰层（放大后按可见格子取 256 / 512 / 1024 px 方图，盖在底图上）。
+    let detailLayer: PreviewDetailLayer
 
     @Published private(set) var state: AppState
     @Published private(set) var targetPreview: CGImage?
@@ -43,6 +45,7 @@ final class AppModel: ObservableObject {
         self.perf = perf
         self.lifecycle = lifecycle
         self.thumbnails = thumbnails
+        self.detailLayer = PreviewDetailLayer(thumbnails: thumbnails, perf: perf)
         // 导出成功 → 中继 → WorksController（只刷新「存到我的作品」按钮，导出不再自动存，需求 B10-1；
         // AppDependencies 先于协调器创建，所以经中继转）
         let relay = ExportSuccessRelay()
@@ -91,11 +94,10 @@ final class AppModel: ObservableObject {
             // 离开结果页就丢掉预览位图（长边约 4096 时 RGBA 约 64 MB），换新结果时也会先走这里再重画。
             releasePreviewImage()
         }
-        if !s.hasResult, resultImage != nil || previewTask != nil {
+        if !s.hasResult, resultImage != nil || previewTask != nil || detailOverlay != nil {
             // 结果被丢弃（「再拼一张」开始生成新图 / 返回首页）：取消在途绘制，释放预览位图（可能约 48 MB）。
-            previewTask?.cancel()
-            previewTask = nil
-            resultImage = nil
+            // 走 releasePreviewImage，连清晰层缓存一起清掉。
+            releasePreviewImage()
         }
         if case .main = s.route, changeObserver == nil {
             changeObserver = LibraryChangeObserver { [weak self] in
@@ -116,6 +118,10 @@ final class AppModel: ObservableObject {
     var emptyState: LibraryEmptyState? { state.emptyState }
     var transientNotice: L10nKey? { state.transientNotice }
     var access: SourceAccess { state.access }
+    /// 来源是相簿、张数还没算出来：显示加载中（§2f 补充 3）。
+    var isMaterialCountLoading: Bool { state.isMaterialCountLoading }
+    /// 「开始拼图」在等相簿列表加载完（§2f 补充 3）。
+    var isWaitingForAlbums: Bool { state.isWaitingForAlbums }
     var allPhotosRow: SourceRow { state.allPhotosRow }
     var authorization: PhotoAuthorization { state.authorization }
     var sourceLowResLine: LocalizedLine? { state.sourceLowResLine }
@@ -153,6 +159,11 @@ final class AppModel: ObservableObject {
     func refreshAlbums() async { await coordinator.refreshAlbums() }
     func flowSend(_ e: MainFlow.Event) { coordinator.flowSend(e) }
     func selectSource(_ s: SourceSelection) { coordinator.selectSource(s) }
+    // 相簿多选（§2f，判断在 AppCoordinator+MultiAlbum）
+    func openAlbumList() { coordinator.openAlbumList() }
+    func toggleAlbum(_ id: String) { coordinator.toggleAlbum(id) }
+    func finishAlbumSelection() { coordinator.finishAlbumSelection() }
+    func closeAlbumList() { coordinator.closeAlbumList() }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func generateTapped() { Task { await coordinator.generateTapped() } }
     /// 设置页主按钮（B10.14）：只改了叠加强度 →「完成」回原结果；否则「开始拼图」。
@@ -243,12 +254,23 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 取消未完成的缩略图绘制，并释放 `resultImage`。
+    /// 取消未完成的缩略图绘制，并释放 `resultImage`；清晰层取消请求、清空缓存。
     private func releasePreviewImage() {
         previewTask?.cancel()
         previewTask = nil
         if resultImage != nil { resultImage = nil }
+        detailOverlay = nil
         renderedRevision = 0
+        detailLayer.reset()
+    }
+
+    /// 清晰层上的目标图叠加（裁剪区，和底图 / 导出同一个 cropRect）；α = 0 或没有作品时为 nil。
+    @Published private(set) var detailOverlay: CGImage?
+
+    /// 结果页缩放 / 平移变化（视图 `onChange(of: resultZoom)` 调）。
+    func resultZoomChanged(displayScale: Double) {
+        guard state.flow.step == .result, coordinator.product != nil else { return }
+        detailLayer.zoomChanged(resultZoom, displayScale: displayScale)
     }
 
     private func renderPreview() {
@@ -262,6 +284,20 @@ final class AppModel: ObservableObject {
         // 先换成小色块占位，立刻丢掉上一张大预览图。
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
         let alpha = state.flow.settings.overlayAlpha
+        // 清晰层：换作品（含换拼法）清空缓存；准备叠加用的目标图裁剪区（与底图同一 cropRect、同一 α）。
+        detailLayer.configure(product: product)
+        detailOverlay = nil
+        if OverlayBlendLimits.clamp(alpha) > 0, let t = ImagePixels.cgImage(target) {
+            let crop = product.generation.layout.cropRect
+            // 长边 > 2048 先缩到 2048 再持有：放大后这一层本来就是糊的，和导出一致，避免结果页一直攥着一份 4096 目标图。
+            var overlay = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height))
+            if let img = overlay, max(img.width, img.height) > 2048,
+               let scaled = ImagePixels.opaqueSRGB(img, maxEdge: 2048),
+               let cg = ImagePixels.cgImage(scaled) {
+                overlay = cg
+            }
+            detailOverlay = overlay
+        }
         let thumbs = thumbnails
         let perf = self.perf
         let revision = renderedRevision

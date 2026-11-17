@@ -34,10 +34,13 @@
       },
       "runner_reshuffle_fine_1536x1152_2k": {
         "min_delta_ms": 4.0
+      },
+      "runner_preview_fetch_medium_1536x1152_2k": {
+        "min_delta_ms": 15.0
       }
     },
     "why": "15 次 runner 实测（5 种 CPU）：同一 job 内 5 次样本极差多数 ≤ 4%、个别到 10%（中位数吸收）；同机型跨 run 中位数偏差 ≤ ×1.03 → 同机型限 ×1.20；跨机型原始中位数相差到 ×2.2，按 calib_cpu_scalar 归一化后最慢机型 ≤ ×1.06、快机型被低估（×0.75–0.93）→ 无同机型基线时退回归一化 ×1.25。",
-    "why_per_metric": "runner_slowpath_*：耗时主要是 fake PhotoKit 的 sleep（5/60 ms），对调度抖动敏感（box 争用下单次 ×1.40、+27 ms 误报过一次）；真回归是 ×32 / +2 s，min_delta 50 ms 不影响检出。 runner_gen_* / runner_reshuffle_*：runner 上 6 次（44028766958），同机型（EPYC 7763 ×3）中位数偏差 ≤ 4.5%、按 calib 归一化后全部 ≤ ×1.045（≤ 5%）→ 按 QA 方案 V2.4 把 min_delta_ms 降到 4。",
+    "why_per_metric": "runner_slowpath_*：耗时主要是 fake PhotoKit 的 sleep（5/60 ms），对调度抖动敏感（box 争用下单次 ×1.40、+27 ms 误报过一次）；真回归是 ×32 / +2 s，min_delta 50 ms 不影响检出。 runner_gen_* / runner_reshuffle_*：runner 上 6 次（44028766958），同机型（EPYC 7763 ×3）中位数偏差 ≤ 4.5%、按 calib 归一化后全部 ≤ ×1.045（≤ 5%）→ 按 QA 方案 V2.4 把 min_delta_ms 降到 4。 runner_preview_fetch_*：min_delta_ms 10 → 15（11-17，PR #18 run 44038111294：0838ac9 在 EPYC 7763 上 40.3–40.6 ms、比同机型基线 31.5 多约 9 ms）。结论：不是 preview 代码变慢，而是与测试二进制（布局）有关、且有运行期成分的机器相关效应；机制（静态对齐）未证实。依据（同一 runner 交错 A/B，run 44047313570 / 44049180048）：7763 上同一份 230002d 代码完整测试 target 31.2 ms、只留 GenPerf/ 测试 40.1 ms，0838ac9 反过来 38.1 / 31.0（1 台 × 3 轮）；preview 路径源码、编译参数（命令行哈希一致）、依赖均未变；同一二进制不重编交错重跑也会换档（230002d 一轮 40.1，78ce569 46.4 / 48.8，0838ac9 48.3 / 50.6、同机 37.3–41.7）；强制对齐后两者都是 37.2 只有 1 台 7763 × 3 轮，不足以证明机制。稳定档位差最多约 +9.8 ms，15 ms 盖住；重复取图类真回归 ≥ ×2（+30 ms 以上）仍能检出；代价：持续变慢 ≤ 15 ms 不报。后续：计时不含 fake 缩略图合成，或固定对齐并多台验证后重定基线，再改回 10。",
     "why_same_cpu_normalized": "同型号 CPU 的实例也会整体变慢：run 44028766958 attempt 6（EPYC 9V74）calib ×1.27、所有指标 ×1.27–1.29（代码未变）→ 同机型 ×1.20 误报。同机型比值也除以同机型 calib 系数后再判。"
   },
   "metrics": {

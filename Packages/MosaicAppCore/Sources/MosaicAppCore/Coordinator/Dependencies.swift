@@ -198,12 +198,15 @@ public struct AppDependencies: Sendable {
     public var initialSeed: UInt64
     /// 导出成功（文件已在 tmp/export，保存 / 分享之前）时通知：「我的作品」由这里刷新「存到我的作品」按钮（导出不自动存，B10-1）。默认空实现。
     public var onExportSucceeded: @Sendable (MosaicLayout, URL) async -> Void
+    /// 二进制偏好（记住素材来源 §1a，`SourceSelectionStore`）。nil = 不记（测试默认）。
+    public var preferenceData: (any PreferenceDataStore)?
 
     public init(library: any PhotoLibraryClient, thumbnails: any ThumbnailProviding, indexStore: any IndexStore,
                 clock: any AppClock, lifecycle: any LifecycleEvents, preferences: any PreferenceStore,
                 generator: any MosaicGenerating, exporter: any MosaicExporting, memory: any MemoryFootprintReading,
                 perf: PerfRecorder, indexConfiguration: PhotoIndex.Configuration = .init(), initialSeed: UInt64,
-                onExportSucceeded: @escaping @Sendable (MosaicLayout, URL) async -> Void = { _, _ in }) {
+                onExportSucceeded: @escaping @Sendable (MosaicLayout, URL) async -> Void = { _, _ in },
+                preferenceData: (any PreferenceDataStore)? = nil) {
         self.library = library
         self.thumbnails = thumbnails
         self.indexStore = indexStore
@@ -217,5 +220,6 @@ public struct AppDependencies: Sendable {
         self.indexConfiguration = indexConfiguration
         self.initialSeed = initialSeed
         self.onExportSucceeded = onExportSucceeded
+        self.preferenceData = preferenceData
     }
 }

@@ -77,16 +77,29 @@ enum PhotoFetch {
     }
 
     /// 按 localIdentifier 取回图片。被隐藏 / 删除 / 受限访问移出的照片取不到（调用方当缺图处理）。
+    /// 取回后请再用 `visibleImages(withLocalIdentifiers:)`，不要直接使用本结果里的 PHAsset：
+    /// `fetchAssets(withLocalIdentifiers:)` 对 `includeHiddenAssets` 的行为不完全一致。
     static func images(withLocalIdentifiers ids: [String]) -> PHFetchResult<PHAsset> {
         PHAsset.fetchAssets(withLocalIdentifiers: ids, options: options(imagesOnly: true, sources: Sources.any))
+    }
+
+    /// 按 ID 取回后再滤掉 `isHidden`（双保险）。不用 `enumerateObjects` 闭包。
+    /// 隐藏 / 删除 / 受限访问移出的照片不在结果里，调用方当缺图处理。
+    static func visibleImages(withLocalIdentifiers ids: [String]) -> [PHAsset] {
+        let result = images(withLocalIdentifiers: ids)
+        guard result.count > 0 else { return [] }
+        return VisibleAssetFilter.accepting(
+            result.objects(at: IndexSet(integersIn: 0..<result.count)),
+            isHidden: { $0.isHidden }
+        )
     }
 
     /// 系统 PhotosPicker 选完后的兜底（#18 P1-a）：按 `itemIdentifier` 再取一次。取不到（隐藏 / 删除 / 受限未授权）
     /// 或 `isHidden` 都不能当目标图（`PickedTargetGate`）。
     /// 只回答可用 / 不可用，不区分原因（copy v1.6）。
+    /// 走 `visibleImages`（#15 的 isHidden 双保险），不单独再滤一遍。
     static func isPickedAssetAvailable(_ id: String) -> Bool {
-        guard let asset = images(withLocalIdentifiers: [id]).firstObject else { return false }
-        return !asset.isHidden
+        !visibleImages(withLocalIdentifiers: [id]).isEmpty
     }
 
     /// 集合的代表照片（封面）。选项同样走 `options`（写死 `includeHiddenAssets = false`），不允许 `options: nil`。
@@ -100,6 +113,44 @@ enum PhotoFetch {
     /// 选图页 / 相簿列表取封面：来源按 `pickerSources(forSubtype:)` 自动选。
     static func keyAssets(in collection: PHAssetCollection) -> PHFetchResult<PHAsset>? {
         keyAssets(in: collection, sources: pickerSources(forSubtype: collection.assetCollectionSubtype))
+    }
+
+    // MARK: isHidden 后置过滤（相簿多选 PR 的合并条件；quick-start v1.0 §0 硬规则 1、§4.8）
+    //
+    // `includeHiddenAssets = false` 是第一道；按集合取回后再按 `isHidden` 滤一遍是第二道（`VisibleAssetFilter`，
+    // 与 #15 按 ID 取图同一个入口）。App 里按集合取图 / 封面一律用下面这些；直接用上面的 `allImages` /
+    // `images(in:)` / `keyAssets` 的只允许本文件和 `PhotoKitAssetGrid.swift`（网格用 `VisibleIndexMap` 跳过隐藏项），
+    // 由 scripts/check-photo-fetch.sh 检查。
+
+    /// 一批 PHAsset 里滤掉 `isHidden`，保持顺序。
+    static func visible(_ assets: [PHAsset]) -> [PHAsset] {
+        VisibleAssetFilter.accepting(assets, isHidden: { $0.isHidden })
+    }
+
+    /// fetch result 的一段（素材扫描分批取元数据用），滤掉 `isHidden`。
+    static func visibleObjects(_ result: PHFetchResult<PHAsset>, in range: Range<Int>) -> [PHAsset] {
+        let lo = max(0, range.lowerBound), hi = min(result.count, range.upperBound)
+        guard lo < hi else { return [] }
+        return visible(result.objects(at: IndexSet(integersIn: lo..<hi)))
+    }
+
+    /// 「全部照片」的可见张数（逐个看 `isHidden`）。
+    static func visibleAllImagesCount() -> Int {
+        let r = allImages(order: .unspecified)
+        return visibleObjects(r, in: 0..<r.count).count
+    }
+
+    /// 某个集合里的可见图片（已滤 `isHidden`），按 `order`。
+    static func visibleImages(in collection: PHAssetCollection, sources: PHAssetSourceType,
+                              order: Order = .unspecified) -> [PHAsset] {
+        let r = images(in: collection, sources: sources, order: order)
+        return visibleObjects(r, in: 0..<r.count)
+    }
+
+    /// 集合的代表照片（封面），滤掉 `isHidden`；一张都不剩时调用方按无封面处理。
+    static func visibleKeyAssets(in collection: PHAssetCollection) -> [PHAsset] {
+        guard let r = keyAssets(in: collection), r.count > 0 else { return [] }
+        return visibleObjects(r, in: 0..<r.count)
     }
 }
 

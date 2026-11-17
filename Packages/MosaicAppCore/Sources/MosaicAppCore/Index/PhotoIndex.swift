@@ -1,12 +1,16 @@
 import Foundation
 import MosaicCore
 
-/// 素材来源选择（T4：UI 单选；引擎保留并集能力 `BitMask.union`）。
+/// 素材来源选择（T4 单选；quick-start v1.0 §2f 起可多选相簿，design/photo-picker-v0.1 §6.4）。
+/// 用 Swift 合成的 Codable 存进偏好（`SourceSelectionStore`）；旧数据只有 `allPhotos` / `album`，直接能解。
 public enum SourceSelection: Sendable, Hashable, Codable {
     /// 「全部照片」/「已允许访问的照片」（受限模式）。
     case allPhotos
     /// 单个相簿。
     case album(id: String)
+    /// 多个相簿（≥ 2 个，按勾选顺序，`PHAssetCollection.localIdentifier`）。素材 = 各相簿照片按 localIdentifier 去重的并集。
+    /// 只存相簿 ID，照片每次用时重新查，隐藏 / 删除自然生效。构造请走 `SourceSelection.albums(normalizing:)`。
+    case albums(ids: [String])
 }
 
 /// 扫描进度（`scan.progress`：已整理 %1$@ / %2$@ 张）。
@@ -352,7 +356,7 @@ public actor PhotoIndex {
                 let outcomes = try await BoundedConcurrency.map(batch, maxConcurrent: limit) { id -> (ScanItemOutcome, Double) in
                     switch await thumbs.thumbnail(for: id, request: request) {
                     case .unavailableLocal: return (.unavailableLocal, 0)
-                    case .failed: return (.failed, 0)
+                    case .failed, .missing: return (.failed, 0)
                     case .image(let buffer):
                         let e0 = clock.now()
                         guard var rec = try? extractor.extract(from: buffer) else { return (.failed, clock.now() - e0) }
@@ -468,9 +472,15 @@ public actor PhotoIndex {
     /// 生成那一刻的素材快照（来源 ∧ 已扫描 ∧ 未删除）。
     public func snapshot(for source: SourceSelection) async throws -> IndexSnapshot {
         var sourceMask: BitMask?
-        if case .album(let albumID) = source {
-            let ids: [String]
-            do { ids = try await library.assetIDs(inAlbum: albumID) } catch { throw PhotoIndexError.albumUnreadable }
+        if !source.isAllPhotos {
+            // 多选：每个相簿各取一次（App 层走 PhotoFetch + isHidden 后置过滤），按 localIdentifier 去重取并集
+            // （`MaterialUnion`）；打不开的相簿跳过，全部打不开才算来源读不出来。
+            var perAlbum: [[String]] = []
+            for albumID in source.albumIDs {
+                if let ids = try? await library.assetIDs(inAlbum: albumID) { perAlbum.append(ids) }
+            }
+            guard !perAlbum.isEmpty else { throw PhotoIndexError.albumUnreadable }
+            let ids = MaterialUnion.union(perAlbum)
             var rows: [Int] = []
             for id in ids {
                 if let e = manifest.entries[id], e.status == .ok, let r = e.row, r < table.count { rows.append(r) }

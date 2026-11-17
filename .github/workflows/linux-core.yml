@@ -38,6 +38,9 @@ jobs:
       - name: Hidden-photo guard (all fetchAssets / fetchKeyAssets via PhotoFetch)
         run: ./scripts/check-photo-fetch.sh
 
+      - name: Hidden-photo guard self-test (rule 4 positive / negative cases)
+        run: bash scripts/tests/check-photo-fetch-test.sh
+
       - name: Localizable.strings 与文案表一致
         run: |
           apt-get update -qq && apt-get install -y -qq python3 >/dev/null
@@ -136,7 +139,8 @@ jobs:
   # 生成性能回归门禁（AndyL 11-16：「性能要加入到回归中，这个太差了」）。**阻断**，没有 paths 过滤，每次都出结果，
   # 稳定后设为 feat/app-layer 的 required check。与上面的 A-21（全量 bench，只记录）分开：这里只跑少量门禁指标。
   # 口径：release；每指标预热 1 次 + 测 MOSAIC_PERF_REPEAT 次取中位数，对照仓库里的 perf/baseline-linux.json，
-  # 中位数 > 基线 × ratio 且绝对差 > min_delta_ms 才失败（数值与依据见 perf/README.md）。
+  # 中位数 > 基线 × ratio 且绝对差 > min_delta_ms 才算超限（数值与依据见 perf/README.md）；
+  # 第 1 次超限的指标在同一 job 里对所在包重测一次，两次样本合并（10 个）取中位数再判，仍超限才失败（缺失指标直接失败）。
   # 收录规则：任何包里名为 *PerfGateTests.swift 的测试文件都会被跑（--filter PerfGateTests），QA 的端到端用例照此接入。
   perf-gate:
     name: Generation perf regression
@@ -159,34 +163,53 @@ jobs:
       - name: python3（门禁脚本用）
         run: apt-get update -qq && apt-get install -y -qq python3 >/dev/null
 
-      - name: Run *PerfGateTests (release)
+      - name: 判定脚本自测（合成数据）
+        run: python3 scripts/test_perf_gate.py
+
+      # 第 1 次测量所有包；有超限指标时，只对这些指标所在的包在同一 job 里重测一次，两次样本合并取中位数再判一次。
+      # 缺失的指标直接失败、不重测。退出码：0 通过 / 1 失败 / 其他 = 脚本或环境错误。
+      - name: Run *PerfGateTests (release) + compare with baseline
         shell: bash
         run: |
           set -euo pipefail
-          export MOSAIC_PERF_OUT="$GITHUB_WORKSPACE/perf-results.jsonl"
-          # 第一行记 runner 的 CPU 型号：ubuntu-latest 机型是混的，脚本按同机型基线比（没有才退回全局归一化）。
-          python3 -c 'import json,os,re; m=re.search(r"model name\s*:\s*(.*)", open("/proc/cpuinfo").read()); print(json.dumps({"runner_cpu": m.group(1).strip() if m else "", "nproc": os.cpu_count()}))' > "$MOSAIC_PERF_OUT"
-          found=0
-          for pkg in Packages/*/; do
-            # 不用 find | grep -q：pipefail 下 find 收到 SIGPIPE 会被当成「没找到」（同 ios.yml 41dc45f 的教训）。
-            if [ -d "$pkg/Tests" ] && [ -n "$(find "$pkg/Tests" -name '*PerfGateTests.swift' -print -quit)" ]; then
-              found=1
-              echo "::group::$pkg"
-              (cd "$pkg" && swift test -c release --filter PerfGateTests 2>&1 | tee -a "$GITHUB_WORKSPACE/perf-log.txt")
-              echo "::endgroup::"
-            fi
-          done
-          [ "$found" = 1 ] || { echo "::error::没找到任何 *PerfGateTests.swift"; exit 1; }
-          cat "$MOSAIC_PERF_OUT"
-
-      - name: Compare with baseline (median, relative)
-        run: python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY"
+          : > perf-diag.md
+          scripts/perf-gate-run.sh 1 perf-results.jsonl perf-packages.json
+          set +e
+          python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --failed-out perf-failed.json
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then echo "::error::perf-gate.py 异常退出 $rc"; exit "$rc"; fi
+          if [ "$rc" -eq 0 ]; then
+            python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY" > /dev/null
+            echo "第 1 次全部通过，不重测。" >> "$GITHUB_STEP_SUMMARY"
+            cat perf-diag.md >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if python3 -c 'import json,sys; sys.exit(0 if json.load(open("perf-failed.json"))["missing"] else 1)'; then
+            echo "::error::有门禁指标缺失，直接失败（不重测）"
+            python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY" > /dev/null || true
+            cat perf-diag.md >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          mapfile -t pkgs < <(python3 -c 'import json; f=json.load(open("perf-failed.json")); m=json.load(open("perf-packages.json")); print("\n".join(sorted({m[x] for x in f["regressed"]})))')
+          echo "第 1 次超限：$(python3 -c 'import json; print(", ".join(json.load(open("perf-failed.json"))["regressed"]))')；重测包：${pkgs[*]}"
+          scripts/perf-gate-run.sh 2 perf-results-2.jsonl perf-packages-2.json "${pkgs[@]}"
+          set +e
+          python3 scripts/perf-gate.py check --results perf-results.jsonl --retry-results perf-results-2.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY"
+          rc=$?
+          set -e
+          cat perf-diag.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
       - name: Upload perf results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: perf-results-${{ github.run_attempt }}
+          if-no-files-found: ignore
           path: |
             perf-results.jsonl
+            perf-results-2.jsonl
+            perf-packages.json
+            perf-failed.json
             perf-log.txt
