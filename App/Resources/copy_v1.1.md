@@ -355,6 +355,38 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `works.missing` | 查看页 / 导出前：原照片已删除的张数 | 有 {count} 张原照片已经删掉了，导出时这些小块会缺少原照片 |
 | `works.open_failed` | 作品读不出来 | 这张作品打不开了 |
 | `works.delete_failed` | 删除失败 | 没能删除，请再试一次 |
+| `works.menu.delete` | 作品列表长按菜单，唯一一项，红色破坏性样式（v1.5，22:20） | 删除 |
+| `works.saved` | 预览页 / 作品查看页「存到我的作品」按钮，已存且无改动时，不可点（v1.5，22:20） | 已存到我的作品 |
+
+- 长按菜单点「删除」后沿用 `works.delete.confirm` 确认框，按钮用「删除」（红色）和「取消」（v1.5）。
+- 导出不再自动存（AndyL 22:20 定），不需要「已自动存到我的作品」一类的提示（v1.5）。
+- `preview.saved_to_works` 与 `works.saved` 同文案；按钮已改用 `works.saved`，旧 key 暂留。
+
+### 5.6 相簿多选（v1.4，20:55，同步自产品文案表）
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `source.selection.summary` | 相簿列表底部栏 | 已选 {n} 个相簿 · 共 {count} 张 |
+| `source.selection.none` | 底部栏，未勾选 | 还没选相簿 |
+| `source.selection.dedup_note` | 底部栏小字 | 同一张照片在几个相簿里只算一次 |
+| `source.selection.summary_pending` | 底部栏，扫描未完成时 | 已选 {n} 个相簿 · 约 {count} 张 |
+| `source.album.done` | 底部主按钮 | 完成 |
+| `quick.source.summary_two` | 确认页，2 个相簿 | 素材：{name1}、{name2} · {count} 张 |
+| `quick.source.summary_many` | 确认页，3 个及以上 | 素材：{name1} 等 {n} 个相簿 · {count} 张 |
+
+### 5.7 「再拼一张」（v1.4，21:20 定稿，与 quick-start-req-v0.4.md 一致，同步自产品文案表）
+
+未保存提示的弹出规则以 hd-export-req-v0.2 B10-4 为准：当前结果没存进作品，或存过的作品改了叠加强度还没存，就弹；导出过不算存过。
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `quick.again` | 预览页、作品查看页的文字按钮 | 再拼一张 |
+| `quick.source.summary` | 确认页，1 个相簿或全部照片 | 素材：{name} · {count} 张 |
+| `quick.source.change` | 确认页 | 换素材 |
+| `quick.unsaved.title` | 未保存确认弹窗 | 这张还没保存，要先存到我的作品吗？ |
+| `quick.unsaved.save` | 弹窗按钮 | 保存 |
+| `quick.unsaved.discard` | 弹窗按钮 | 不保存 |
+| `quick.unsaved.cancel` | 弹窗按钮 | 取消 |
 
 ---
 

@@ -15,10 +15,15 @@ public extension L10nKey {
     static let worksMissing = L10nKey(rawValue: "works.missing")
     static let worksOpenFailed = L10nKey(rawValue: "works.open_failed")
     static let worksDeleteFailed = L10nKey(rawValue: "works.delete_failed")
+    /// 作品列表长按菜单唯一一项（v1.5）。
+    static let worksMenuDelete = L10nKey(rawValue: "works.menu.delete")
+    /// 「存到我的作品」按钮：已存且无改动，不可点（v1.5，B10-5）。
+    static let worksSaved = L10nKey(rawValue: "works.saved")
 
     /// 本模块用到的全部 key（`WorksL10nTests` 断言都在 Localizable.strings 里）。
     static let allWorks: [L10nKey] = [
         worksEntry, worksNavTitle, worksEmpty, worksKeepHint, previewSaveToWorks, previewSavedToWorks, worksSaveFailed,
         worksExport, worksDelete, worksDeleteConfirm, worksDeleteConfirmOK, worksMissing, worksOpenFailed, worksDeleteFailed,
+        worksMenuDelete, worksSaved,
     ]
 }

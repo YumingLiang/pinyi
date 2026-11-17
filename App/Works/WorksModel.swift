@@ -23,9 +23,12 @@ final class WorksModel: ObservableObject {
 
     private func stateChanged(_ s: WorksState) {
         let previousOpened = state.opened?.id
+        let previousPreview = state.opened?.summary.previewURL
         state = s
         if s.opened?.id != previousOpened {
             detailZoom.reset()
+        }
+        if s.opened?.id != previousOpened || s.opened?.summary.previewURL != previousPreview {
             openedPreview = s.opened.flatMap { ImageIOWorkImages.loadImage($0.summary.previewURL, maxPixel: WorkImageLimits.previewLongEdge) }
         }
     }

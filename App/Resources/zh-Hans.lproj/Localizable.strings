@@ -426,56 +426,104 @@
 /* 删除失败（copy_v1.1.md:357） */
 "works.delete_failed" = "没能删除，请再试一次";
 
-/* App 显示名（copy_v1.1.md:365） */
+/* 作品列表长按菜单，唯一一项，红色破坏性样式（v1.5，22:20）（copy_v1.1.md:358） */
+"works.menu.delete" = "删除";
+
+/* 预览页 / 作品查看页「存到我的作品」按钮，已存且无改动时，不可点（v1.5，22:20）（copy_v1.1.md:359） */
+"works.saved" = "已存到我的作品";
+
+/* 相簿列表底部栏（copy_v1.1.md:369） 参数: %1$@=n, %2$@=count */
+"source.selection.summary" = "已选 %1$@ 个相簿 · 共 %2$@ 张";
+
+/* 底部栏，未勾选（copy_v1.1.md:370） */
+"source.selection.none" = "还没选相簿";
+
+/* 底部栏小字（copy_v1.1.md:371） */
+"source.selection.dedup_note" = "同一张照片在几个相簿里只算一次";
+
+/* 底部栏，扫描未完成时（copy_v1.1.md:372） 参数: %1$@=n, %2$@=count */
+"source.selection.summary_pending" = "已选 %1$@ 个相簿 · 约 %2$@ 张";
+
+/* 底部主按钮（copy_v1.1.md:373） */
+"source.album.done" = "完成";
+
+/* 确认页，2 个相簿（copy_v1.1.md:374） 参数: %1$@=name1, %2$@=name2, %3$@=count */
+"quick.source.summary_two" = "素材：%1$@、%2$@ · %3$@ 张";
+
+/* 确认页，3 个及以上（copy_v1.1.md:375） 参数: %1$@=name1, %2$@=n, %3$@=count */
+"quick.source.summary_many" = "素材：%1$@ 等 %2$@ 个相簿 · %3$@ 张";
+
+/* 预览页、作品查看页的文字按钮（copy_v1.1.md:383） */
+"quick.again" = "再拼一张";
+
+/* 确认页，1 个相簿或全部照片（copy_v1.1.md:384） 参数: %1$@=name, %2$@=count */
+"quick.source.summary" = "素材：%1$@ · %2$@ 张";
+
+/* 确认页（copy_v1.1.md:385） */
+"quick.source.change" = "换素材";
+
+/* 未保存确认弹窗（copy_v1.1.md:386） */
+"quick.unsaved.title" = "这张还没保存，要先存到我的作品吗？";
+
+/* 弹窗按钮（copy_v1.1.md:387） */
+"quick.unsaved.save" = "保存";
+
+/* 弹窗按钮（copy_v1.1.md:388） */
+"quick.unsaved.discard" = "不保存";
+
+/* 弹窗按钮（copy_v1.1.md:389） */
+"quick.unsaved.cancel" = "取消";
+
+/* App 显示名（copy_v1.1.md:397） */
 "app.display_name" = "拼忆";
 
-/* 建议 App Store 副标题（copy_v1.1.md:366） */
+/* 建议 App Store 副标题（copy_v1.1.md:398） */
 "app.store_subtitle" = "照片马赛克";
 
-/* 建议展示名（copy_v1.1.md:367） */
+/* 建议展示名（copy_v1.1.md:399） */
 "app.store_full_name" = "拼忆 - 照片马赛克";
 
-/* 取消（copy_v1.1.md:368） */
+/* 取消（copy_v1.1.md:400） */
 "common.cancel" = "取消";
 
-/* 完成（copy_v1.1.md:369） */
+/* 完成（copy_v1.1.md:401） */
 "common.done" = "完成";
 
-/* 返回（copy_v1.1.md:370） */
+/* 返回（copy_v1.1.md:402） */
 "common.back" = "返回";
 
-/* 确定（copy_v1.1.md:371） */
+/* 确定（copy_v1.1.md:403） */
 "common.ok" = "确定";
 
-/* 关闭（copy_v1.1.md:372） */
+/* 关闭（copy_v1.1.md:404） */
 "common.close" = "关闭";
 
-/* 重试（copy_v1.1.md:373） */
+/* 重试（copy_v1.1.md:405） */
 "common.retry" = "再试一次";
 
-/* 设置页标题（copy_v1.1.md:374） */
+/* 设置页标题（copy_v1.1.md:406） */
 "settings.title" = "设置";
 
-/* 内部 TestFlight 设置页入口（编译开关控制；正式版隐藏）（copy_v1.1.md:375） */
+/* 内部 TestFlight 设置页入口（编译开关控制；正式版隐藏）（copy_v1.1.md:407） */
 "settings.performance" = "性能测试";
 
-/* 关于入口（copy_v1.1.md:376） */
+/* 关于入口（copy_v1.1.md:408） */
 "settings.about" = "关于拼忆";
 
-/* 关于页标题（copy_v1.1.md:377） */
+/* 关于页标题（copy_v1.1.md:409） */
 "about.title" = "关于拼忆";
 
-/* 诊断导出说明（copy_v1.1.md:378） */
+/* 诊断导出说明（copy_v1.1.md:410） */
 "diagnostics.export_note" = "仅包含技术诊断信息，不含照片。";
 
-/* 关于正文（copy_v1.1.md:379） */
+/* 关于正文（copy_v1.1.md:411） */
 "about.body" = "拼忆在这台 iPhone 上，用你自己的照片拼出一张新的马赛克图。所有处理都在本地完成，照片不会上传。";
 
-/* 正式版隐藏入口说明（不对用户展示；连点版本号 5 次进入性能测试）（copy_v1.1.md:380） */
+/* 正式版隐藏入口说明（不对用户展示；连点版本号 5 次进入性能测试）（copy_v1.1.md:412） */
 "about.performance_hidden" = "（无文案，手势入口）";
 
-/* 隐私说明入口（copy_v1.1.md:381） */
+/* 隐私说明入口（copy_v1.1.md:413） */
 "privacy.entry" = "照片如何被使用";
 
-/* 隐私说明正文（copy_v1.1.md:382） */
+/* 隐私说明正文（copy_v1.1.md:414） */
 "privacy.body" = "拼忆会读取你允许访问的照片，用于生成马赛克图，也可以在你同意后把成品保存到相册。照片不会上传，也不会用于分析或广告。";

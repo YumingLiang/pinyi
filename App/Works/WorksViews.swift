@@ -21,7 +21,8 @@ struct WorksEntryButton: View {
     }
 }
 
-/// 结果页次按钮「存到我的作品」（需求 B2；导出成功时也会自动存，这里重复点只存一份）。
+/// 结果页次按钮「存到我的作品」（需求 B2 / B10）：导出不自动存，只有点这里才存。
+/// 已存且没改动 → 「已存到我的作品」（`works.saved`）不可点；只改了叠加强度 → 恢复可点，点了更新原作品。
 struct SaveToWorksButton: View {
     @EnvironmentObject var works: WorksModel
     @EnvironmentObject var model: AppModel
@@ -31,26 +32,21 @@ struct SaveToWorksButton: View {
         VStack(spacing: 4) {
             Button { works.saveCurrentResult() } label: {
                 switch status {
-                case .saved: Label { Text(L10nKey.previewSavedToWorks) } icon: { Image(systemName: "checkmark") }
+                case .saved: Label { Text(L10nKey.worksSaved) } icon: { Image(systemName: "checkmark") }
                 case .saving: ProgressView()
                 default: Text(L10nKey.previewSaveToWorks)
                 }
             }
             .buttonStyle(.bordered)
-            .disabled(isDone(status) || !model.canExport)
+            .disabled(!status.canSave || !model.canExport)
             if status == .failed { Text(L10nKey.worksSaveFailed).font(.caption).foregroundStyle(.red) }
-        }
-    }
-
-    private func isDone(_ s: WorkSaveStatus) -> Bool {
-        switch s {
-        case .saved, .saving: return true
-        default: return false
         }
     }
 }
 
-/// 作品列表（需求 B3）：两列方格缩略图、按保存时间倒序、图下日期；空状态；底部常驻 `works.keep_hint`。
+/// 作品列表（需求 B3 / B5）：两列方格缩略图、按保存时间倒序、图下日期；空状态；底部常驻 `works.keep_hint`。
+/// 长按格子 → 系统上下文菜单（预览就是格子本身的缩略图），只有一项「删除」（`works.menu.delete`，红色）→
+/// 与查看页同一个确认框 `works.delete.confirm`，确认按钮直接带作品 id（不靠 `pendingDelete`，见 `WorksController.deleteConfirmed(_:)`）。
 struct WorksListView: View {
     @EnvironmentObject var works: WorksModel
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
@@ -68,6 +64,11 @@ struct WorksListView: View {
                     ForEach(works.summaries) { s in
                         NavigationLink { WorkDetailView(id: s.id) } label: { WorkCell(summary: s) }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) { works.deleteTapped(s.id) } label: {
+                                    Label { Text(L10nKey.worksMenuDelete) } icon: { Image(systemName: "trash") }
+                                }
+                            }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -79,6 +80,16 @@ struct WorksListView: View {
         }
         .navigationTitle(Text(L10nKey.worksNavTitle))
         .task { await works.controller.reload() }
+        // 只在没有打开作品时由列表呈现（查看页在栈上时它自己的确认框负责，避免两个弹窗抢同一个 pendingDelete）
+        .confirmationDialog(Text(L10nKey.worksDeleteConfirm),
+                            isPresented: Binding(get: { works.state.pendingDelete != nil && works.state.opened == nil },
+                                                 set: { if !$0 { works.deleteCancelled() } }),
+                            titleVisibility: .visible,
+                            presenting: works.state.pendingDelete) { id in
+            // id 在呈现时就捕获进按钮：收起弹窗时 set(false) 先清掉 pendingDelete，按钮动作仍拿得到 id
+            Button(role: .destructive) { works.deleteConfirmed(id) } label: { Text(L10nKey.worksDeleteConfirmOK) }
+            Button(role: .cancel) { works.deleteCancelled() } label: { Text(L10nKey.commonCancel) }
+        }
     }
 }
 
@@ -100,7 +111,8 @@ struct WorkCell: View {
             Text(verbatim: WorksModel.dateFormatter.string(from: summary.createdAt))
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .task(id: summary.id) { image = works.thumbnail(for: summary) }
+        // 按预览图文件重新解码：只改叠加强度更新原作品时 id 不变、预览图换了新文件名
+        .task(id: summary.previewURL) { image = works.thumbnail(for: summary) }
     }
 }
 

@@ -28,7 +28,8 @@ public struct WorkID: Hashable, Sendable, Codable, CustomStringConvertible {
     }
 }
 
-/// 作品是怎么进库的（导出成功自动存 / 结果页「存到我的作品」）。
+/// 作品是怎么进库的（结果页「存到我的作品」）。
+/// `autoSavedOnExport` 只为读旧作品保留：AndyL 11-16 22:20 定「导出不自动存」（需求 B10-1），新代码不再写这个值。
 public enum WorkOrigin: String, Sendable, Codable, Hashable {
     case autoSavedOnExport
     case savedManually
@@ -56,8 +57,12 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public var overlayAlpha: Double
     /// 只用于追溯（不用于重算）。
     public var seed: UInt64?
-    /// 布局指纹（布局 JSON 的 FNV-1a 64）：同一张图重复保存只存一份（需求 B2 / B9-2）。
+    /// 作品指纹（`WorkFingerprint`）：「同一张」只存一份（需求 B10 / B9-2）。
+    /// `fingerprintVersion` < `WorkFingerprint.currentVersion` 的旧作品（v1 = 整个布局 JSON 的 FNV，含叠加强度和 seed），
+    /// 由存储层读列表时按新口径补算并原子写回 meta.json（见 `FileWorksStore`）。
     public var fingerprint: String
+    /// 指纹口径版本；旧 meta 没有这个字段 → 1。
+    public var fingerprintVersion: Int
     public var origin: WorkOrigin
     public var previewFile: String
     public var previewPixelWidth: Int
@@ -66,7 +71,8 @@ public struct WorkMeta: Sendable, Hashable, Codable {
 
     public init(formatVersion: Int = WorkMeta.currentFormatVersion, id: WorkID, createdAt: Date, columns: Int, rows: Int,
                 tier: String?, photoCount: Int, missingCount: Int, overlayAlpha: Double, seed: UInt64?, fingerprint: String,
-                origin: WorkOrigin, previewFile: String, previewPixelWidth: Int, previewPixelHeight: Int, targetFile: String?) {
+                origin: WorkOrigin, previewFile: String, previewPixelWidth: Int, previewPixelHeight: Int, targetFile: String?,
+                fingerprintVersion: Int = WorkFingerprint.currentVersion) {
         self.formatVersion = formatVersion
         self.id = id
         self.createdAt = createdAt
@@ -78,6 +84,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         self.overlayAlpha = overlayAlpha
         self.seed = seed
         self.fingerprint = fingerprint
+        self.fingerprintVersion = fingerprintVersion
         self.origin = origin
         self.previewFile = previewFile
         self.previewPixelWidth = previewPixelWidth
@@ -87,7 +94,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case formatVersion, id, createdAt, columns, rows, tier, photoCount, missingCount, overlayAlpha, seed, fingerprint,
-             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile
+             origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, fingerprintVersion
     }
 
     public init(from decoder: any Decoder) throws {
@@ -103,11 +110,104 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         overlayAlpha = try c.decodeIfPresent(Double.self, forKey: .overlayAlpha) ?? 0
         seed = try c.decodeIfPresent(UInt64.self, forKey: .seed)
         fingerprint = try c.decodeIfPresent(String.self, forKey: .fingerprint) ?? ""
+        fingerprintVersion = try c.decodeIfPresent(Int.self, forKey: .fingerprintVersion) ?? 1
         origin = try c.decodeIfPresent(WorkOrigin.self, forKey: .origin) ?? .savedManually
         previewFile = try c.decodeIfPresent(String.self, forKey: .previewFile) ?? "preview.jpg"
         previewPixelWidth = try c.decodeIfPresent(Int.self, forKey: .previewPixelWidth) ?? 0
         previewPixelHeight = try c.decodeIfPresent(Int.self, forKey: .previewPixelHeight) ?? 0
         targetFile = try c.decodeIfPresent(String.self, forKey: .targetFile)
+    }
+}
+
+/// 「同一张作品」的指纹（AndyL 11-16 22:20 定，需求 B10-2/3）：只看**格子分配**（每格照片 ID + 裁剪）、
+/// **cols/rows** 和 **targetCrop**。不含叠加强度、seed、密度名、targetSize：
+/// - 只改叠加强度 → 指纹相同 → 更新原作品（不另存）；
+/// - 不同 seed 但格子分配恰好相同 → 同一张；
+/// - 「换一种拼法」/ 重新生成 / 改密度、裁剪、目标图、素材 → 格子分配（或网格、裁剪区）不同 → 新的一张。
+///
+/// 实现：对规范字节流做 FNV-1a 64（不经 JSON，1 万格也只要约 1 ms；Linux / iOS 一致）。
+/// 浮点按 1e-6 量化成整数，JSON 往返的末位差异不影响指纹。
+public enum WorkFingerprint {
+    /// v1 = 整个布局 JSON（含 params）的 FNV；v2 = 本口径。
+    public static let currentVersion = 2
+
+    public static func of(_ layout: MosaicLayout) -> String {
+        var h = FNV1a64()
+        h.add(Array("pinyi.work.v2".utf8))
+        h.add(Int64(layout.cols))
+        h.add(Int64(layout.rows))
+        h.add(layout.targetCrop)
+        h.add(Int64(layout.cellAssignments.count))
+        for cell in layout.cellAssignments {
+            h.add(Array(cell.localIdentifier.utf8))
+            h.add([0])
+            h.add(cell.crop)
+        }
+        return h.hex
+    }
+
+    /// 叠加强度是否算「没改」（滑杆值经 JSON 往返，按 1e-6 比较）。
+    public static func sameOverlay(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-6 }
+}
+
+/// FNV-1a 64 累加器。
+struct FNV1a64 {
+    private(set) var value: UInt64 = 0xcbf2_9ce4_8422_2325
+
+    mutating func add(_ bytes: [UInt8]) {
+        for b in bytes {
+            value ^= UInt64(b)
+            value = value &* 0x0000_0100_0000_01b3
+        }
+    }
+
+    mutating func add(_ v: Int64) {
+        var x = UInt64(bitPattern: v)
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(8)
+        for _ in 0..<8 {
+            bytes.append(UInt8(truncatingIfNeeded: x))
+            x >>= 8
+        }
+        add(bytes)
+    }
+
+    mutating func add(_ r: CropRect) {
+        add(Self.quantize(r.x))
+        add(Self.quantize(r.y))
+        add(Self.quantize(r.width))
+        add(Self.quantize(r.height))
+    }
+
+    static func quantize(_ v: Double) -> Int64 {
+        guard v.isFinite else { return Int64.min }
+        let scaled: Double = (v * 1_000_000).rounded()
+        let limit: Double = 9.0e18
+        return Int64(max(-limit, min(limit, scaled)))
+    }
+
+    var hex: String {
+        let s = String(value, radix: 16)
+        return String(repeating: "0", count: 16 - s.count) + s
+    }
+}
+
+/// 保存结果。
+public struct WorkSaveResult: Sendable {
+    public enum Outcome: Sendable, Hashable {
+        /// 新存了一份。
+        case inserted
+        /// 已有同一张（指纹相同），只更新了叠加强度和预览图；日期、列表位置、布局不变。
+        case updatedOverlay
+        /// 已有同一张且叠加强度也相同：什么都没写。
+        case unchanged
+    }
+    public var summary: WorkSummary
+    public var outcome: Outcome
+    public var inserted: Bool { outcome == .inserted }
+    public init(summary: WorkSummary, outcome: Outcome) {
+        self.summary = summary
+        self.outcome = outcome
     }
 }
 

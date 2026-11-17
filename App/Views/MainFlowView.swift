@@ -227,7 +227,7 @@ struct ResultView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!model.canExport)
-            SaveToWorksButton()   // 需求 B2：次按钮「存到我的作品」（导出成功也会自动存一份）
+            SaveToWorksButton()   // 需求 B2 / B10：次按钮「存到我的作品」（导出不自动存）
         }
         .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))

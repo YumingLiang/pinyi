@@ -179,15 +179,18 @@ final class QAWorksDeleteRegressionTests: XCTestCase {
         h.controller.stop()
     }
 
-    // MARK: 4c 删除后，同一结果再导出成功（自动存）会重新存一份 —— 记录现状（这是“重新保存”，不是“写回”）
+    // MARK: 4c 删除后，同一结果再导出成功不会存（B10-1 导出不自动存）；再点「存到我的作品」是新 id 的新作品，不是旧目录复活
+    // （原 testExportAfterDeleteSavesAgainAsNewWork：按 AndyL 11-16 22:20 新规则改名改断言）
 
-    func testExportAfterDeleteSavesAgainAsNewWork() async throws {
+    func testExportAfterDeleteDoesNotSaveManualSaveAddsNewWork() async throws {
         let h = H()
         await h.controller.start()
         let a = try await h.saveNew(["a", "b", "c"])
         await h.delete(a)
         XCTAssertEqual(h.controller.state.saveStatus, .idle, "删掉后结果页按钮回到可存")
         await h.controller.exportSucceeded(layout: try XCTUnwrap(h.result.get().layout.map { var l = $0; l.params.overlayAlpha = 0.15; return l }))
+        XCTAssertEqual(h.controller.state.count, 0, "导出不自动存")
+        await h.controller.saveCurrentResultTapped()
         let ids = h.controller.state.summaries.map(\.id)
         XCTAssertEqual(ids.count, 1)
         XCTAssertNotEqual(ids.first, a, "是新 id 的新作品，不是旧目录复活")
@@ -262,40 +265,52 @@ final class QAWorksDeleteRegressionTests: XCTestCase {
         XCTAssertEqual(n, 1)
     }
 
-    /// 手动存 → 再导出同一结果（自动存）→ 仍一份。
-    func testSaveThenExportSameResultOneWork() async throws {
+    /// 手动存 → 再导出同一结果 → 仍一份（导出不自动存，B10-1）；按钮仍是「已存」。
+    /// （原 testSaveThenExportSameResultOneWork：新规则下改名）
+    func testSaveThenExportSameResultStillOneWork() async throws {
         let h = H()
         await h.controller.start()
         let a = try await h.saveNew(["a", "b", "c"])
         var l = try XCTUnwrap(h.result.get().layout); l.params.overlayAlpha = h.result.get().alpha
         await h.controller.exportSucceeded(layout: l)
         XCTAssertEqual(h.controller.state.summaries.map(\.id), [a])
+        XCTAssertEqual(h.controller.state.saveStatus, .saved(a))
         h.controller.stop()
     }
 
-    /// 现状记录（绿 = 现状如此）：格子分配完全相同、只有叠加强度不同 → 存成两份「几乎一样」的作品。
-    /// 路径：结果页存 →「调整」改叠加滑杆（MainFlowView.swift:155）→ 回来导出（自动存）。指纹含 params.overlayAlpha。
-    func testCharacterize_SameCellsDifferentAlphaBecomesTwoWorks() async throws {
+    // MARK: B4–B6 查重口径（AndyL 11-16 22:20 定，需求 B10；原 characterize 现状记录按新规则改）
+
+    /// B4：结果页存 →「调整」改叠加滑杆 → 导出：不新增；按钮变回可点（.overlayChanged）→ 再存：仍一份，原作品叠加强度更新。
+    func testRule_SameCellsDifferentAlphaUpdatesOneWork() async throws {
         let h = H()
         await h.controller.start()
-        _ = try await h.saveNew(["a", "b", "c"])
+        let a = try await h.saveNew(["a", "b", "c"])
         h.result.update { $0.alpha = 0.25 }                       // 不换结果，revision 不变
+        h.controller.resultContextDidChange()
+        XCTAssertEqual(h.controller.state.saveStatus, .overlayChanged(a))
         var l = try XCTUnwrap(h.result.get().layout); l.params.overlayAlpha = 0.25
         await h.controller.exportSucceeded(layout: l)
-        XCTAssertEqual(h.controller.state.count, 2, "现状：两份；产品若要求“同一张图只一份”，此断言应改为 1")
+        XCTAssertEqual(h.controller.state.count, 1, "导出不自动存")
+        await h.controller.saveCurrentResultTapped()
+        XCTAssertEqual(h.controller.state.summaries.map(\.id), [a], "只改叠加强度算同一张")
+        XCTAssertEqual(h.controller.state.summaries.first?.meta.overlayAlpha, 0.25)
+        XCTAssertEqual(h.controller.state.saveStatus, .saved(a))
     }
 
-    /// 现状记录：格子分配完全相同、只有 seed 不同（重新生成 / 换一种拼法恰好同分配）→ 两份。
-    func testCharacterize_SameCellsDifferentSeedBecomesTwoWorks() async throws {
+    /// B5：格子分配完全相同、只有 seed 不同 → 同一张（指纹不含 seed）。
+    func testRule_SameCellsDifferentSeedIsSameWork() async throws {
         let h = H()
         await h.controller.start()
-        _ = try await h.saveNew(["a", "b", "c"], seed: 7)
-        _ = try await h.saveNew(["a", "b", "c"], seed: 8)
-        XCTAssertEqual(h.controller.state.count, 2, "现状：指纹含 seed，同图不同 seed 存两份")
+        let a = try await h.saveNew(["a", "b", "c"], seed: 7)
+        try h.newResult(["a", "b", "c"], seed: 8)
+        XCTAssertEqual(h.controller.state.saveStatus, .saved(a), "新结果和已存作品是同一张：直接显示已存")
+        let b = try await h.saveNew(["a", "b", "c"], seed: 8)
+        XCTAssertEqual(b, a)
+        XCTAssertEqual(h.controller.state.count, 1)
     }
 
-    /// 现状记录：「换一种拼法」后（新 revision）按钮回到可存，同一目标图再存 → 两份（预期行为，截图最可能的来源之一）。
-    func testCharacterize_ReshuffleThenSaveBecomesTwoWorks() async throws {
+    /// B6：「换一种拼法」后（新 revision）按钮回到可存，再存 → 两份（B10-2）。
+    func testRule_ReshuffleThenSaveBecomesTwoWorks() async throws {
         let h = H()
         await h.controller.start()
         _ = try await h.saveNew(["a", "b", "c"])

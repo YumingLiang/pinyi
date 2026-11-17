@@ -62,30 +62,34 @@ final class WorksControllerTests: XCTestCase {
         h.controller.stop()
     }
 
-    /// F1-3：导出成功自动存（经 `AppDependencies.onExportSucceeded` → 中继）；同一张导出两次只存一份；
-    /// 结果页手动存过再导出也不重复。
-    func testAutoSaveOnExportSucceeded() async throws {
+    /// B10-1（AndyL 11-16 22:20，推翻 F1-3）：导出成功**不**自动存；只有点「存到我的作品」才进库。
+    /// 手动存过再导出同一张也不会多出一份，也不重画预览。
+    func testExportSucceededDoesNotSave() async throws {
         let h = Harness()
         await h.controller.start()
         try h.newResult(["a", "b", "c"])
         let layout = try XCTUnwrap(h.result.get().layout)
 
         await h.relay.handler(layout, URL(fileURLWithPath: "/tmp/export/x.jpg"))
-        await waitForWorks(h.controller, "自动保存") { $0.summaries.count == 1 }
-        if case .saved = h.controller.state.saveStatus {} else { XCTFail("结果页按钮应显示已存") }
-        XCTAssertEqual(h.controller.state.summaries.first?.meta.origin, .autoSavedOnExport)
-        XCTAssertEqual(h.controller.state.summaries.first?.meta.tier, "uhd")
+        await h.controller.exportSucceeded(layout: layout)   // 等中继里的那次也处理完（主线程串行）
+        var count = await h.store.list().count
+        XCTAssertEqual(count, 0, "导出不自动存")
+        XCTAssertEqual(h.controller.state.saveStatus, .idle, "导出过不算存过，按钮仍可点")
+        XCTAssertEqual(h.images.state.get().previews, 0)
 
+        await h.controller.saveCurrentResultTapped()
+        XCTAssertEqual(h.controller.state.summaries.first?.meta.origin, .savedManually)
         await h.relay.handler(layout, URL(fileURLWithPath: "/tmp/export/y.jpg"))
-        await h.controller.exportSucceeded(layout: layout)   // 等中继里的第二次也处理完（actor 串行）
-        let count = await h.store.list().count
-        XCTAssertEqual(count, 1, "同一张导出多次只存一份")
+        await h.controller.exportSucceeded(layout: layout)
+        count = await h.store.list().count
+        XCTAssertEqual(count, 1)
         XCTAssertEqual(h.images.state.get().previews, 1)
+        if case .saved = h.controller.state.saveStatus {} else { XCTFail("存过后导出，按钮仍是已存") }
         h.controller.stop()
     }
 
-    /// 换一种拼法后的新结果，只有在导出成功 / 手动保存时才进库。
-    func testRegenerateDoesNotSaveButExportOfNewResultDoes() async throws {
+    /// 换一种拼法 / 导出都不进库；只有手动保存才新增，新的那张在最前（B10-1/2）。
+    func testRegenerateAndExportDoNotSaveOnlyManualSaveAdds() async throws {
         let h = Harness()
         await h.controller.start()
         try h.newResult(["a", "b", "c"])
@@ -96,9 +100,11 @@ final class WorksControllerTests: XCTestCase {
         XCTAssertEqual(count, 1)
         await h.controller.exportSucceeded(layout: try XCTUnwrap(h.result.get().layout))
         count = await h.store.list().count
+        XCTAssertEqual(count, 1, "导出不自动存")
+        await h.controller.saveCurrentResultTapped()
+        count = await h.store.list().count
         XCTAssertEqual(count, 2)
-        XCTAssertEqual(h.controller.state.summaries.first?.meta.fingerprint,
-                       FileWorksStore.fingerprint(try FileWorksStore.encoder().encode(sampleLayout(["c", "a", "b"]))),
+        XCTAssertEqual(h.controller.state.summaries.first?.meta.fingerprint, WorkFingerprint.of(sampleLayout(["c", "a", "b"])),
                        "新的在最前")
         h.controller.stop()
     }
@@ -150,7 +156,7 @@ final class WorksControllerTests: XCTestCase {
         h.controller.stop()
     }
 
-    /// 从作品再导出成功 → 自动保存命中查重，不会多出一份。
+    /// 从作品再导出成功 → 不存（导出不自动存），不会多出一份，也不改结果页按钮。
     func testExportFromWorkDoesNotDuplicate() async throws {
         let h = Harness()
         await h.controller.start()
