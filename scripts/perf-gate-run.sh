@@ -53,4 +53,22 @@ json.dump(m, open(sys.argv[1], "w"), ensure_ascii=False)
 PY
 done
 diag after
+
+# ⚠️ 临时自检开关（只为在真 runner 上演示重测路径，集成前删除）：
+# PERF_GATE_SELFTEST_INFLATE="<metric>:<倍数>"，PERF_GATE_SELFTEST_PASSES="1" 或 "1,2"。
+if [ -n "${PERF_GATE_SELFTEST_INFLATE:-}" ] && [[ ",${PERF_GATE_SELFTEST_PASSES:-1}," == *",$pass,"* ]]; then
+  echo "::warning::perf-gate 自检：第 $pass 次把 ${PERF_GATE_SELFTEST_INFLATE} 人为放大（演示用）"
+  python3 - "$out" "$PERF_GATE_SELFTEST_INFLATE" <<'PY'
+import json, sys
+path, spec = sys.argv[1], sys.argv[2]
+metric, factor = spec.rsplit(":", 1)
+lines = []
+for line in open(path):
+    rec = json.loads(line)
+    if rec.get("metric") == metric:
+        rec["samples"] = [x * float(factor) for x in rec["samples"]]
+    lines.append(json.dumps(rec, ensure_ascii=False))
+open(path, "w").write("\n".join(lines) + "\n")
+PY
+fi
 cat "$out"

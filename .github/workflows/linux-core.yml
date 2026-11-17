@@ -5,7 +5,7 @@ name: linux-core
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, ci/perf-gate-retry]  # 临时：PR 前删除
   workflow_dispatch:
 
 concurrency:
@@ -147,6 +147,9 @@ jobs:
     env:
       MOSAIC_PERF_GATE: "1"
       MOSAIC_PERF_REPEAT: "5"
+      # 临时自检：第 1 次把 gen_coarse ×2，演示重测路径；PR 前删除
+      PERF_GATE_SELFTEST_INFLATE: "runner_gen_coarse_1536x1152_2k:2"
+      PERF_GATE_SELFTEST_PASSES: "1"
     steps:
       - uses: actions/checkout@v4
 
