@@ -35,6 +35,7 @@ final class HiddenExportTests: XCTestCase {
         }
 
         func markUnavailableLocal(_ id: String) { state.update { $0.unavailableLocal.insert(id) } }
+        func clearRequests() { state.update { $0.requests.removeAll(keepingCapacity: true) } }
 
         var requestIDs: [String] {
             state.get().requests.map(\.0)
@@ -212,6 +213,63 @@ final class HiddenExportTests: XCTestCase {
         XCTAssertEqual(fills.blank, 0)
         XCTAssertTrue(Self.contains(pb, Self.otherB), "可见但高清失败的格子应画出 128px 颜色")
         XCTAssertTrue(thumbs.requestSizes.contains(where: { $0.0 == cloudID && $0.1 == 128 }))
+    }
+
+    /// 「完成」路径（只改叠加强度、不重新生成）：按原格子重画底图再导出。
+    /// 重画走 `ThumbnailPreviewPlan` + `.scanDisplay`（与 `MosaicPreviewRenderer.thumbnails` 相同）；
+    /// 导出走 `ExportFillStats.decision`。隐藏格必须白、整图无隐藏色，导出不得再发 128px。
+    func testAdjustDoneRedrawAndExportHiddenCellsAreWhite() async throws {
+        let columns = 4, rows = 3
+        let hiddenID = "hidden-magenta"
+        var ids: [String?] = []
+        ids.reserveCapacity(columns * rows)
+        for i in 0..<(columns * rows) {
+            if i == 1 || i == 7 { ids.append(hiddenID) }
+            else { ids.append(i % 2 == 0 ? "a" : "b") }
+        }
+        let thumbs = FakePhotoFetchThumbs(library: [
+            hiddenID: Self.hiddenRGB, "a": Self.otherA, "b": Self.otherB,
+        ])
+        thumbs.hide(hiddenID)
+
+        let cp = 32
+        let w = columns * cp, h = rows * cp
+        var bytes = [UInt8](repeating: 255, count: w * h * 4)
+        let previewPlan = ThumbnailPreviewPlan(cellAssetIDs: ids, maxConcurrent: 8)
+        let drawn = try await previewPlan.run(
+            fetch: { id in await thumbs.thumbnail(for: id, request: .scanDisplay) }
+        ) { group, pb in
+            let color = pb.rgb(x: 0, y: 0)
+            for cell in group.cells {
+                let col = cell % columns, row = cell / columns
+                let x0 = col * cp, y0 = row * cp
+                for y in 0..<cp {
+                    var o = ((y0 + y) * w + x0) * 4
+                    for _ in 0..<cp {
+                        bytes[o] = color.0; bytes[o + 1] = color.1; bytes[o + 2] = color.2; bytes[o + 3] = 255
+                        o += 4
+                    }
+                }
+            }
+        }
+        let preview = try PixelBuffer(width: w, height: h, bytes: bytes)
+        XCTAssertEqual(drawn, 2, "ThumbnailPreviewPlan 返回画出的素材张数：a/b 各一张，隐藏照片跳过")
+        XCTAssertTrue(Self.cellIsWhite(preview, index: 1, columns: columns, cellPixels: cp))
+        XCTAssertTrue(Self.cellIsWhite(preview, index: 7, columns: columns, cellPixels: cp))
+        XCTAssertFalse(Self.contains(preview, Self.hiddenRGB), "重画底图不得出现隐藏色")
+        XCTAssertTrue(Self.contains(preview, Self.otherA))
+
+        thumbs.clearRequests()
+        thumbs.leakScanDisplayForHidden = true
+        let (pb, plan, fills) = await Self.exportCanvas(ids: ids, columns: columns, rows: rows, tier: .uhd, thumbs: thumbs)
+        XCTAssertEqual(fills.blank, 2)
+        XCTAssertEqual(fills.blurryFallback, 0, "「完成」后导出不得退回 128px")
+        XCTAssertEqual(fills.highQuality, columns * rows - 2)
+        XCTAssertTrue(Self.cellIsWhite(pb, index: 1, columns: columns, cellPixels: plan.cellPixels))
+        XCTAssertTrue(Self.cellIsWhite(pb, index: 7, columns: columns, cellPixels: plan.cellPixels))
+        XCTAssertFalse(Self.contains(pb, Self.hiddenRGB))
+        XCTAssertFalse(thumbs.requestSizes.contains(where: { $0.0 == hiddenID && $0.1 == 128 }),
+                       "导出在 missing 后不得再发 128px")
     }
 
     /// 源码守卫：assets() 取回后滤 isHidden；导出按 decision(afterHighQuality:) 处理 missing。

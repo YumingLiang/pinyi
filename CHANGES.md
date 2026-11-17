@@ -2,11 +2,12 @@
 
 ## feat/preview-detail-layer：隐私加固（QA 复验 ed6cce7）
 
-已 merge feat/app-layer `ed58064`（#16 删除修复）。隐藏照片任何地方都不能露出，不能只靠 PhotoFetch 取不到。
+已 merge feat/app-layer `72d6109`（#14 perf gate；此前已含 #16）。隐藏照片任何地方都不能露出，不能只靠 PhotoFetch 取不到。
 
 - **按 ID 取图双保险**：新增 `PhotoFetch.visibleImages(withLocalIdentifiers:)`，在 `includeHiddenAssets = false` 之后再按 `isHidden` 过滤（`VisibleAssetFilter.accepting`，纯函数）。`PhotoKitThumbnails.assets()`、网格缩略图缓存、目标图、分辨率探测、作品存在检查都改走这里。网格缩略图读缓存时再看一遍 `isHidden`。
 - **导出不走 128px 泄漏兜底**：新增 `ThumbnailResult.missing`（PhotoFetch 取不到或已隐藏）。`ExportFillStats.decision(afterHighQuality:)`：`.missing` 直接白格子，不请求 `.scanDisplay`；`.unavailableLocal` / `.failed`（例如 iCloud 原图未下载、解码失败）仍试 128px。`LiveMosaicExporter` 和清晰层取图都用这一决策。
-- **测试**：`ExportFillStatsTests` 增补决策 / 过滤；新增 `HiddenExportTests`（三档隐藏格全白、泄漏路径也不再画糊格子、可见但高清失败仍走 128px、源码守卫）。`AppTests/PhotoFetchTests.testVisibleImagesAndExportSourceGuards` 在模拟器 CI 再守一层。
+- **「完成」路径**（只改叠加强度、不重新生成）：重画底图走 `ThumbnailPreviewPlan` + `.scanDisplay`（与 `MosaicPreviewRenderer.thumbnails` 相同），隐藏照片 `thumbnail` 返回 `.missing`，白底保留；导出仍走 `decision(afterHighQuality:)`，不退回 128px。`HiddenExportTests.testAdjustDoneRedrawAndExportHiddenCellsAreWhite` 覆盖此路径。本分支没有「完成」按钮本身（在 #17）。
+- **测试**：`ExportFillStatsTests` 增补决策 / 过滤；新增 `HiddenExportTests`（三档隐藏格全白、泄漏路径也不再画糊格子、可见但高清失败仍走 128px、「完成」重画+导出、源码守卫）。`AppTests/PhotoFetchTests.testVisibleImagesAndExportSourceGuards` 在模拟器 CI 再守一层。
 - **未改**：结果页已画好的底图 / 清晰层缓存，隐藏后若人还停在结果页仍可能显示旧图；离开结果页或换拼法才会 `reset`。这不是本补丁引入的，留给相册变化监听。
 
 ## feat/preview-detail-layer：结果页预览清晰层（正式修复放大发糊；架构师 21:02 方案）
