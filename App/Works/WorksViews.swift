@@ -21,7 +21,9 @@ struct WorksEntryButton: View {
     }
 }
 
-/// 结果页次按钮「存到我的作品」（需求 B2；导出成功时也会自动存，这里重复点只存一份）。
+/// 结果页次按钮「存到我的作品」（需求 B2 / B10）：导出不自动存，只有点这里才存。
+/// 已存且没改动 → 「已存到我的作品」（`preview.saved_to_works`）不可点；只改了叠加强度 →「更新这张作品」（`works.update`），
+/// 点了直接更新原作品、不弹确认，成功后约 2 秒的轻提示「已更新这张作品」（`works.updated`，控制器自动收起）。
 struct SaveToWorksButton: View {
     @EnvironmentObject var works: WorksModel
     @EnvironmentObject var model: AppModel
@@ -31,28 +33,29 @@ struct SaveToWorksButton: View {
         VStack(spacing: 4) {
             Button { works.saveCurrentResult() } label: {
                 switch status {
-                case .saved: Label { Text(L10nKey.previewSavedToWorks) } icon: { Image(systemName: "checkmark") }
                 case .saving: ProgressView()
-                default: Text(L10nKey.previewSaveToWorks)
+                case .saved: Label { Text(works.state.saveButtonKey) } icon: { Image(systemName: "checkmark") }
+                default: Text(works.state.saveButtonKey)
                 }
             }
             .buttonStyle(.bordered)
-            .disabled(isDone(status) || !model.canExport)
+            .disabled(!works.state.isSaveButtonEnabled || !model.canExport)
             if status == .failed { Text(L10nKey.worksSaveFailed).font(.caption).foregroundStyle(.red) }
-        }
-    }
-
-    private func isDone(_ s: WorkSaveStatus) -> Bool {
-        switch s {
-        case .saved, .saving: return true
-        default: return false
+            if let toast = works.state.toast {
+                Text(toast).font(.caption).foregroundStyle(.secondary).transition(.opacity)
+            }
         }
     }
 }
 
-/// 作品列表（需求 B3）：两列方格缩略图、按保存时间倒序、图下日期；空状态；底部常驻 `works.keep_hint`。
+/// 作品列表（需求 B3 / B5）：两列方格缩略图、按保存时间倒序、图下日期；空状态；底部常驻 `works.keep_hint`。
+/// 长按格子 → 系统上下文菜单（预览就是格子本身的缩略图），只有一项「删除」（复用 `works.delete`，红色）→
+/// 与查看页同一个确认框 `works.delete.confirm`。长按时把 id 存进视图状态 `deleteCandidate`，确认按钮带这个 id 调
+/// `deleteConfirmed(id)`，不在按钮里现读 `pendingDelete`（弹窗收起时它会先被 `deleteCancelled()` 清掉）。
 struct WorksListView: View {
     @EnvironmentObject var works: WorksModel
+    /// 长按「删除」选中的作品（列表自己的确认框用）。
+    @State private var deleteCandidate: WorkID?
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
     var body: some View {
@@ -68,6 +71,14 @@ struct WorksListView: View {
                     ForEach(works.summaries) { s in
                         NavigationLink { WorkDetailView(id: s.id) } label: { WorkCell(summary: s) }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    deleteCandidate = s.id
+                                    works.deleteTapped(s.id)
+                                } label: {
+                                    Label { Text(L10nKey.worksDelete) } icon: { Image(systemName: "trash") }
+                                }
+                            }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -79,6 +90,16 @@ struct WorksListView: View {
         }
         .navigationTitle(Text(L10nKey.worksNavTitle))
         .task { await works.controller.reload() }
+        // 列表自己的确认框只看 deleteCandidate（查看页的确认框看 pendingDelete == 它的 id，两边不互相触发）
+        .confirmationDialog(Text(L10nKey.worksDeleteConfirm),
+                            isPresented: Binding(get: { deleteCandidate != nil },
+                                                 set: { if !$0 { deleteCandidate = nil; works.deleteCancelled() } }),
+                            titleVisibility: .visible,
+                            presenting: deleteCandidate) { id in
+            // id 是长按时存下的快照：收起弹窗时 set(false) 先清状态，按钮动作仍带着这个 id
+            Button(role: .destructive) { works.deleteConfirmed(id) } label: { Text(L10nKey.worksDeleteConfirmOK) }
+            Button(role: .cancel) { works.deleteCancelled() } label: { Text(L10nKey.commonCancel) }
+        }
     }
 }
 
@@ -100,7 +121,8 @@ struct WorkCell: View {
             Text(verbatim: WorksModel.dateFormatter.string(from: summary.createdAt))
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .task(id: summary.id) { image = works.thumbnail(for: summary) }
+        // 按 summary 整体（含 meta 的叠加强度 / updatedAt）重新解码：只改叠加强度更新原作品时 id 和预览文件名都不变
+        .task(id: summary) { image = works.thumbnail(for: summary) }
     }
 }
 

@@ -157,7 +157,11 @@ struct SettingsStepView: View {
                 } minimumValueLabel: { Text(L10nKey.overlayLeft).font(.caption2) } maximumValueLabel: { Text(L10nKey.overlayRight).font(.caption2) }
             }
             Section(footer: Text(L10nKey.generatePrivacyHint)) {
-                Button { model.generateTapped() } label: { Text(L10nKey.generateCTA).frame(maxWidth: .infinity) }
+                // B10.14：「再调一调」进来只动了叠加强度 →「完成」回原结果（不重新生成）；否则「开始拼图」
+                let action = model.settingsPrimaryAction
+                Button {
+                    if action == .done { model.adjustDoneTapped() } else { model.generateTapped() }
+                } label: { Text(action == .done ? L10nKey.commonDone : L10nKey.generateCTA).frame(maxWidth: .infinity) }
                     .buttonStyle(.borderedProminent).controlSize(.large)
             }
         }
@@ -236,7 +240,7 @@ struct ResultView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!model.canExport)
-            SaveToWorksButton()   // 需求 B2：次按钮「存到我的作品」（导出成功也会自动存一份）
+            SaveToWorksButton()   // 需求 B2 / B10：次按钮「存到我的作品」（导出不自动存）
         }
         .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))
