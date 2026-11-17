@@ -34,6 +34,19 @@ ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --f
 | `overlay_blend_2048x1536` | A‑19 原图叠加 CPU 路径整幅混合（导出像素管线代理；iOS 实际用 CG） |
 | `calib_cpu_scalar` | 标定，不判定 |
 
+## App 层端到端门禁指标（`Packages/MosaicAppCore/Tests/MosaicAppCoreTests/GenPerf/GenerationRunnerE2EPerfGateTests.swift`，QA）
+
+固定素材集 v1：2000 张 fake PhotoKit 素材（12% 本机只有低清、8% 仅 iCloud、2% 请求失败），目标图 1536×1152，生产接线（`GenerationRunner.production`）。
+
+| 指标 | 内容 |
+|---|---|
+| `runner_gen_{coarse,medium,fine}_1536x1152_2k` | 首次生成：每个样本新建 runner，计 `GenerationRunner.run` 全链路（快照 → 匹配 → 分配 → 产物） |
+| `runner_reshuffle_{coarse,medium,fine}_1536x1152_2k` | 「换一种拼法」：同一 runner 先 run 一次（不计），再计 reshuffle |
+| `runner_preview_fetch_medium_1536x1152_2k` | 结果页预览取缩略图（`ThumbnailPreviewPlan` 128 px，fake PhotoKit） |
+| `runner_slowpath_icloud_medium_1536x1152_2k` | 慢 PhotoKit：探测 5 ms / iCloud-only 60 ms，计 run + reshuffle。正确实现不在生成路径上探测（≈ 60 ms，主要是预览取图），b6a1da7 ≈ 2.1 s |
+
+确定性计数（整图匹配/分配遍数、重配轮数、PhotoKit 探测与请求次数、每张最多请求 1 次、不允许网络）在同目录 `GenPerfRegressionTests.swift`，**不需要 `MOSAIC_PERF_GATE`**，随 `Test MosaicAppCore` 普通单测阻断；基线 `perf/gen-perf-counts.json`（66dc745）。
+
 PhotoKit 解码、CoreGraphics 渲染、ImageIO 编码在 Linux 上跑不了，不在本门禁内（需 macOS / 真机另测）。
 
 ## 新增门禁用例（QA 端到端用例接入方式）

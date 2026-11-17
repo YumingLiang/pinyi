@@ -65,6 +65,7 @@ jobs:
 
   # 架构师 G-1：ThreadSanitizer。每个 PR 必跑、阻断合并（需在分支保护里把本 job 设为 required check）。
   # 跳过性能基准（PerformanceTests / IndexBenchTests：TSan 下慢 5–15 倍且只测耗时，不增加竞态覆盖）。
+  # GenPerfSlowPathTests 也跳过：内含 30 s / 60 s 挂起检测，TSan 放慢后会误报；其计数断言在上面的普通 swift test 里阻断。
   # macOS 上的 TSan 不在这里（由运维另行评估，手动触发）。
   tsan:
     name: ThreadSanitizer (swift test --sanitize=thread, Linux)
@@ -90,7 +91,7 @@ jobs:
             "$SWIFT_IMAGE" bash -euo pipefail -c '
               swift --version
               (cd Packages/MosaicCore && swift test --sanitize=thread --skip PerformanceTests)
-              (cd Packages/MosaicAppCore && swift test --sanitize=thread --skip IndexBenchTests)
+              (cd Packages/MosaicAppCore && swift test --sanitize=thread --skip '\''IndexBenchTests|GenPerfSlowPathTests'\'')
             '
 
   # QA A-21：全规模性能基线（10,800 格 × 5 万合成候选，release），单独 job，不拖慢上面的门禁。
