@@ -9,6 +9,7 @@ struct InternalToolsView: View {
         List {
             NavigationLink { PerfView() } label: { Text(verbatim: "性能计时") }
             NavigationLink { TestAlbumView() } label: { Text(verbatim: "「\(TestAlbumPolicy.albumTitle)」相簿") }
+            NavigationLink { FakePhotoGridView() } label: { Text(verbatim: "照片网格（假数据 5 万张）") }
             // 导出 8000 档（决定 12：仅摸底）在导出页里同样用 #if INTERNAL_TOOLS 守卫（feat/render-export）。
         }
         .navigationTitle(Text(L10nKey.settingsPerformance))
