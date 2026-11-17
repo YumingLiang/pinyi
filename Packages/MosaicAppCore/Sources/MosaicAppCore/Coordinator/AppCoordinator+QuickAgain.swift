@@ -41,6 +41,11 @@ extension AppCoordinator {
     /// 预览页「再拼一张」。生成中 / 导出中 / 不在结果页时忽略（按钮本来也是禁用的）。
     public func startNewMosaicTapped() {
         guard state.canStartNewMosaic else { return }
+        nextQuickStartOrigin = .preview
+        startNewFromResult()
+    }
+
+    private func startNewFromResult() {
         if isCurrentResultKept {
             beginQuickAgain()
         } else {
@@ -55,14 +60,18 @@ extension AppCoordinator {
     ///   没存 / 存过但只改了强度 → 弹提示（`.startNewFromAdjust`，标题同样区分 update_title），继续 = 去选图。
     /// - 其他（没有结果）：直接去选目标图，选好进确认页（素材沿用）。
     /// 生成中 / 导出中 / 提示弹着或保存中忽略。
-    public func startNewFromWorkTapped() {
+    /// - Parameter workID: 发起的作品（选图提示「取消」时回到这张作品的查看页）。
+    public func startNewFromWorkTapped(workID: WorkID? = nil) {
         guard !state.isGenerating, !state.export.isBusy, state.unsavedPrompt == nil, !state.isSavingBeforeLeaving,
               !state.flow.isQuickAgain else { return }
         if state.canStartNewMosaic {
-            startNewMosaicTapped()
+            nextQuickStartOrigin = workID.map { .work(id: $0) } ?? .preview
+            startNewFromResult()
             return
         }
         if case .result = state.flow.generation.phase { return }
+        // 「再调一调」途中（验收 7a，产品口径「从再调一调设置页点再拼一张」）：发起页是那个设置页。
+        nextQuickStartOrigin = isAdjustingResult ? .adjust : workID.map { .work(id: $0) }
         if isAdjustingResult, !isCurrentResultKept {
             ask(.startNewFromAdjust)
             return
@@ -73,6 +82,7 @@ extension AppCoordinator {
     private func beginFreshQuickStart() {
         pendingTarget = nil
         state.flow.send(.freshQuickStartStarted)
+        quickStartOrigin = nextQuickStartOrigin
     }
 
     /// 预览页返回首页等会丢掉当前结果的离开方式（「再调一调」「换一种拼法」不走这里）。
@@ -156,6 +166,7 @@ extension AppCoordinator {
         pendingTarget = nil
         settingsBeforeQuickAgain = (state.flow.settings, state.flow.source.selection)
         state.flow.send(.quickAgainStarted)
+        quickStartOrigin = nextQuickStartOrigin
     }
 
     /// 「再拼一张」途中返回到原预览页（选图页返回；用系统 PhotosPicker 时确认页返回也直接回来，P2-c）：
@@ -167,6 +178,7 @@ extension AppCoordinator {
             state.flow.source.select(s.selection)
         }
         settingsBeforeQuickAgain = nil
+        quickStartOrigin = nil
     }
 
     /// 开始生成新图（由 `send` 在 `.run` 之前调用）：丢弃旧结果，换上新目标图。
@@ -174,6 +186,7 @@ extension AppCoordinator {
         if let t = pendingTarget { target = t; targetGeneration += 1 }
         pendingTarget = nil
         settingsBeforeQuickAgain = nil
+        quickStartOrigin = nil
         discardResult()
         state.flow.commitQuickAgain()
     }

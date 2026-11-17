@@ -5,6 +5,8 @@ import MosaicAppCore
 /// 主流程（T9）：目标图 → 来源 → 密度 / 叠加 → 生成 → 结果。
 struct MainFlowView: View {
     @EnvironmentObject var model: AppModel
+    @State private var reopenedWorkID: WorkID?
+    @State private var reopenedWorkShown = false
 
     var body: some View {
         NavigationStack {
@@ -32,6 +34,15 @@ struct MainFlowView: View {
                     }
                 }
             }
+            // 从作品查看页发起的「再拼一张」在选图提示上点了「取消」：回到那张作品的查看页（copy v1.6「回到发起页」）。
+            .navigationDestination(isPresented: $reopenedWorkShown) {
+                if let id = reopenedWorkID { WorkDetailView(id: id) }
+            }
+        }
+        .onChange(of: model.reopenWorkRequest) { req in
+            guard let req else { return }
+            reopenedWorkID = req.workID
+            reopenedWorkShown = true
         }
         // 作品查看页「再拼一张」：整个导航栈退回主流程（换 id = 重建栈，弹掉作品列表 / 查看页）。
         .id(model.navigationResetToken)

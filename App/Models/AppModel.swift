@@ -171,9 +171,9 @@ final class AppModel: ObservableObject {
     /// 每次从作品查看页「再拼一张」+1：主流程导航栈按它重建，退回主流程。
     @Published private(set) var navigationResetToken = 0
     /// 作品查看页「再拼一张」（quick-start v1.0 §2a）：退回主流程，再走和预览页一样的「再拼一张」。
-    func startNewFromWork() {
+    func startNewFromWork(id: WorkID) {
         guard !state.isGenerating, !state.export.isBusy else { return }
-        coordinator.startNewFromWorkTapped()
+        coordinator.startNewFromWorkTapped(workID: id)
         navigationResetToken += 1
     }
     func startNewMosaicTapped() { coordinator.startNewMosaicTapped() }
@@ -205,6 +205,8 @@ final class AppModel: ObservableObject {
     // MARK: 系统选择器选的照片用不了（copy v1.6，判断在 AppCoordinator+PickerUnavailable）
 
     var showsPickerUnavailable: Bool { state.showsPickerUnavailable }
+    /// 选图提示「取消」后要回到的作品查看页（从作品查看页发起的「再拼一张」）。
+    var reopenWorkRequest: WorkReopenRequest? { state.reopenWorkRequest }
     var pickerUnavailableShowsAddAccess: Bool { state.pickerUnavailableShowsAddAccess }
     var targetPickerReopenRequest: Int { state.targetPickerReopenRequest }
     func pickedTargetUnavailable() { coordinator.pickedTargetUnavailable() }

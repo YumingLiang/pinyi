@@ -1,5 +1,17 @@
 # CHANGES
 
+## fix/picker-unavailable-cancel：选图提示「取消」回到发起「再拼一张」的那一页（P2，copy v1.6）
+
+- 问题：`picker.unavailable` 弹窗点「取消」，从作品查看页 /「再调一调」设置页发起的「再拼一张」停在选图页。
+- 修法：协调器记下这次「再拼一张」的发起页 `QuickStartOrigin`（`.preview` / `.work(id:)` / `.adjust`），「取消」（含系统收起弹窗）按它回去：
+  - 预览页 → 原预览页（不变，`quickAgainCancelled` 释放新目标图、恢复设置）；
+  - 作品查看页 → 主流程退回进来前那一页（停在结果页的回原预览页；没有结果的回原来那一步，目标图不动），`AppState.reopenWorkRequest`（作品 ID + token）让平台层重新打开那张作品的查看页（`MainFlowView.navigationDestination`）；
+  - 「再调一调」设置页（验收 7a）→ 回那个设置页，结果保留，「完成」照常回原结果。
+  - 原结果、作品、「已存」状态都不动；开始生成新图后发起页记录清掉。
+- `MainFlow.cancelFreshQuickStart()`：fresh quick start 在选图页放弃时恢复进来前的那一步和目标图状态。
+- `startNewFromWorkTapped(workID:)`：作品查看页传入作品 ID（默认 nil 兼容旧调用）。
+- 测试：`PickerUnavailableCancelOriginTests` +8（预览页已存 / 没存不保存、作品查看页（主流程在结果页 / 没有结果）、「再调一调」没存 / 已存、系统收起同取消、开始生成后清掉发起页）。
+
 ## feat/start-new：「再拼一张」+ 未保存提示（quick-start-req v1.0 §2a / §2b / §2e；hd-export-req B10 第 4、11 条）
 
 **依赖 #17（fix/works-delete，48b0569），需先合 #17。** 本分支已 merge `origin/feat/app-layer`（ed58064）和 `origin/fix/works-delete`（48b0569），都是 merge，没有 rebase。未保存提示要用 #17 的 `WorksController.unsavedPrompt` / `.needsUpdate` /「更新原作品」。

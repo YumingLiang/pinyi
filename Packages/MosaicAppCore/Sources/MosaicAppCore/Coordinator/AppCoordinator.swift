@@ -31,6 +31,10 @@ public final class AppCoordinator {
     /// 「再拼一张」开始时的设置和素材来源：确认页上的改动只作用于新图（#18 QA P2-b），返回预览页时恢复，旧结果和
     /// 「已存」按钮状态不受影响。开始生成新图时丢掉（新图就用确认页上的值）。
     var settingsBeforeQuickAgain: (settings: GenerationSettings, selection: SourceSelection)?
+    /// 当前这次「再拼一张」从哪页发起（选图提示「取消」回这里，copy v1.6）；不在「再拼一张」途中为 nil。
+    var quickStartOrigin: QuickStartOrigin?
+    /// 下一次进入「再拼一张」时的发起页（中间可能先弹未保存提示）。
+    var nextQuickStartOrigin: QuickStartOrigin?
     /// 「存到我的作品」（`WorksController`）：未保存提示要问它当前结果存没存过、以及「保存」按钮去存。弱引用，不成环。
     public weak var resultSaver: (any CurrentResultSaving)?
     /// 每换一次目标图 +1（PixelBuffer 不做内容比较，用代次判断「目标图换没换」）。
@@ -435,7 +439,7 @@ public final class AppCoordinator {
         if state.flow.isQuickAgain, starts {
             commitQuickAgain()
         }
-        if state.flow.isFreshQuickStart, starts { state.flow.endFreshQuickStart() }
+        if state.flow.isFreshQuickStart, starts { state.flow.endFreshQuickStart(); quickStartOrigin = nil }
         state.flow.syncWithGeneration()
         for eff in effects {
             switch eff {
