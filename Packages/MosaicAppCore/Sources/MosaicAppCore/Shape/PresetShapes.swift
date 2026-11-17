@@ -26,6 +26,7 @@ public enum PresetShapes {
         Entry(id: .fourLeafClover, path: fourLeafClover()),
         Entry(id: .house, path: house()),
         Entry(id: .speechBubble, path: speechBubble()),
+        Entry(id: .roundedSquare, path: roundedSquare()),
     ]
 
     /// 预设形状的路径；未登记返回 `nil`。
@@ -260,6 +261,22 @@ extension PresetShapes {
         var b = ShapePathBuilder()
         b.roundedRect(x: 0, y: 0, width: 100, height: 70, radius: 16)
         b.polygon([ShapePoint(20, 62), ShapePoint(42, 62), ShapePoint(14, 92)])
+        return b.build()
+    }
+}
+
+// MARK: - 圆角方块
+
+extension ShapePresetID {
+    /// 圆角方块
+    public static let roundedSquare = ShapePresetID(rawValue: "roundedSquare")
+}
+
+extension PresetShapes {
+    /// 圆角方块：正方形，圆角半径 = 边长的 20%。
+    static func roundedSquare() -> ShapePath {
+        var b = ShapePathBuilder()
+        b.roundedRect(x: 0, y: 0, width: 100, height: 100, radius: 20)
         return b.build()
     }
 }
