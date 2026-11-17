@@ -4,7 +4,7 @@ import MosaicAppCore
 @testable import PhotoMosaic
 
 /// 隐藏照片守护第二层（photo-picker-v0.1 §6.2）：PhotoFetch 生成的选项永远不含隐藏照片。
-/// 第一层是 Linux job 里的 scripts/check-photo-fetch.sh（所有 fetchAssets 都必须走 PhotoFetch）。
+/// 第一层是 Linux job 里的 scripts/check-photo-fetch.sh（所有 fetchAssets / fetchKeyAssets 都必须走 PhotoFetch）。
 /// 同时断言 T3 的几个 PhotoKit 请求选项都不联网。
 final class PhotoFetchTests: XCTestCase {
     private let allSources: [PHAssetSourceType] = [PhotoFetch.Sources.library, PhotoFetch.Sources.cloudShared,
@@ -32,6 +32,18 @@ final class PhotoFetchTests: XCTestCase {
         XCTAssertEqual(PhotoFetch.pickerSources(forSubtype: .albumCloudShared), PhotoFetch.Sources.cloudShared)
         XCTAssertEqual(PhotoFetch.pickerSources(forSubtype: .albumRegular), PhotoFetch.Sources.library)
         XCTAssertEqual(PhotoFetch.pickerSources(forSubtype: .smartAlbumFavorites), PhotoFetch.Sources.library)
+    }
+
+    /// `keyAssets(in:sources:)` 用同一套 `options`（imagesOnly、显式来源、不设排序），同样写死不含隐藏照片。
+    func testKeyAssetOptionsNeverIncludeHiddenAssets() {
+        for sources in allSources {
+            let o = PhotoFetch.options(imagesOnly: true, sources: sources, order: .unspecified)
+            XCTAssertFalse(o.includeHiddenAssets, "sources=\(sources.rawValue)")
+            XCTAssertFalse(o.includeAllBurstAssets)
+            XCTAssertEqual(o.includeAssetSourceTypes, sources, "来源必须显式设置")
+            XCTAssertNotNil(o.predicate)
+            XCTAssertTrue(o.sortDescriptors?.isEmpty ?? true)
+        }
     }
 
     func testSmartAlbumWhitelistExcludesHidden() {

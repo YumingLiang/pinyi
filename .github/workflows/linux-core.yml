@@ -34,8 +34,8 @@ jobs:
       - name: Zero-network / zero-dependency guard
         run: ./scripts/check-no-network.sh
 
-      # 隐藏照片守护第一层（photo-picker-v0.1 §6.2）：所有 fetchAssets 必须走 PhotoFetch；第二层是 AppTests 的 PhotoFetchTests。
-      - name: Hidden-photo guard (all fetchAssets via PhotoFetch)
+      # 隐藏照片守护第一层（photo-picker-v0.1 §6.2）：所有 fetchAssets / fetchKeyAssets 必须走 PhotoFetch；第二层是 AppTests 的 PhotoFetchTests。
+      - name: Hidden-photo guard (all fetchAssets / fetchKeyAssets via PhotoFetch)
         run: ./scripts/check-photo-fetch.sh
 
       - name: Localizable.strings 与文案表一致
