@@ -23,7 +23,10 @@ struct MainFlowView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    NavigationLink { SettingsPageView() } label: { Image(systemName: "gearshape") }
+                    HStack(spacing: 16) {
+                        WorksEntryButton()   // 需求 B2：首页右上角「我的作品」
+                        NavigationLink { SettingsPageView() } label: { Image(systemName: "gearshape") }
+                    }
                 }
             }
         }
@@ -224,6 +227,7 @@ struct ResultView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!model.canExport)
+            SaveToWorksButton()   // 需求 B2：次按钮「存到我的作品」（导出成功也会自动存一份）
         }
         .padding()
         .navigationTitle(Text(L10nKey.previewNavTitle))

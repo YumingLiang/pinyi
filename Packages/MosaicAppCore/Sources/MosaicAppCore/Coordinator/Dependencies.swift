@@ -134,22 +134,28 @@ public enum ExportSize: Int, Sendable, Hashable, CaseIterable, Codable {
 }
 
 public struct ExportRequest: Sendable {
-    public var product: GenerationProduct
-    public var target: PixelBuffer
+    /// 显式布局（结果页由 `MosaicLayout(product:)` 固化，作品页直接给保存的布局）。
+    public var layout: MosaicLayout
+    /// 叠加层用的目标图；nil 时不叠加。
+    public var target: PixelBuffer?
     public var overlayAlpha: Double
     public var tier: ExportTier
 
-    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, tier: ExportTier) {
-        self.product = product
+    public init(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double? = nil, tier: ExportTier) {
+        self.layout = layout
         self.target = target
-        self.overlayAlpha = overlayAlpha
+        self.overlayAlpha = target == nil ? 0 : (overlayAlpha ?? layout.params.overlayAlpha)
         self.tier = tier
+    }
+
+    public init(product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double, tier: ExportTier) {
+        self.init(layout: MosaicLayout(product: product, overlayAlpha: overlayAlpha),
+                  target: target, overlayAlpha: overlayAlpha, tier: tier)
     }
 
     /// 尺寸方案；平台层分配位图前传入 `os_proc_available_memory()`，上限随可用内存变化。
     public func plan(availableMemoryBytes: Int64?) -> ExportPlan {
-        let g = product.generation.layout
-        return ExportPlan(tier: tier, columns: g.columns, rows: g.rows, availableMemoryBytes: availableMemoryBytes)
+        ExportPlan(tier: tier, columns: layout.cols, rows: layout.rows, availableMemoryBytes: availableMemoryBytes)
     }
 }
 
@@ -160,7 +166,7 @@ public enum ExportError: Error, Sendable, Equatable {
     case encodingFailed
 }
 
-/// 导出器：把结果按条带渲染成文件（`tmp/export/` 下），返回文件 URL。实现须在条带边界检查取消（B-34）。
+/// 导出器：把结果渲染成文件（`tmp/export/` 下），返回文件 URL。
 public protocol MosaicExporting: Sendable {
     /// 本次导出预计需要的磁盘字节数（预检用）。
     func estimatedBytes(for request: ExportRequest) -> Int64
@@ -190,11 +196,14 @@ public struct AppDependencies: Sendable {
     public var perf: PerfRecorder
     public var indexConfiguration: PhotoIndex.Configuration
     public var initialSeed: UInt64
+    /// 导出成功（文件已在 tmp/export，保存 / 分享之前）时通知：「我的作品」由这里接入自动保存。默认空实现。
+    public var onExportSucceeded: @Sendable (MosaicLayout, URL) async -> Void
 
     public init(library: any PhotoLibraryClient, thumbnails: any ThumbnailProviding, indexStore: any IndexStore,
                 clock: any AppClock, lifecycle: any LifecycleEvents, preferences: any PreferenceStore,
                 generator: any MosaicGenerating, exporter: any MosaicExporting, memory: any MemoryFootprintReading,
-                perf: PerfRecorder, indexConfiguration: PhotoIndex.Configuration = .init(), initialSeed: UInt64) {
+                perf: PerfRecorder, indexConfiguration: PhotoIndex.Configuration = .init(), initialSeed: UInt64,
+                onExportSucceeded: @escaping @Sendable (MosaicLayout, URL) async -> Void = { _, _ in }) {
         self.library = library
         self.thumbnails = thumbnails
         self.indexStore = indexStore
@@ -207,5 +216,6 @@ public struct AppDependencies: Sendable {
         self.perf = perf
         self.indexConfiguration = indexConfiguration
         self.initialSeed = initialSeed
+        self.onExportSucceeded = onExportSucceeded
     }
 }
