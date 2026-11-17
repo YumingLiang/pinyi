@@ -173,6 +173,8 @@ public enum UnsavedResultPrompt: Sendable, Hashable {
     case startNew
     /// 预览页返回首页等会丢掉当前结果的离开方式。
     case leaveResult
+    /// 「再调一调」途中（设置页）发起「再拼一张」（经作品查看页入口，验收 7a）：继续 = 直接去选目标图（没有可返回的预览页）。
+    case startNewFromAdjust
 }
 
 /// 某个来源里因手机上版本不够清楚（< 256 px）而没用上的照片（去重）。

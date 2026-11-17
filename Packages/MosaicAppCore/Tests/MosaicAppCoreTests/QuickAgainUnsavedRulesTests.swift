@@ -254,4 +254,96 @@ final class QuickAgainUnsavedRulesTests: XCTestCase {
         await gate.release.open(); await t.value; await c.settle()
         c.stop()
     }
+
+    // MARK: 「再调一调」设置页发起「再拼一张」（验收 7a，经作品查看页入口）
+
+    func testFromAdjustUnsavedPromptsThenDiscardGoesToTarget() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.send(.backToSettings); f.sync()
+        XCTAssertTrue(f.c.isAdjustingResult)
+        f.c.startNewFromWorkTapped()
+        XCTAssertEqual(f.c.state.unsavedPrompt, .startNewFromAdjust, "没存：会丢掉这张，同样弹")
+        XCTAssertEqual(f.c.state.unsavedPromptTitle, .quickUnsavedTitle)
+        XCTAssertEqual(f.c.state.flow.step, .settings)
+        f.c.unsavedPromptDiscard()
+        XCTAssertNil(f.c.state.unsavedPrompt)
+        XCTAssertTrue(f.c.state.flow.isFreshQuickStart)
+        XCTAssertEqual(f.c.state.flow.step, .target)
+        XCTAssertFalse(f.c.isAdjustingResult)
+        XCTAssertEqual(f.works.state.count, 0)
+        f.c.startNewFromWorkTapped()                                // 已经在去选图的路上：不再问
+        XCTAssertNil(f.c.state.unsavedPrompt)
+        f.stop()
+    }
+
+    func testFromAdjustUnsavedCancelStaysOnSettings() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.send(.backToSettings); f.sync()
+        f.c.startNewFromWorkTapped()
+        f.c.unsavedPromptCancel()
+        XCTAssertEqual(f.c.state.flow.step, .settings)
+        XCTAssertFalse(f.c.state.flow.isFreshQuickStart)
+        XCTAssertTrue(f.c.isAdjustingResult)
+        XCTAssertEqual(f.c.settingsPrimaryAction, .done, "取消后还能「完成」回到原结果")
+        f.stop()
+    }
+
+    func testFromAdjustUnsavedSaveStoresThenGoesToTarget() async throws {
+        let f = Fixture()
+        try await f.generate()
+        f.c.send(.backToSettings); f.sync()
+        f.c.startNewFromWorkTapped()
+        await f.c.unsavedPromptSave()
+        XCTAssertEqual(f.works.state.count, 1, "保存 = 新存一份（设置页上也能存）")
+        XCTAssertEqual(f.c.state.flow.step, .target)
+        XCTAssertTrue(f.c.state.flow.isFreshQuickStart)
+        f.stop()
+    }
+
+    func testFromAdjustSavedUnchangedDoesNotPrompt() async throws {
+        let f = Fixture()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        f.c.send(.backToSettings); f.sync()
+        f.c.startNewFromWorkTapped()
+        XCTAssertNil(f.c.state.unsavedPrompt, "已存且没改：不弹")
+        XCTAssertEqual(f.c.state.flow.step, .target)
+        XCTAssertTrue(f.c.state.flow.isFreshQuickStart)
+        f.stop()
+    }
+
+    func testFromAdjustAlphaChangedPromptsUpdateAndSaveUpdatesSameWork() async throws {
+        let f = Fixture()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        guard case .saved(let id) = f.works.state.saveStatus else { return XCTFail() }
+        f.c.send(.backToSettings); f.sync()
+        f.c.setOverlayAlpha(min(OverlayBlendLimits.maxAlpha, f.c.state.flow.settings.overlayAlpha + 0.1)); f.sync()
+        let alpha = f.c.state.flow.settings.overlayAlpha
+        f.c.startNewFromWorkTapped()
+        XCTAssertEqual(f.c.state.unsavedPrompt, .startNewFromAdjust)
+        XCTAssertTrue(f.c.state.unsavedPromptIsUpdate, "存过但只改了强度：update_title")
+        XCTAssertEqual(f.c.state.unsavedPromptTitle, .quickUnsavedUpdateTitle)
+        await f.c.unsavedPromptSave()
+        XCTAssertEqual(f.works.state.summaries.map(\.id), [id], "保存 = 更新原作品")
+        XCTAssertEqual(f.works.state.summaries.first?.meta.overlayAlpha ?? -1, alpha, accuracy: 1e-9)
+        XCTAssertEqual(f.c.state.flow.step, .target)
+        f.stop()
+    }
+
+    /// 设置页改了密度（主按钮已是「开始拼图」），原结果仍会丢：同样按它存没存判断。
+    func testFromAdjustAfterDensityChangeStillJudgesOldResult() async throws {
+        let f = Fixture()
+        try await f.generate()
+        await f.works.saveCurrentResultTapped()
+        f.c.send(.backToSettings); f.sync()
+        let d = f.c.state.flow.settings.density
+        f.c.setDensity(d == .fine ? .coarse : .fine)
+        XCTAssertEqual(f.c.settingsPrimaryAction, .generate)
+        f.c.startNewFromWorkTapped()
+        XCTAssertNil(f.c.state.unsavedPrompt, "原结果已存且强度没改：不弹")
+        f.stop()
+    }
 }

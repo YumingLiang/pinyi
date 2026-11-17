@@ -20,6 +20,14 @@ extension AppCoordinator {
     /// 当前结果要弹哪种未保存提示（hd-export B10-4/11）。导出过不算存过；没接 `resultSaver` 时按「没存」算。
     public var currentUnsavedPrompt: UnsavedPrompt { resultSaver?.unsavedPrompt ?? .unsaved }
 
+    /// 「再调一调」途中：结果还留着（`product`、`lastOutcome` 在，phase 回到 `.idle`），人在设置 / 来源 / 选图页，
+    /// 不是「再拼一张」流程。这时离开去开始一张新图同样会丢掉这张结果（验收 7a）。
+    public var isAdjustingResult: Bool {
+        guard product != nil, state.flow.generation.lastOutcome != nil, case .idle = state.flow.generation.phase,
+              !state.flow.isQuickAgain, !state.flow.isFreshQuickStart, state.flow.step != .result else { return false }
+        return true
+    }
+
     /// 当前结果算不算「已保存」：已在我的作品里，且叠加强度和存的一样。
     public var isCurrentResultKept: Bool { currentUnsavedPrompt == .none }
 
@@ -42,8 +50,9 @@ extension AppCoordinator {
     /// 作品查看页「再拼一张」（quick-start v1.0 §2a）。平台层同时把导航栈退回主流程。
     /// - 主流程停在结果页：和预览页「再拼一张」完全一样（同样的未保存提示，选图页返回回到那张预览）。
     /// - 已经在「再拼一张」的选图 / 确认页：不动（平台层退回去就是那里）。
-    /// - 其他（没有结果、或在设置 / 来源页）：直接去选目标图，选好进确认页（素材沿用）。「再调一调」途中的结果不弹提示，
-    ///   和设置页点「开始拼图」一样（「再调一调」不弹，B10-4 / §2e）。
+    /// - 「再调一调」途中（`isAdjustingResult`）：这张结果会丢，按同一套规则判断（验收 7a）：已存且没改 → 直接去选图；
+    ///   没存 / 存过但只改了强度 → 弹提示（`.startNewFromAdjust`，标题同样区分 update_title），继续 = 去选图。
+    /// - 其他（没有结果）：直接去选目标图，选好进确认页（素材沿用）。
     /// 生成中 / 导出中 / 提示弹着或保存中忽略。
     public func startNewFromWorkTapped() {
         guard !state.isGenerating, !state.export.isBusy, state.unsavedPrompt == nil, !state.isSavingBeforeLeaving,
@@ -53,6 +62,14 @@ extension AppCoordinator {
             return
         }
         if case .result = state.flow.generation.phase { return }
+        if isAdjustingResult, !isCurrentResultKept {
+            ask(.startNewFromAdjust)
+            return
+        }
+        beginFreshQuickStart()
+    }
+
+    private func beginFreshQuickStart() {
         pendingTarget = nil
         state.flow.send(.freshQuickStartStarted)
     }
@@ -94,11 +111,16 @@ extension AppCoordinator {
     }
 
     private func continueLeaving(_ prompt: UnsavedResultPrompt) {
-        guard case .result = state.flow.generation.phase, state.flow.step == .result,
-              !state.isGenerating, !state.export.isBusy else { return }
+        guard !state.isGenerating, !state.export.isBusy else { return }
+        if prompt == .startNewFromAdjust {
+            if isAdjustingResult { beginFreshQuickStart() }
+            return
+        }
+        guard case .result = state.flow.generation.phase, state.flow.step == .result else { return }
         switch prompt {
         case .startNew: beginQuickAgain()
         case .leaveResult: discardResultAndReturnToStart()
+        case .startNewFromAdjust: break
         }
     }
 

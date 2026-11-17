@@ -16,6 +16,8 @@ struct MainFlowView: View {
                 case .result: ResultView()
                 }
             }
+            // 未保存提示挂在主流程上：预览页「再拼一张」和「再调一调」设置页（经作品查看页入口，验收 7a）都在这里弹。
+            .modifier(UnsavedPromptDialog())
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     // 「再拼一张」的选图页也有返回（回到原预览页，结果还在）
@@ -269,15 +271,6 @@ struct ResultView: View {
             if model.exportPhase.isBusy { ExportBusyOverlay() }
         }
         .modifier(ExportResultAlerts())
-        // 未保存提示（quick.unsaved.*）：当前结果没存进作品（导出过不算存过）时由协调器弹出；存过但只改了叠加强度时
-        // 标题换成 quick.unsaved.update_title，「保存」= 更新原作品（hd-export B10-4/11）。isPresented 只读，按钮各自调协调器。
-        .confirmationDialog(Text(model.unsavedPromptIsUpdate ? L10nKey.quickUnsavedUpdateTitle : L10nKey.quickUnsavedTitle),
-                            isPresented: .constant(model.unsavedPrompt != nil),
-                            titleVisibility: .visible) {
-            Button { model.unsavedPromptSave() } label: { Text(L10nKey.quickUnsavedSave) }
-            Button(role: .destructive) { model.unsavedPromptDiscard() } label: { Text(L10nKey.quickUnsavedDiscard) }
-            Button(role: .cancel) { model.unsavedPromptCancel() } label: { Text(L10nKey.quickUnsavedCancel) }
-        }
     }
 }
 
@@ -356,6 +349,23 @@ struct ExportResultAlerts: ViewModifier {
             }
             .alert(Text(L10nKey.exportInterrupted), isPresented: .constant(interrupted)) {
                 Button { model.dismissExportResult() } label: { Text(L10nKey.commonOK) }
+            }
+    }
+}
+
+/// 未保存提示（quick.unsaved.*）：当前结果没存进作品（导出过不算存过）时由协调器弹出；存过但只改了叠加强度时
+/// 标题换成 quick.unsaved.update_title，「保存」= 更新原作品（hd-export B10-4/11）。isPresented 只读，按钮各自调协调器。
+struct UnsavedPromptDialog: ViewModifier {
+    @EnvironmentObject var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(Text(model.unsavedPromptIsUpdate ? L10nKey.quickUnsavedUpdateTitle : L10nKey.quickUnsavedTitle),
+                                isPresented: .constant(model.unsavedPrompt != nil),
+                                titleVisibility: .visible) {
+                Button { model.unsavedPromptSave() } label: { Text(L10nKey.quickUnsavedSave) }
+                Button(role: .destructive) { model.unsavedPromptDiscard() } label: { Text(L10nKey.quickUnsavedDiscard) }
+                Button(role: .cancel) { model.unsavedPromptCancel() } label: { Text(L10nKey.quickUnsavedCancel) }
             }
     }
 }

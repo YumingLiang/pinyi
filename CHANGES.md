@@ -3,6 +3,12 @@
 ## feat/start-new：「再拼一张」+ 未保存提示（quick-start-req v1.0 §2a / §2b / §2e；hd-export-req B10 第 4、11 条）
 
 **依赖 #17（fix/works-delete，48b0569），需先合 #17。** 本分支已 merge `origin/feat/app-layer`（ed58064）和 `origin/fix/works-delete`（48b0569），都是 merge，没有 rebase。未保存提示要用 #17 的 `WorksController.unsavedPrompt` / `.needsUpdate` /「更新原作品」。
+**追加（23:10，验收 7 / 7a）**
+- 「再调一调」途中（设置页，结果还留着：`AppCoordinator.isAdjustingResult`）从作品查看页点「再拼一张」：按同一套判断弹未保存提示（新 reason `UnsavedResultPrompt.startNewFromAdjust`）。没存（含只导出过）→ `quick.unsaved.title`；存过但只改了强度 → `quick.unsaved.update_title`，「保存」= 更新原作品；已存且没改 → 不弹，直接去选图。「不保存」/存好后 → 直接去选目标图（fresh quick start）；「取消」→ 留在设置页，「完成」仍可回原结果。结果页 / 没有结果时的详情页入口行为不变。
+- 为此 `workResultContext` 在「再调一调」途中也带上原结果布局（保存 / 更新要用）；未保存提示对话框从结果页挪到主流程根视图（`UnsavedPromptDialog`），设置页上也能弹。
+- 新增文案 `works.replaced`「有 {count} 格原来的照片现在用不了，已换成相近的照片」（按格计，一次性提示，查看页 / 导出前 / 结果页共用）：copy_v1.1.md + gen-localizable + `L10nKey.worksReplaced` / `allWorks`。**只加了 key，没有调用点**：代码里还没有「把取不到的格子换成相近照片」的逻辑（`MissingCellRematching` 只是 11-18 预留接口；生成时的 refill 是清晰度重配，不是这件事），按要求不在本分支新写。`works.missing` 已是 v1.3（按格计）。
+- 测试：`QuickAgainUnsavedRulesTests` +6（7a：没存弹/取消/保存/不保存、已存不弹、只改强度 update_title 并更新原作品、改了密度仍按原结果判断）。
+
 相簿多选（1a、2f）不在本分支，另开 feat/album-multiselect。原来这里的 WIP 提交 73a8a14（只有 `MaterialSource.swift`）没推过，已从本分支拿掉，存在 `/workspace/multiselect-wip/`（patch + 文件）和本地分支 `wip/multiselect-73a8a14`。不改生成、匹配、导出的逻辑。
 
 ### 再拼一张（§2b / §2e）
