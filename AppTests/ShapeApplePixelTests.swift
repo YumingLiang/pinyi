@@ -277,7 +277,9 @@ final class ShapeApplePixelTests: XCTestCase {
     private func sample(_ bytes: [UInt8], image: CGImage, columns: Int, rows: Int, cellPixels: Int, index: Int) -> (UInt8, UInt8, UInt8) {
         let column = index % columns, row = index / columns
         let x = column * cellPixels + cellPixels / 2
-        let y = image.height - (row + 1) * cellPixels + cellPixels / 2
+        // 第一行是图像上方，和 PixelBuffer / ImagePixels 的上下文一致。
+        // 386cb88 按高度翻转后，形状内中心读到的是背景（白底 255,255,255，黑底 0,0,0）。
+        let y = row * cellPixels + cellPixels / 2
         let o = y * image.width * 4 + x * 4
         return (bytes[o], bytes[o + 1], bytes[o + 2])
     }
