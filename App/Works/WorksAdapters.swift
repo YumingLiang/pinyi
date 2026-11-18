@@ -142,6 +142,9 @@ struct ImageIOWorkImages: WorkImageEncoding {
 
     /// 预览图 / 兜底图原尺寸解码（裁兜底格用；不降采样）。
     func readImage(at url: URL) async throws -> PixelBuffer {
+        #if INTERNAL_TOOLS
+        PreviewReadProbe.recordFileRead()
+        #endif
         guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
               let pb = ImagePixels.opaqueSRGB(cg)
@@ -178,6 +181,9 @@ struct ImageIOWorkImages: WorkImageEncoding {
 
     /// 列表缩略图 / 查看页：ImageIO 降采样解码（不整张解码大图）。
     static func loadImage(_ url: URL, maxPixel: Int) -> CGImage? {
+        #if INTERNAL_TOOLS
+        PreviewReadProbe.recordFileRead()
+        #endif
         guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         let opts = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -188,6 +194,67 @@ struct ImageIOWorkImages: WorkImageEncoding {
         return CGImageSourceCreateThumbnailAtIndex(src, 0, opts)
     }
 }
+
+#if INTERNAL_TOOLS
+import os
+
+/// 内测计数：列表和查看页读预览文件的真实入口是 `ImageIOWorkImages.loadImage` / `readImage`。
+/// 日志只有次数。不记路径、作品 ID、相册名或错误内容。不改变谁可以读。
+enum PreviewReadProbe {
+    static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "pinyi", category: "preview-read")
+    private static let lock = NSLock()
+    private static var fileReads = 0
+
+    static var fileReadCount: Int { withLock { fileReads } }
+
+    static func reset() {
+        let n = withLock { () -> Int in
+            fileReads = 0
+            return 0
+        }
+        log.info("previewFileReads \(n, privacy: .public)")
+    }
+
+    static func recordFileRead() {
+        let n = withLock { () -> Int in
+            fileReads += 1
+            return fileReads
+        }
+        log.info("previewFileReads \(n, privacy: .public)")
+    }
+
+    /// 在临时目录写一张合成图，再走和作品列表相同的 `loadImage`。成功时读取次数加 1。
+    static func positiveControl() -> Bool {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pinyi-probe-\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard writeSyntheticJPEG(to: url), ImageIOWorkImages.loadImage(url, maxPixel: 32) != nil else {
+            log.info("positiveControl failed")
+            return false
+        }
+        return true
+    }
+
+    private static func writeSyntheticJPEG(to url: URL) -> Bool {
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { return false }
+        ctx.setFillColor(CGColor(colorSpace: cs, components: [0.2, 0.4, 0.6, 1])!)
+        ctx.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        guard let image = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
+        else { return false }
+        CGImageDestinationAddImage(dest, image, nil)
+        return CGImageDestinationFinalize(dest)
+    }
+
+    private static func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+}
+#endif
 
 /// 从作品再导出 → 导出线 `AppCoordinator.export(layout:target:purpose:)`（按保存的显式布局，档位用当前 `exportTier`）。
 /// 弱引用协调器（`WorksController` 强持有本桥）。

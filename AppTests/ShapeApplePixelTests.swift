@@ -7,35 +7,59 @@ import MosaicCore
 import MosaicAppCore
 @testable import PhotoMosaic
 
-/// 模拟器上的真实预览和导出。走 `MosaicPreviewRenderer` 与 `LiveMosaicExporter`，不用 Linux 假渲染。
+/// 模拟器上的真实预览和导出。走 `MosaicPreviewRenderer` 与 `LiveMosaicExporter`。
 ///
-/// 覆盖：10 个预设、五种已有配色、黑白背景、掩码外像素、预览与导出都把形状外画成背景、传入 0.3 的叠加后形状外仍不被染色。
-/// 不覆盖：真机相册里的隐藏照片、系统受限授权、签名安装后的屏幕。那些仍要设备验收。
+/// 实际执行 28 组，不是 10×5×2＝100。未跑的 72 组是除爱心以外的 9 个形状 × 除蓝以外的 4 个配色 × 黑白。
+/// 夹具缩略图是固定的红 220,30,30，用来确认形状内画的是这张图，不是背景，也不是特征色块。
 @MainActor
 final class ShapeApplePixelTests: XCTestCase {
-    func testTenPresetsBothBackgroundsKeepOutsideColorInPreviewAndExport() async throws {
+    private struct PixelCase: Equatable {
+        var preset: ShapePresetID
+        var palette: ShapePalette
+        var background: ShapeBackground
+    }
+
+    /// 10 个形状只配蓝、黑白都导出；爱心再补其余 4 个配色的黑白导出。爱心×蓝不重复。
+    private static func executedCases() -> [PixelCase] {
+        var cases: [PixelCase] = []
         for preset in PresetShapes.registry.map(\.id) {
             for background in [ShapeBackground.white, ShapeBackground.black] {
-                try await check(preset: preset, palette: .blue, background: background, export: true)
+                cases.append(PixelCase(preset: preset, palette: .blue, background: background))
             }
         }
-    }
-
-    func testFixedPalettesKeepOutsideColor() async throws {
-        for palette in ShapePalette.allCases {
+        for palette in ShapePalette.allCases where palette != .blue {
             for background in [ShapeBackground.white, ShapeBackground.black] {
-                try await check(preset: .heart, palette: palette, background: background, export: background == .black)
+                cases.append(PixelCase(preset: .heart, palette: palette, background: background))
             }
+        }
+        return cases
+    }
+
+    func testExecutedMatrixIsTwentyEightNotOneHundred() {
+        let cases = Self.executedCases()
+        XCTAssertEqual(PresetShapes.registry.count * ShapePalette.allCases.count * 2, 100)
+        XCTAssertEqual(cases.count, 28)
+        XCTAssertEqual(Set(cases).count, 28)
+        let whitePalettes = Set(cases.filter { $0.preset == .heart && $0.background == .white }.map(\.palette))
+        XCTAssertEqual(whitePalettes, Set(ShapePalette.allCases))
+    }
+
+    func testExecutedCasesRenderPhotoInsideAndExport() async throws {
+        for item in Self.executedCases() {
+            try await check(preset: item.preset, palette: item.palette, background: item.background)
         }
     }
 
-    /// `limitedAccess` 是作品状态上的标记，不是模拟器弹出的系统授权。这里只证明这个标记会挡住 ImageIO 解码入口。
-    /// 真机隐藏照片和受限访问下旧预览读取 0 次，仍要设备看。
-    func testLimitedFlagSkipsImageIOReadAndPhotoKitStatusIsLive() async throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("shape-preview-read-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("preview.jpg")
+    /// 正对照走作品列表同一个 `ImageIOWorkImages.loadImage`，次数加 1。
+    /// 随后 `limitedAccess` 只是内存标记，证明这条路径不会再调用 loadImage。这不是真机 PhotoKit，也不是设备上的旧预览 0 次。
+    func testProbePositiveControlThenLimitedFlagDoesNotRead() async throws {
+        PreviewReadProbe.reset()
+        XCTAssertEqual(PreviewReadProbe.fileReadCount, 0)
+        XCTAssertTrue(PreviewReadProbe.positiveControl())
+        XCTAssertEqual(PreviewReadProbe.fileReadCount, 1, "正对照必须真的走进 loadImage")
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("shape-preview-read-\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
         try writeTinyJPEG(to: url)
         let meta = WorkMeta(id: WorkID(), createdAt: Date(), columns: 2, rows: 2, tier: nil, photoCount: 1,
                             missingCount: 0, overlayAlpha: 0, seed: 1, fingerprint: "x", origin: .savedManually,
@@ -43,34 +67,29 @@ final class ShapeApplePixelTests: XCTestCase {
         let summary = WorkSummary(meta: meta, previewURL: url)
         var state = WorksState()
         state.limitedAccess = true
-        var reads = 0
-        let skipped: PixelBuffer? = state.decodePreview(for: summary) { _ in
-            reads += 1
-            return nil
-        }
+        let skipped = state.decodePreview(for: summary) { ImageIOWorkImages.loadImage($0, maxPixel: 32) }
         XCTAssertNil(skipped)
-        XCTAssertEqual(reads, 0)
-        let images = ImageIOWorkImages(thumbnails: CountingThumbs())
-        let opened = try await images.readImage(at: url)
-        XCTAssertEqual(opened.width, 2, "ImageIO 解码器能读这个文件；上一行没走到它")
+        XCTAssertEqual(PreviewReadProbe.fileReadCount, 1, "保护路径没有再读；探针仍接着正对照的 1 次")
 
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         let canConfirm = await PhotoKitExistenceChecker().canConfirmMissing()
-        XCTAssertEqual(canConfirm, status == .authorized)
-        XCTAssertTrue(PhotoFetch.visibleImages(withLocalIdentifiers: ["not-a-real-asset"]).isEmpty)
+        XCTAssertEqual(canConfirm, status == .authorized, "这只是模拟器当前授权，不是隐藏或受限场景")
     }
 
-    private func check(preset: ShapePresetID, palette: ShapePalette, background: ShapeBackground, export: Bool) async throws {
+    private func check(preset: ShapePresetID, palette: ShapePalette, background: ShapeBackground) async throws {
         let product = try await shapeProduct(preset: preset, palette: palette, background: background)
         let mask = try XCTUnwrap(product.shapeFrame).mask
         let outside = try XCTUnwrap((0..<mask.cellCount).first { !mask.isActive($0) })
         let overlay = try solid(width: 32, height: 32, r: 0, g: 255, b: 0)
         let thumbs = CountingThumbs()
 
+        let inside = try XCTUnwrap((0..<mask.cellCount).first { mask.isActive($0) })
         let blocks = try XCTUnwrap(MosaicPreviewRenderer.colorBlocks(product))
         let blockBytes = try bitmap(blocks)
         try assertCell(blockBytes, image: blocks, mask: mask, index: outside, background: background, tolerance: 2,
                        label: "\(preset.rawValue) \(palette) \(background) colorBlocks")
+        let blockInside = sample(blockBytes, image: blocks, columns: mask.columns, rows: mask.rows,
+                                 cellPixels: blocks.width / mask.columns, index: inside)
 
         let rendered = await MosaicPreviewRenderer.thumbnails(product, target: overlay, overlayAlpha: 0.3, thumbnails: thumbs)
         let preview = try XCTUnwrap(rendered)
@@ -83,8 +102,10 @@ final class ShapeApplePixelTests: XCTestCase {
             assertNotTinted(previewBytes, image: preview, mask: mask, index: outside, label: "preview overlay")
         }
         try assertFetchesStayInside(thumbs.idsSnapshot(), product: product)
+        let previewInside = sample(previewBytes, image: preview, columns: mask.columns, rows: mask.rows, cellPixels: cp, index: inside)
+        assertPhotoSwatch(previewInside, tolerance: 12, label: "\(preset.rawValue) \(palette) \(background) preview inside")
+        assertNotSame(previewInside, blockInside, label: "预览不是特征色块")
 
-        guard export else { return }
         let request = ExportRequest(product: product, target: overlay, overlayAlpha: 0.3, tier: .share)
         XCTAssertEqual(request.overlayAlpha, 0)
         thumbs.reset()
@@ -100,6 +121,9 @@ final class ShapeApplePixelTests: XCTestCase {
             assertNotTinted(jpegBytes, image: jpeg, mask: mask, index: outside, label: "export overlay")
         }
         try assertFetchesStayInside(thumbs.idsSnapshot(), product: product)
+        let exportInside = sample(jpegBytes, image: jpeg, columns: mask.columns, rows: mask.rows,
+                                  cellPixels: plan.cellPixels, index: inside)
+        assertPhotoSwatch(exportInside, tolerance: 28, label: "\(preset.rawValue) \(palette) \(background) export inside")
         if background == .black {
             let previewOutside = sample(previewBytes, image: preview, columns: mask.columns, rows: mask.rows, cellPixels: cp, index: outside)
             let exportOutside = sample(jpegBytes, image: jpeg, columns: mask.columns, rows: mask.rows,
@@ -137,6 +161,20 @@ final class ShapeApplePixelTests: XCTestCase {
         for channel in [pixel.0, pixel.1, pixel.2] {
             XCTAssertLessThanOrEqual(abs(Int(channel) - Int(expected)), tolerance, "\(label) \(pixel)")
         }
+    }
+
+    private func assertPhotoSwatch(_ pixel: (UInt8, UInt8, UInt8), tolerance: Int, label: String) {
+        let swatch = (UInt8(220), UInt8(30), UInt8(30))
+        for pair in [(pixel.0, swatch.0), (pixel.1, swatch.1), (pixel.2, swatch.2)] {
+            XCTAssertLessThanOrEqual(abs(Int(pair.0) - Int(pair.1)), tolerance, "\(label) \(pixel)")
+        }
+        XCTAssertGreaterThan(abs(Int(pixel.0) - 255) + abs(Int(pixel.1) - 255) + abs(Int(pixel.2) - 255), 80, "\(label) 不是白底")
+        XCTAssertGreaterThan(Int(pixel.0) + Int(pixel.1) + Int(pixel.2), 80, "\(label) 不是黑底")
+    }
+
+    private func assertNotSame(_ a: (UInt8, UInt8, UInt8), _ b: (UInt8, UInt8, UInt8), label: String) {
+        let delta = abs(Int(a.0) - Int(b.0)) + abs(Int(a.1) - Int(b.1)) + abs(Int(a.2) - Int(b.2))
+        XCTAssertGreaterThan(delta, 40, label)
     }
 
     private func assertNotTinted(_ bytes: [UInt8], image: CGImage, mask: CellMask, index: Int, label: String) {

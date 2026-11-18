@@ -10,6 +10,7 @@ struct InternalToolsView: View {
             NavigationLink { PerfView() } label: { Text(verbatim: "性能计时") }
             NavigationLink { TestAlbumView() } label: { Text(verbatim: "「\(TestAlbumPolicy.albumTitle)」相簿") }
             NavigationLink { FakePhotoGridView() } label: { Text(verbatim: "照片网格（假数据 5 万张）") }
+            NavigationLink { PreviewReadProbeView() } label: { Text(verbatim: "预览文件读取计数") }
             // 导出 8000 档（决定 12：仅摸底）在导出页里同样用 #if INTERNAL_TOOLS 守卫（feat/render-export）。
         }
         .navigationTitle(Text(L10nKey.settingsPerformance))
@@ -115,6 +116,40 @@ struct TestAlbumView: View {
             if let outcome { progress.phase = outcome }
             task = nil
         }
+    }
+}
+
+/// 预览文件读取计数。只显示次数。正对照写临时合成图，再走作品列表同一个 `loadImage`。
+struct PreviewReadProbeView: View {
+    @State private var count = PreviewReadProbe.fileReadCount
+    @State private var controlOK: Bool?
+
+    var body: some View {
+        List {
+            Section {
+                Text(verbatim: "作品列表和查看页读预览文件时，次数加 1。日志类别 preview-read，只有次数。")
+                    .font(.footnote)
+                Text(verbatim: "读取次数 \(count)").font(.body.monospacedDigit())
+                Button { count = PreviewReadProbe.fileReadCount } label: { Text(verbatim: "刷新次数") }
+                Button {
+                    PreviewReadProbe.reset()
+                    count = 0
+                    controlOK = nil
+                } label: { Text(verbatim: "清零") }
+            }
+            Section {
+                Button {
+                    controlOK = PreviewReadProbe.positiveControl()
+                    count = PreviewReadProbe.fileReadCount
+                } label: { Text(verbatim: "正对照：读一张合成图") }
+                if let controlOK {
+                    Text(verbatim: controlOK ? "正对照成功，次数应增加 1" : "正对照失败")
+                        .font(.footnote)
+                }
+            }
+        }
+        .navigationTitle(Text(verbatim: "预览读取"))
+        .onAppear { count = PreviewReadProbe.fileReadCount }
     }
 }
 #endif
