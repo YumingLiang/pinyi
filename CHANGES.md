@@ -1,5 +1,25 @@
 # CHANGES
 
+## fix/photo-fetch-guard-hardening：#19 follow-up（QA pr19 报告 P2-1、P2-2、legacy 空名；产品 03:16 / 03:25，§2f 补充 8–9）
+
+- **守护规则 1 / 4 改成词法检查**（`check-photo-fetch.sh` 里嵌一段 python3，自测仍只拷这一个脚本）：先去掉注释（含可嵌套块注释）和字符串字面量（多行、`#"…"#`；
+  插值 `\( … )` 里仍按代码查），反引号还原，按整文件跨行匹配。QA 攻击脚本 `qa/tests/pr19/check-photo-fetch-attack.sh` 由「抓 2 / 绕过 12」变成「抓 14 / 绕过 0」：
+  - A1 `typealias X = PhotoFetch`、A2 `PhotoFetch.self` / `.Type`：直接禁止；
+  - A3 反引号、A4 块注释、A5 空行、A6 行尾注释拆开的调用链：词法预处理后照样匹配；
+  - A7 / A8 extension 里不带前缀 / `Self.` 调用：`extension PhotoFetch` 只允许写在 App/Adapters/PhotoFetch.swift；
+  - A9 豁免按完整路径 `App/Adapters/PhotoFetch.swift`，不再按文件名；
+  - A10 标记只认真正的行尾 `//` 注释（字符串、块注释里的不算）；A11 一个标记只放行一处原始调用；
+  - A12 规则 1 匹配标识符 `\bfetchAssets\b` / `\bfetchKeyAssets\b`（函数引用也算），注释、字符串里的不算。
+  - 自测 `scripts/tests/check-photo-fetch-test.sh` 25 → 50 例（A1–A12 + 插值、块注释标记、泛型 typealias、`.Type` 等反例；字符串 / 块注释提到、插值里调 visible*、多行链式 + 行尾标记等正例）。
+  - linux-core 在守护步骤前装 python3（镜像里有就跳过）。
+- **P2-1（§2f 补充 8）**：「照片比较少」确认框弹着时 / 生成途中所选相簿全被删，取快照抛 `albumUnreadable` 时在同一次运行里静默改用「全部照片」再取快照继续，
+  不提示、不算失败（不再出「这次没能完成」）；全部照片也不到 200 张时不再弹第二次「照片比较少」，直接生成；结果记的输入是「全部照片」。
+- **legacy 空名（§2f 补充 9）**：相簿列表没加载完、又有相簿没有名字时：1 个相簿 →「素材：正在统计…」；多个相簿只要有一个没名字 →「素材：N 个相簿 · 正在统计…」
+  （不只列出知道名字的那几个）；加载完显示真实名字。新文案 `quick.source.summary_counting`「素材：{count}」、`quick.source.summary_albums_counting`「素材：{n} 个相簿 · {count}」
+  （copy_v1.1.md §5.6，{count} 位置是 `source.counting`），`gen-localizable --check` 185 key。
+- 测试：`AlbumDeletedDuringGenerateTests` 3 个（确认框弹着时删相簿 → 全部照片出结果、全部照片也不到 200 张不再弹、结果输入是全部照片）；
+  `MaterialSummaryNamelessTests` 3 个（没名字 / 部分没名字、有名字照旧、新 key 在 allUsed）。
+
 ## feat/works-hidden（追加 6）：#11 隐私修复轮（产品 03:55 Q1–Q4、04:00 / 04:05 修订，copy v1.7a；架构师 11-17 A–D）
 
 - **Q1 / A 取消 4b**：`MissingCellFill.decide` 只剩 `candidate` / `targetColor`（`previewCrop` 删掉）：删除、隐藏、拿不准一律填目标图这一格的平均色，按格计入 `works.missing`。

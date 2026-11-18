@@ -142,8 +142,16 @@ public enum MultiAlbumText {
     }
 
     /// - Parameter count: nil = 还在统计（相簿列表没加载完），张数位置显示 `source.counting`。
+    /// 还在统计、又有相簿没有名字（升级前只存了选择 / 名字丢了）时不拼空名（产品 03:16、03:25，§2f 补充 9）：
+    /// 1 个相簿 →「素材：正在统计…」；多个相簿只要有一个没名字 →「素材：N 个相簿 · 正在统计…」，不只列出知道名字的那几个。
+    /// 加载完再显示真实名字。
     public static func materialSummary(names: [String], count: Int?) -> LocalizedLine {
         let c = count.map(CountFormat.grouped) ?? countingArgument
+        if count == nil, names.isEmpty || names.contains(where: { $0.isEmpty }) {
+            return names.count <= 1
+                ? LocalizedLine(.quickSourceSummaryCounting, [countingArgument])
+                : LocalizedLine(.quickSourceSummaryAlbumsCounting, [CountFormat.grouped(names.count), countingArgument])
+        }
         switch names.count {
         case 0, 1: return LocalizedLine(.quickSourceSummary, [names.first ?? "", c])
         case 2: return LocalizedLine(.quickSourceSummaryTwo, [names[0], names[1], c])

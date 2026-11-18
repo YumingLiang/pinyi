@@ -494,3 +494,45 @@ final class MultiAlbumSourceTests: XCTestCase {
         c.stop()
     }
 }
+
+/// 产品 03:16 / 03:25（§2f 补充 9）：相簿列表没加载完、又有相簿没有名字时不拼空名。
+final class MaterialSummaryNamelessTests: XCTestCase {
+    private static func strings() throws -> [String: String] {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let text = try String(contentsOf: root.appendingPathComponent("App/Resources/zh-Hans.lproj/Localizable.strings"), encoding: .utf8)
+        var out: [String: String] = [:]
+        let re = try NSRegularExpression(pattern: #"^"([^"]+)"\s*=\s*"((?:[^"\\]|\\.)*)";"#, options: .anchorsMatchLines)
+        for m in re.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            out[String(text[Range(m.range(at: 1), in: text)!])] = String(text[Range(m.range(at: 2), in: text)!])
+        }
+        return out
+    }
+    private func render(_ line: LocalizedLine, _ s: [String: String]) -> String {
+        let txt = String(format: s[line.key.rawValue] ?? "", arguments: line.arguments.map { $0 as CVarArg })
+        return MultiAlbumText.resolveCounting(in: txt, counting: s["source.counting"] ?? "")
+    }
+
+    func testNamelessWhileCounting() throws {
+        let s = try Self.strings()
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: [""], count: nil), s), "素材：正在统计…")
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: [], count: nil), s), "素材：正在统计…")
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: ["", ""], count: nil), s), "素材：2 个相簿 · 正在统计…")
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: ["旅行", ""], count: nil), s), "素材：2 个相簿 · 正在统计…",
+                       "有一个没名字：不只列出知道名字的那几个")
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: ["宝宝", "", "猫"], count: nil), s), "素材：3 个相簿 · 正在统计…")
+    }
+
+    func testNamedUnchanged() throws {
+        let s = try Self.strings()
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: ["旅行"], count: nil), s), "素材：旅行 · 正在统计…")
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: ["宝宝", "旅行"], count: nil), s), "素材：宝宝、旅行 · 正在统计…")
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: ["宝宝", "旅行", "猫"], count: nil), s), "素材：宝宝 等 3 个相簿 · 正在统计…")
+        XCTAssertEqual(render(MultiAlbumText.materialSummary(names: ["宝宝", "旅行"], count: 250), s), "素材：宝宝、旅行 · 250 张")
+    }
+
+    func testNewKeysInAllUsed() {
+        XCTAssertTrue(L10nKey.allUsed.contains(.quickSourceSummaryCounting))
+        XCTAssertTrue(L10nKey.allUsed.contains(.quickSourceSummaryAlbumsCounting))
+    }
+}
