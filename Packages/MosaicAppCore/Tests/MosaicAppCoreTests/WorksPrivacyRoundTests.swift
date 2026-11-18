@@ -49,22 +49,27 @@ final class WorksPrivacyRoundTests: XCTestCase {
 
     // MARK: B
 
-    /// `write(_ draft:)` 收到带 fc 的布局直接拒绝，不留任何文件。
-    func testWriteRejectsFilledCells() async throws {
+    /// 渲染器直接读 fc 之后，`write` 可以存带纯色格的布局：预览里是这个颜色，不读旧图，重开布局还在。
+    func testWritePersistsFilledCellsIntoPreview() async throws {
         let h = Harness()
         var layout = sampleLayout(["a", "", "c"])
-        layout.cellAssignments[1].fill = CellColor(r: 1, g: 2, b: 3)
-        do {
-            _ = try await h.store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.2, origin: .savedManually))
-            XCTFail("应当拒绝")
-        } catch let e as WorksError {
-            XCTAssertEqual(e, .unsupportedFilledCells)
-        }
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: h.dir.path), [])
+        let color = CellColor(r: 1, g: 2, b: 3)
+        layout.cellAssignments[1].fill = color
+        let saved = try await h.store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.2, origin: .savedManually))
+        let work = try await h.store.load(saved.summary.id)
+        XCTAssertEqual(work.layout.cellAssignments[1].fill, color)
+        XCTAssertEqual(h.images.state.get().imageReads, 0, "不读旧预览")
+        XCTAssertEqual(h.images.state.get().reads, 0)
+        let header = try FakeWorkImages.previewHeader(saved.summary.previewURL)
+        XCTAssertEqual(header, FakeWorkImages.previewBytes(layout))
+        XCTAssertTrue(String(decoding: header, as: UTF8.self).contains("fc#010203"))
+        let pixels = try XCTUnwrap(FakeWorkImages.decodeRaw(Data(contentsOf: saved.summary.previewURL)))
+        let p = pixels.rgb(x: FakeWorkImages.cellPixels, y: 0)
+        XCTAssertEqual(p.r, 1)
+        XCTAssertEqual(p.g, 2)
+        XCTAssertEqual(p.b, 3)
         let list = await h.store.list()
-        XCTAssertTrue(list.isEmpty)
-        // 没有 fc 的照常存
-        _ = try await h.store.save(WorkDraft(layout: sampleLayout(["a", "", "c"]), target: nil, overlayAlpha: 0.2, origin: .savedManually))
+        XCTAssertEqual(list.count, 1)
     }
 
     // MARK: D-a 孤儿文件

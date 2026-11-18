@@ -14,8 +14,8 @@ import MosaicAppCore
 ///   取不到先看 `ExportFillStats.decision`：`.missing`（隐藏 / 删除）不走 128 px；`.unavailableLocal` / `.failed` 才退回 `.scanDisplay`；再取不到就不放这一格，底图照常显示，不提示。
 ///   照片一律经 `PhotoKitThumbnails` → `PhotoFetch.visibleImages(withLocalIdentifiers:)`，隐藏照片取不到。
 /// - 最多 6 个请求在飞；可见集合变化时，不再需要的请求立即取消（Task 取消 → `cancelImageRequest`）。
-/// - 缓存：`NSCache` 按字节计费，上限 64 MB，键 = assetID（同一照片多格只取一次；缓存档位低于所需时重取）。
-///   离开结果页、换拼法（新 resultRevision）、内存警告时清空。
+/// - 缓存：`NSCache` 按字节计费，上限 64 MB。键 = `DetailCacheKey.cacheToken`（照片 ID + fc；同一照片多格只取一次，
+///   纯色格不取照片）。缓存档位低于所需时重取。`invalidate()`、离开结果页、换拼法、内存警告时清空。
 /// ⚠️ 盲写（Linux 上无法编译 SwiftUI / UIKit / PhotoKit，只做 `swiftc -parse`）。
 @MainActor
 final class PreviewDetailLayer: ObservableObject {
@@ -44,6 +44,8 @@ final class PreviewDetailLayer: ObservableObject {
 
     // 当前作品
     private var cellAssetIDs: [String?] = []
+    /// 与格子对齐的纯色（fc）。短于格子数的尾部当作没有纯色。
+    private var fills: [CellColor?] = []
     private var columns = 0
     private var rows = 0
     private var baseCellPixels = 64
@@ -80,11 +82,12 @@ final class PreviewDetailLayer: ObservableObject {
 
     // MARK: 输入
 
-    /// 新结果（含换拼法）：清空并换成新作品的格子映射。
-    func configure(product: GenerationProduct) {
+    /// 新结果（含换拼法）：清空并换成新作品的格子映射。`cellFills` 与格子对齐，有 fc 的格子不取照片。
+    func configure(product: GenerationProduct, cellFills: [CellColor?] = []) {
         reset()
         let layout = product.generation.layout
         cellAssetIDs = product.cellAssetIDs
+        fills = cellFills
         columns = layout.columns
         rows = layout.rows
         baseCellPixels = MosaicPreviewRenderer.cellPixels(for: product.generation)
@@ -92,7 +95,19 @@ final class PreviewDetailLayer: ObservableObject {
 
     /// 离开结果页 / 换作品 / 内存警告：取消请求、移除格子图、清缓存。
     func reset() {
+        fills = []
         apply(state.reset())
+    }
+
+    /// 丢掉清晰层缓存和在飞请求（fc 变化、换布局）。不改当前缩放。
+    func invalidate() {
+        settleTask?.cancel()
+        settleTask = nil
+        cancelAll()
+        plan = nil
+        cellsByAsset = [:]
+        cache.removeAllObjects()
+        if !tiles.isEmpty { tiles = [] }
     }
 
     /// 缩放 / 平移每次变化都调（手势每帧、结束、双击）。150 ms 内没有新变化才更新可见集合。
@@ -133,14 +148,26 @@ final class PreviewDetailLayer: ObservableObject {
         DetailGeometry(zoom: zoom, displayScale: displayScale, columns: columns, rows: rows)
     }
 
+    private func cacheKey(_ assetID: String) -> NSString {
+        DetailCacheKey(assetID: assetID, fill: nil).cacheToken as NSString
+    }
+
+    /// 纯色格不取照片：计划里这些格子的 ID 置空，底图上的 fc 继续显示。
+    private func fetchAssetIDs() -> [String?] {
+        cellAssetIDs.enumerated().map { i, id in
+            let fill = i < fills.count ? fills[i] : nil
+            return DetailCacheKey(assetID: id ?? "", fill: fill).fetchesPhoto ? id : nil
+        }
+    }
+
     private func cached(_ id: String, atLeast tier: DetailTier) -> CachedTile? {
-        guard let c = cache.object(forKey: id as NSString), let t = c.tier, t >= tier else { return nil }
+        guard let c = cache.object(forKey: cacheKey(id)), let t = c.tier, t >= tier else { return nil }
         return c
     }
 
     private func update(tier: DetailTier) {
         // 显示中的图被视图持有、NSCache 释放不了：按 64 MB 预算截断（中心优先，外圈先丢），守住「峰值 ≤ 现在 + 64 MB」。
-        let p = DetailLoadPlan(geometry: geometry, cellAssetIDs: cellAssetIDs, tier: tier, ring: policy.ring)
+        let p = DetailLoadPlan(geometry: geometry, cellAssetIDs: fetchAssetIDs(), tier: tier, ring: policy.ring)
             .limited(toBytes: policy.cacheByteLimit)
         plan = p
         var byAsset: [String: [Int]] = [:]
@@ -164,7 +191,7 @@ final class PreviewDetailLayer: ObservableObject {
         // 先用缓存里的（含低一档的，暂时顶上，取到高档再换）
         var t: [Tile] = []
         for item in p.items {
-            guard let c = cache.object(forKey: item.assetID as NSString) else { continue }
+            guard let c = cache.object(forKey: cacheKey(item.assetID)) else { continue }
             for cell in item.cells {
                 t.append(Tile(id: cell, column: cell % max(1, columns), row: cell / max(1, columns), image: c.image))
             }
@@ -207,10 +234,10 @@ final class PreviewDetailLayer: ObservableObject {
         if case .image(let pb) = result, let fresh = ImagePixels.cgImage(pb) {
             // 退回的 128 px 图不覆盖已有缓存（可能是低一档的 hq，比它清楚），只在没有任何缓存时存
             var img = fresh
-            if fellBack, let existing = cache.object(forKey: id as NSString) {
+            if fellBack, let existing = cache.object(forKey: cacheKey(id)) {
                 img = existing.image
             } else {
-                cache.setObject(CachedTile(image: fresh, tier: fellBack ? nil : tier), forKey: id as NSString,
+                cache.setObject(CachedTile(image: fresh, tier: fellBack ? nil : tier), forKey: cacheKey(id),
                                 cost: pb.width * pb.height * 4)
             }
             fetchedThisUpdate += 1

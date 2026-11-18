@@ -66,7 +66,8 @@ final class AppModel: ObservableObject {
                                                                     images: ImageIOWorkImages(thumbnails: thumbnails)),
                                               existence: existence,
                                               images: ImageIOWorkImages(thumbnails: thumbnails),
-                                              rematcher: rematcher)
+                                              rematcher: rematcher,
+                                              perf: perf)
         worksController.attach(resultContext: { [weak coordinator] in
             guard let c = coordinator else {
                 return WorkResultContext(layout: nil, target: nil, overlayAlpha: 0, tier: nil, resultRevision: 0)

@@ -1,4 +1,5 @@
 import Foundation
+import MosaicCore
 
 // MARK: - 结果页预览「清晰层」（feat/preview-detail-layer，架构师 21:02 方案）
 //
@@ -342,5 +343,58 @@ public enum DetailRequestDiff {
             start.append(id)
         }
         return (cancel, start)
+    }
+}
+
+// MARK: - 清晰层缓存键（含 fc）
+
+/// 清晰层一张图的缓存键。照片格键里带空的 fc（`-`）；纯色格键是颜色，不带照片 ID。
+/// 颜色一变就是另一个键，不能命中换色前的图。纯色格 `fetchesPhoto == false`，不向 PhotoKit 取图。
+public struct DetailCacheKey: Hashable, Sendable, Equatable {
+    public var assetID: String
+    public var fill: CellColor?
+
+    public init(assetID: String, fill: CellColor?) {
+        if let fill {
+            self.assetID = ""
+            self.fill = fill
+        } else {
+            self.assetID = assetID
+            self.fill = nil
+        }
+    }
+
+    public init(cell: MosaicLayout.CellAssignment) {
+        self.init(assetID: cell.localIdentifier, fill: cell.fill)
+    }
+
+    /// 有纯色、或没有照片 ID 时不取图。
+    public var fetchesPhoto: Bool { fill == nil && !assetID.isEmpty }
+
+    /// `NSCache` / 测试用的稳定字符串。始终包含 `fc`。
+    public var cacheToken: String {
+        if let fill {
+            return "id:\(assetID)|fc:\(fill.r),\(fill.g),\(fill.b)"
+        }
+        return "id:\(assetID)|fc:-"
+    }
+}
+
+/// 清晰层缓存。`invalidate()` 丢掉全部条目（离开结果页、换布局、fc 变化时调用）。
+public struct DetailTileCache<Value: Sendable>: Sendable {
+    private let storage = LockedState<[DetailCacheKey: Value]>([:])
+
+    public init() {}
+
+    public func set(_ value: Value, for key: DetailCacheKey) {
+        storage.withLock { $0[key] = value }
+    }
+
+    public func get(_ key: DetailCacheKey) -> Value? {
+        storage.withLock { $0[key] }
+    }
+
+    public func invalidate() {
+        storage.withLock { $0.removeAll() }
     }
 }

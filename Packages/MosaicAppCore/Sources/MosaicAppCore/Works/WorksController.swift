@@ -222,6 +222,8 @@ public final class WorksController {
     public let images: any WorkImageEncoding
     /// 4b 补格（App 里是 `IndexWorkRematcher`）；nil = 缺图格留白。
     public let rematcher: (any MissingCellRematching)?
+    /// 补格耗时（`PerfPhase.worksRematch`）。nil = 不记。
+    public let perf: PerfRecorder?
     /// 最近一次补格的附注（内部性能页；不含照片 ID）。
     public private(set) var lastRematchNote: String?
     /// 从作品再导出的执行方（App 里是包着 AppCoordinator 的桥，桥内弱引用协调器，这里强持有不成环）。
@@ -246,8 +248,11 @@ public final class WorksController {
     public var toastDuration: Duration = .seconds(2)
     private var toastTask: Task<Void, Never>?
     /// 缺图提示（`works.replaced` / `works.missing`）显示多久后自动消失（copy v1.3「几秒后自动消失，不打断操作」；测试可调短）。
-    public var cellNoticeDuration: Duration = .seconds(4)
-    private var cellNoticeTask: Task<Void, Never>?
+    public var cellNoticeDuration: Duration {
+        get { cellNotices.duration }
+        set { cellNotices.duration = newValue }
+    }
+    private let cellNotices = CellNoticePresenter()
     /// 结果页记住的「当前结果对应的作品」（B10-13）：存 / 更新成功后记下，和结果版本号绑定。
     /// 「再调一调」只改叠加强度再回来不重新生成、版本号不变 → 一直记得；换拼法 / 重新生成（版本号变了）才清掉。
     private var remembered: (revision: Int, id: WorkID)?
@@ -272,6 +277,7 @@ public final class WorksController {
 
     public init(store: any WorksStore, existence: any PhotoExistenceChecking, images: any WorkImageEncoding,
                 rematcher: (any MissingCellRematching)? = nil,
+                perf: PerfRecorder? = nil,
                 resultContext: @escaping @MainActor () -> WorkResultContext = {
                     WorkResultContext(layout: nil, target: nil, overlayAlpha: 0, tier: nil, resultRevision: 0)
                 }) {
@@ -279,6 +285,7 @@ public final class WorksController {
         self.existence = existence
         self.images = images
         self.rematcher = rematcher
+        self.perf = perf
         self.resultContext = resultContext
     }
 
@@ -474,26 +481,27 @@ public final class WorksController {
         openToken += 1
         openedWork = nil
         state.opened = nil
-        cellNoticeTask?.cancel()
-        cellNoticeTask = nil
+        cellNotices.cancel()
     }
 
     /// 缺图提示（H8）出现后 `cellNoticeDuration` 自动消失：只清本次的格数，不改作品（只出一次的规则不变，之后打开本来就是 0）。
     /// 期间又出一条（如导出前又换了几格）就重新计时；关掉查看页 / 换了作品就作废。
-    private func scheduleCellNoticeDismiss(for id: WorkID) {
-        cellNoticeTask?.cancel()
-        let duration = cellNoticeDuration
-        cellNoticeTask = Task { [weak self] in
-            try? await Task.sleep(for: duration)
-            guard !Task.isCancelled, let self, self.state.opened?.id == id else { return }
-            self.dismissCellNotice()
-        }
+    private func scheduleCellNoticeDismiss(for id: WorkID, missingCells: Int, replacedCells: Int) {
+        let presenter = cellNotices
+        presenter.present(missingCells: missingCells, replacedCells: replacedCells, stillCurrent: { [weak self] in
+            self?.state.opened?.id == id
+        }, fire: { [weak self] in
+            self?.clearCellNoticeCounts()
+        })
     }
 
-    /// 立即收起缺图提示（自动消失到点，或用户手动点掉）。
+    /// 立即收起缺图提示（用户手动点掉）。自动消失走 `clearCellNoticeCounts`，不再取消下一次计时。
     public func dismissCellNotice() {
-        cellNoticeTask?.cancel()
-        cellNoticeTask = nil
+        cellNotices.cancel()
+        clearCellNoticeCounts()
+    }
+
+    private func clearCellNoticeCounts() {
         guard var opened = state.opened else { return }
         if (opened.missingCount ?? 0) > 0 { opened.missingCount = 0 }
         opened.replacedCount = 0
@@ -600,8 +608,16 @@ public final class WorksController {
         if let rematcher, !targets.isEmpty {
             var target: PixelBuffer?
             if let url = work.targetURL { target = try? await images.readTarget(at: url) }
+            let started = perf?.clock.now()
             do {
                 result = try await rematcher.rematch(work.layout, missing: targets, target: target)
+                if let perf, let started {
+                    // 设计文档没有单独的 works_rematch 字段表。沿用现有 PerfSample：
+                    // phase = works_rematch，seconds = 这一次 rematch 的墙钟，items = 替换格 + 留白格，
+                    // note = `WorkRematchResult.note`（本来就是性能页附注，不含照片 ID）。
+                    perf.record(.worksRematch, seconds: max(0, perf.clock.now() - started),
+                                items: result.replacedCells + result.blankCells, note: result.note)
+                }
             } catch is CancellationError {
                 return nil
             } catch WorkRematchError.indexUnavailable {
@@ -652,7 +668,7 @@ public final class WorksController {
             return
         }
         state.opened = OpenedWork(summary: summary, missingCount: outcome.missingShown, replacedCount: outcome.replaced)
-        if isNew { scheduleCellNoticeDismiss(for: work.id) }
+        if isNew { scheduleCellNoticeDismiss(for: work.id, missingCells: outcome.missingShown, replacedCells: outcome.replaced) }
     }
 
     // MARK: 再导出
@@ -712,8 +728,7 @@ public final class WorksController {
         relayTask = nil
         toastTask?.cancel()
         toastTask = nil
-        cellNoticeTask?.cancel()
-        cellNoticeTask = nil
+        cellNotices.cancel()
     }
 }
 

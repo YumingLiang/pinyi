@@ -70,8 +70,8 @@ public actor FileWorksStore: WorksStore {
     private var inFlight: [String: (token: UUID, task: Task<WorkSaveResult, any Error>)] = [:]
     /// 旧口径作品在内存里补算出的新指纹（不写盘，避免每次列表都读 layout.json）。
     private var recomputedFingerprints: [WorkID: String] = [:]
-    /// 正在改写的作品（打开和导出前可能同时触发缺图处理）：同一作品串行。
-    private var updating: [WorkID: (token: UUID, task: Task<Work, any Error>)] = [:]
+    /// 正在改写的作品（打开、导出、改缺失数、删除、只改叠加强度）：同一作品串行。
+    private var updating: [WorkID: (token: UUID, task: Task<Void, Never>)] = [:]
 
     public init(directory: URL, images: any WorkImageEncoding, now: @escaping @Sendable () -> Date = { Date() }) {
         self.directory = directory
@@ -132,7 +132,12 @@ public actor FileWorksStore: WorksStore {
             if WorkFingerprint.sameOverlay(existing.meta.overlayAlpha, draft.overlayAlpha) {
                 return WorkSaveResult(summary: existing, outcome: .unchanged)
             }
-            task = Task { try await self.updateOverlay(existing, with: draft, fingerprint: fingerprint) }
+            task = Task {
+                // 更新已有作品和补格写回走同一个按作品串行入口，避免和打开时的替换交错。
+                try await self.serialized(existing.id) {
+                    try await self.updateOverlay(existing, with: draft, fingerprint: fingerprint)
+                }
+            }
         } else {
             let layoutData = try Self.encoder().encode(draft.layout)
             task = Task {
@@ -147,9 +152,8 @@ public actor FileWorksStore: WorksStore {
     }
 
     private func write(_ draft: WorkDraft, layoutData: Data, fingerprint: String) async throws -> WorkSummary {
-        // 守护（架构师 11-17 B）：新存作品的预览按 `fallbacks: [:]` 画，带纯色格（`fc`）的布局会画成白格、和导出对不上。
-        // 长期改法（works-missing-fill）：预览渲染器和导出器都直接读 fc，然后去掉这个守护。
-        if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
+        // 预览渲染器直接读布局里的 fc（`CellRenderSource`），`fallbacks` 传空也不会把纯色格画成白格。
+        // 导出器读同一处。因此带 fc 的新作品可以写入，不再抛 `unsupportedFilledCells`。
         let fm = FileManager.default
         let id = WorkID()
         let temp = directory.appendingPathComponent(Self.tempPrefix + id.directoryName, isDirectory: true)
@@ -314,6 +318,7 @@ public actor FileWorksStore: WorksStore {
     }
 
     public func delete(_ id: WorkID) async throws {
+        // 不进串行队列：更新预览可能正卡在编码上。删除要马上把目录挪走，写回提交前发现目录没了就放弃，不能等编码结束再删（否则会把已删作品写回来）。
         let fm = FileManager.default
         let dir = workDirectory(id)
         guard fm.fileExists(atPath: dir.path) else { throw WorksStoreError.notFound }
@@ -323,6 +328,10 @@ public actor FileWorksStore: WorksStore {
     }
 
     public func setMissingCount(_ count: Int, for id: WorkID) async throws {
+        try await serialized(id) { try await self.writeMissingCount(count, for: id) }
+    }
+
+    private func writeMissingCount(_ count: Int, for id: WorkID) throws {
         var meta = try readSummary(id).meta
         guard meta.missingCount != count else { return }
         meta.missingCount = count
@@ -356,15 +365,17 @@ public actor FileWorksStore: WorksStore {
         }
     }
 
-    private func serialized(_ id: WorkID, _ body: @escaping @Sendable () async throws -> Work) async throws -> Work {
+    /// 按作品串行。补格写回、叠加强度更新、缺失数、删除都走这里，同一个作品不会被两边同时改。
+    private func serialized<T: Sendable>(_ id: WorkID, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
         while let running = updating[id] {
-            _ = try? await running.task.value
+            await running.task.value
             // 已完成的任务由这里清掉（发起方可能还没轮到恢复），否则会对着一个已完成的任务空转
             if updating[id]?.token == running.token { updating[id] = nil }
         }
         let token = UUID()
         let task = Task { try await body() }
-        updating[id] = (token, task)
+        let gate = Task<Void, Never> { _ = try? await task.value }
+        updating[id] = (token, gate)
         defer { if updating[id]?.token == token { updating[id] = nil } }
         return try await task.value
     }

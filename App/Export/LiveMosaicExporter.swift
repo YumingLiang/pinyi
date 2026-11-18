@@ -13,8 +13,8 @@ import MosaicAppCore
 /// - 取图：按行优先顺序，最多 4 张在飞；取到一张立刻画进位图并释放（autoreleasepool），不先取全再画。
 ///   峰值 ≈ 位图 + 4 张缩略图。PhotoKit 请求 targetSize = 每格像素、highQualityFormat、`isNetworkAccessAllowed = false`。
 /// - 编码：CGImageDestination 写 JPEG（质量 0.9）到 `tmp/export/`；保存 / 分享结束后删除，启动时清空目录（B-27）。
-/// - 「我的作品」兜底格（`request.cellFallbacks`，旧预览裁出的小图）：不取照片，`.high` 插值放大填满该格（不用最近邻），
-///   计入「糊格子」。
+/// - 「我的作品」纯色格：直接读布局 `fc`（`renderSource`），填这个颜色，不取照片、不依赖旧预览裁切。
+/// - 还没有 `fc` 的兜底格（`request.cellFallbacks`）：不取照片，`.high` 插值放大填满该格（不用最近邻），计入「糊格子」。
 /// - 实际每格像素、尺寸、上限、可用内存、用时、文件大小，以及退回 128px 缩略图（糊格子）和完全空白（白格子）的数量，写 os_log（subsystem 同 Bundle ID，category "export"）和内测性能页。
 /// - 不做（紧急版范围外）：取消、后台续跑、降档提示、存储预检。导出成功经协调器 `onExportSucceeded` 通知「我的作品」（只刷新按钮状态，导出不自动存，需求 B10-1）。
 /// ⚠️ 盲写（Linux 上无法编译 CG / ImageIO / PhotoKit）。
@@ -88,6 +88,18 @@ struct LiveMosaicExporter: MosaicExporting {
                 while next < ids.count {
                     let i = next
                     next += 1
+                    if case .fill(let color) = request.layout.renderSource(at: i) {
+                        let drawn: Bool = autoreleasepool {
+                            let col = i % columns, row = i / columns
+                            let comps = [CGFloat(color.r) / 255, CGFloat(color.g) / 255, CGFloat(color.b) / 255, 1]
+                            ctx.setFillColor(CGColor(colorSpace: cs, components: comps)!)
+                            ctx.fill(CGRect(x: col * cp, y: h - (row + 1) * cp, width: cp, height: cp))
+                            return true
+                        }
+                        fills.add(drawn ? .blurryFallback : .blank)
+                        done += 1
+                        continue
+                    }
                     if let tile = fallbacks[i] {
                         let drawn: Bool = autoreleasepool {
                             guard let img = ImagePixels.cgImage(tile) else { return false }

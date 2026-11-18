@@ -1,5 +1,15 @@
 # CHANGES
 
+## feat/works-missing-fill：渲染器和导出器直接读 fc
+
+- 预览（`ImageIOWorkImages.writePreview` / Linux 假渲染）和导出（`LiveMosaicExporter`）经 `MosaicLayout.renderSource(at:)` 读纯色格 `fc`。有 `fc` 就填这个颜色，不用调用方传来的裁切小图，也不读旧预览。没有 `fc` 的临时兜底小图仍可填空白格。
+- 读写闭环：`FileWorksStore.write` 不再因布局带 `fc` 抛 `WorksError.unsupportedFilledCells`（枚举值保留，不再抛出）。新存作品的预览在 `fallbacks: [:]` 下仍是 fc 的颜色。
+- `CellNoticePresenter`：`works.missing` / `works.replaced` 按格计数，一次 present 只自动收起一次；取消或查看页已换就不收。控制器只在本次新出现格子时调用。
+- 清晰层缓存键 `DetailCacheKey` 含 fc（`id:…|fc:…`）。纯色格不取照片。`DetailTileCache.invalidate()` 与 App `PreviewDetailLayer.invalidate()` 清空缓存。
+- 已有作品的内容写回（补格、只改叠加强度、缺失数）经 `FileWorksStore` 的按作品串行入口。删除仍是立刻挪走目录：进行中的写回在提交前发现目录没了就放弃，避免把已删作品写回来。新作品第一次写入仍按指纹排队（当时还没有 id）。
+- `PerfPhase.worksRematch`（原始名 `works_rematch`）记一次成功的 `rematch`：秒数、items = 替换格 + 留白格、note = 现有 `WorkRematchResult.note`。设计文档没有单独的字段表，所以没有新的指标结构。
+- 未改：`rematch(_:missing:target:)` 签名（设计已经是布局 + 缺失 ID + 目标图副本）；受限访问占位；5e 按作品判断和 Q3（发布门 R1 仍未完成）；形状接入。
+
 ## feat/works-hidden（追加 6）：#11 隐私修复轮（产品 03:55 Q1–Q4、04:00 / 04:05 修订，copy v1.7a；架构师 11-17 A–D）
 
 - **Q1 / A 取消 4b**：`MissingCellFill.decide` 只剩 `candidate` / `targetColor`（`previewCrop` 删掉）：删除、隐藏、拿不准一律填目标图这一格的平均色，按格计入 `works.missing`。

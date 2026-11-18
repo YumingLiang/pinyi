@@ -369,4 +369,27 @@ final class DetailLayerTests: XCTestCase {
         XCTAssertEqual(none.cancel, ["a"])
         XCTAssertEqual(none.start, [])
     }
+
+    func testDetailCacheKeyIncludesFillAndInvalidateDropsEntries() {
+        let photo = DetailCacheKey(assetID: "abc", fill: nil)
+        XCTAssertEqual(photo.cacheToken, "id:abc|fc:-")
+        XCTAssertTrue(photo.cacheToken.contains("fc:"))
+        XCTAssertTrue(photo.fetchesPhoto)
+        let red = DetailCacheKey(assetID: "abc", fill: CellColor(r: 1, g: 2, b: 3))
+        XCTAssertEqual(red.cacheToken, "id:|fc:1,2,3")
+        XCTAssertFalse(red.fetchesPhoto, "纯色格不取照片")
+        XCTAssertNotEqual(photo, red)
+        let fromCell = DetailCacheKey(cell: .init(localIdentifier: "abc", fill: CellColor(r: 1, g: 2, b: 3)))
+        XCTAssertEqual(fromCell, red)
+        let other = DetailCacheKey(assetID: "abc", fill: CellColor(r: 1, g: 2, b: 4))
+        XCTAssertNotEqual(red.cacheToken, other.cacheToken)
+        let cache = DetailTileCache<Int>()
+        cache.set(1, for: photo)
+        cache.set(2, for: red)
+        XCTAssertEqual(cache.get(photo), 1)
+        XCTAssertEqual(cache.get(red), 2)
+        cache.invalidate()
+        XCTAssertNil(cache.get(photo))
+        XCTAssertNil(cache.get(red))
+    }
 }

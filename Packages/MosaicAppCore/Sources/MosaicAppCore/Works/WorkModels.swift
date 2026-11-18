@@ -371,8 +371,9 @@ public struct WorkImageFile: Sendable, Hashable {
 /// 实现约定：只往给定的 `directory`（作品的临时目录）里写，文件名自定（如 `preview.jpg`）；
 /// 失败就抛错——存储层会把整个临时目录删掉，不留半个作品。
 public protocol WorkImageEncoding: Sendable {
-    /// 按布局渲染预览图（长边 ≤ `maxLongEdge`）。`fallbacks`：格子下标 → 预览兜底图（`WorkFallbackImages`），
-    /// 这些格子不取照片，把兜底图放大填满该格（双线性 / `.high`，不用最近邻），再照常叠加目标图。
+    /// 按布局渲染预览图（长边 ≤ `maxLongEdge`）。
+    /// 纯色格直接读 `layout.renderSource(at:)` 的 `fc`，不读旧预览，也不用 `fallbacks` 里的裁切小图覆盖它。
+    /// `fallbacks` 只填「还没有 `fc`」的格子（旧调用方的临时补格）：不取照片，把小图放大填满（双线性 / `.high`），再照常叠加目标图。
     func writePreview(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, maxLongEdge: Int,
                       fallbacks: [Int: PixelBuffer], into directory: URL) async throws -> WorkImageFile
     /// 写目标图副本（长边 ≤ `maxLongEdge`，原图更小就不放大）。
@@ -447,7 +448,7 @@ public enum WorksStoreError: Error, Sendable, Equatable {
 }
 
 /// 作品写入的前置条件错误（架构师 11-17 B）。
+/// `unsupportedFilledCells` 已不再抛出：预览渲染器和导出器直接读 `fc`（见 `CellRenderSource`），带纯色格的布局可以写入。
 public enum WorksError: Error, Sendable, Equatable {
-    /// `write(_ draft:)` 收到带纯色格（`fc`）的布局：新存作品的预览渲染还不读 fc，先拒绝（长期改法见 works-missing-fill）。
     case unsupportedFilledCells
 }

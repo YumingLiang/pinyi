@@ -126,8 +126,9 @@ final class MissingCellFillTests: XCTestCase {
         let t = WorksRematchTests.target(cols: 3, rows: 2, colors: WorksRematchTests.cellColors)
         let expected = FakeWorkImages.render(work.layout, target: t, overlayAlpha: 0.2, fallbacks: [1: RGB8(r: 200, g: 30, b: 30)])
         XCTAssertEqual(FakeWorkImages.raw(pixels), FakeWorkImages.raw(expected))
+        // 把隐藏照片的颜色当成裁切小图传进来也不画它：这一格有 fc，渲染器只认 fc。
         let leaked = FakeWorkImages.render(work.layout, target: t, overlayAlpha: 0.2, fallbacks: [1: FakeWorkImages.color(of: "b")])
-        XCTAssertNotEqual(FakeWorkImages.raw(pixels), FakeWorkImages.raw(leaked))
+        XCTAssertEqual(FakeWorkImages.raw(pixels), FakeWorkImages.raw(leaked), "fc 盖过隐藏照片的裁切色")
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]), "按格计入 works.missing")
         h.controller.stop()
     }
