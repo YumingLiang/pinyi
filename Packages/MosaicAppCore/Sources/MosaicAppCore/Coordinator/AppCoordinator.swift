@@ -52,6 +52,9 @@ public final class AppCoordinator {
         var targetGeneration: Int
         var selection: SourceSelection
         var density: DensityChoice
+        /// nil = 照片拼图。背景不在这里：只改背景不重新匹配。
+        var shapePreset: ShapePresetID?
+        var shapePalette: ShapePalette?
     }
     /// 来源被静默去掉相簿（不是用户改的）：当前结果记下的来源同样换掉，`settingsPrimaryAction` 不因此变「开始拼图」。
     func notePrunedSelectionForProduct(old: SourceSelection, new: SourceSelection) {
@@ -59,7 +62,8 @@ public final class AppCoordinator {
     }
     private var currentInputs: ProductInputs {
         ProductInputs(targetGeneration: targetGeneration, selection: state.flow.source.selection,
-                      density: state.flow.settings.density)
+                      density: state.flow.settings.density,
+                      shapePreset: state.flow.shape?.preset, shapePalette: state.flow.shape?.palette)
     }
     /// 平台层执行系统动作（打开设置、受限选择器）。
     public var systemActionHandler: (@MainActor (SystemAction) -> Void)?
@@ -373,6 +377,35 @@ public final class AppCoordinator {
     public func selectSource(_ s: SourceSelection) { state.flow.source.select(s) }
     public func setDensity(_ d: DensityChoice) { state.flow.settings.density = d }
     public func setOverlayAlpha(_ a: Double) { state.flow.settings.overlayAlpha = OverlayBlendLimits.clamp(a) }
+
+    /// 首页「用形状拼」。
+    public func beginShape() { flowSend(.beginShape) }
+
+    public func setShapePreset(_ id: ShapePresetID) {
+        guard id.isKnown, var shape = state.flow.shape else { return }
+        shape.preset = id
+        state.flow.shape = shape
+    }
+
+    public func setShapePalette(_ palette: ShapePalette) {
+        guard var shape = state.flow.shape else { return }
+        shape.palette = palette
+        state.flow.shape = shape
+    }
+
+    /// 只改背景。形状、配色、密度、来源都没变时，直接改当前结果，不重新匹配。
+    public func setShapeBackground(_ background: ShapeBackground) {
+        guard var shape = state.flow.shape else { return }
+        shape.background = background
+        state.flow.shape = shape
+        if product != nil, productInputs == currentInputs {
+            product?.setShapeBackground(background)
+            state.resultRevision += 1
+        }
+    }
+
+    /// 形状结果这一阶段不能存作品。按钮不出现；这里再挡一层。
+    public var allowsWorkSave: Bool { state.flow.shape == nil }
     public func setShowScanSheet(_ on: Bool) { state.showScanSheet = on }
     public func setPresentedEmptyState(_ e: LibraryEmptyState?) { state.presentedEmptyState = e }
     public func setExportTier(_ t: ExportTier) {
@@ -386,8 +419,9 @@ public final class AppCoordinator {
     /// （`common.done`）：回到原结果，格子 / 种子不变，只按新强度重画；动了密度、来源、目标图（含裁剪，换图即换代次）→
     /// `.generate`「开始拼图」，重新生成，算新的一张。没有可回去的结果（首次进设置页、失败后结果已丢）也是 `.generate`。
     public var settingsPrimaryAction: SettingsPrimaryAction {
-        guard product != nil, target != nil, let inputs = productInputs, inputs == currentInputs,
+        guard product != nil, let inputs = productInputs, inputs == currentInputs,
               state.flow.generation.lastOutcome != nil, case .idle = state.flow.generation.phase else { return .generate }
+        if state.flow.shape == nil, target == nil { return .generate }
         return .done
     }
 
@@ -503,11 +537,13 @@ public final class AppCoordinator {
     }
 
     private func run(id: Int, seed: UInt64) {
-        guard let target else { send(.finishedWithError(runID: id, failure: .other)); return }
+        let shapeChoice = state.flow.shape
+        if shapeChoice == nil, target == nil { send(.finishedWithError(runID: id, failure: .other)); return }
         let settings = state.flow.settings
         let selection = state.flow.source.selection
         let inputs = currentInputs
         let previous = state.flow.generation.phase.isReshuffle ? product : nil
+        let photoTarget = target
         let generator = dependencies.generator
         let index = self.index
         if let t = generationTask { t.cancel(); retiring.append(t) }
@@ -529,12 +565,29 @@ public final class AppCoordinator {
             defer { continuation.finish(); stageContinuation.finish() }
             do {
                 let p: GenerationProduct
-                if let previous {
-                    p = try await generator.reshuffle(previous, target: target, settings: settings, seed: seed,
-                                                      progress: progress, stage: stage)
-                } else {
+                if let previous, previous.generation.activeCells != nil, let shapeChoice {
                     let snap = try await index.snapshot(for: selection)
-                    p = try await generator.run(target: target, snapshot: snap, settings: settings, seed: seed,
+                    let grid = try ShapeGenerationPlan.grid(shapeChoice, density: settings.density.density)
+                    let colors = ShapePaletteBuilder.photoColors(snapshot: snap.library)
+                    let pixels = try ShapeGenerationPlan.target(shapeChoice, grid: grid, photoColors: colors)
+                    p = try await generator.reshuffle(previous, target: pixels, settings: settings, seed: seed,
+                                                      progress: progress, stage: stage)
+                } else if let previous {
+                    guard let photoTarget else { throw MosaicError.invalidConfiguration("missing target") }
+                    p = try await generator.reshuffle(previous, target: photoTarget, settings: settings, seed: seed,
+                                                      progress: progress, stage: stage)
+                } else if let shapeChoice {
+                    let snap = try await index.snapshot(for: selection)
+                    let grid = try ShapeGenerationPlan.grid(shapeChoice, density: settings.density.density)
+                    let colors = ShapePaletteBuilder.photoColors(snapshot: snap.library)
+                    let pixels = try ShapeGenerationPlan.target(shapeChoice, grid: grid, photoColors: colors)
+                    p = try await generator.run(target: pixels, snapshot: snap, settings: settings, seed: seed,
+                                                activeCells: grid.mask, shapeBackground: shapeChoice.background,
+                                                progress: progress, stage: stage)
+                } else {
+                    guard let photoTarget else { throw MosaicError.invalidConfiguration("missing target") }
+                    let snap = try await index.snapshot(for: selection)
+                    p = try await generator.run(target: photoTarget, snapshot: snap, settings: settings, seed: seed,
                                                 progress: progress, stage: stage)
                 }
                 continuation.finish()

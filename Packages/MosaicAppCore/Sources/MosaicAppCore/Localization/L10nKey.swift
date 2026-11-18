@@ -165,6 +165,18 @@ public extension L10nKey {
     static let commonOK = L10nKey(rawValue: "common.ok")
     static let commonClose = L10nKey(rawValue: "common.close")
     static let commonRetry = L10nKey(rawValue: "common.retry")
+    // 预设形状（首版：无文字、不保存作品）
+    static let shapeEntry = L10nKey(rawValue: "shape.entry")
+    static let shapeSection = L10nKey(rawValue: "shape.section")
+    static let shapePaletteSection = L10nKey(rawValue: "shape.palette.section")
+    static let shapePaletteAuto = L10nKey(rawValue: "shape.palette.auto")
+    static let shapePaletteWarmRed = L10nKey(rawValue: "shape.palette.warmRed")
+    static let shapePalettePink = L10nKey(rawValue: "shape.palette.pink")
+    static let shapePaletteBlue = L10nKey(rawValue: "shape.palette.blue")
+    static let shapePaletteGold = L10nKey(rawValue: "shape.palette.gold")
+    static let shapeBackgroundSection = L10nKey(rawValue: "shape.background.section")
+    static let shapeBackgroundWhite = L10nKey(rawValue: "shape.background.white")
+    static let shapeBackgroundBlack = L10nKey(rawValue: "shape.background.black")
 
     /// 本包用到的全部 key（测试用）。
     static let allUsed: [L10nKey] = [
@@ -190,6 +202,12 @@ public extension L10nKey {
         emptyNoPhotosTitle, emptyNoPhotosBody, emptyNoPhotosOK, emptyNotDownloadedTitle, emptyNotDownloadedBody, emptyNotDownloadedRetry,
         settingsTitle, settingsPerformance, settingsAbout, aboutTitle, aboutBody, appDisplayName,
         commonCancel, commonDone, commonBack, commonOK, commonClose, commonRetry,
+        shapeEntry, shapeSection, shapePaletteSection, shapePaletteAuto, shapePaletteWarmRed, shapePalettePink,
+        shapePaletteBlue, shapePaletteGold, shapeBackgroundSection, shapeBackgroundWhite, shapeBackgroundBlack,
+        .init(rawValue: "shape.preset.heart"), .init(rawValue: "shape.preset.star"), .init(rawValue: "shape.preset.circle"),
+        .init(rawValue: "shape.preset.birthdayCake"), .init(rawValue: "shape.preset.flower"), .init(rawValue: "shape.preset.moon"),
+        .init(rawValue: "shape.preset.fourLeafClover"), .init(rawValue: "shape.preset.house"),
+        .init(rawValue: "shape.preset.speechBubble"), .init(rawValue: "shape.preset.roundedSquare"),
         exportSizeSection, exportSizeShare, exportSizeShareDesc, exportSizeHD, exportSizeHDDesc, exportSizeUHD, exportSizeUHDDesc, exportSizeLargeHint, previewExport, exportDegraded, exportProgressTitle, exportProgressHint, exportInterrupted, exportRetry, saveSuccessTitle, saveSuccessBody, saveSuccessDone, saveSuccessShare, shareSheetTitle, shareSuggestSave, saveDiskFullTitle, saveDiskFullBody, saveDiskFullOK, saveAddDeniedTitle, saveAddDeniedBody, saveAddDeniedSettings, saveAddDeniedShare, saveFailed, saveFailedRetry,
     ] + allWorks + allQuick + allMultiAlbum
 }

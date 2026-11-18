@@ -118,6 +118,14 @@ final class GatedGenerator: MosaicGenerating, Sendable {
         try await pass()
         return try await runner.run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress, stage: stage)
     }
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             activeCells: CellMask?, shapeBackground: ShapeBackground?,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await pass()
+        return try await runner.run(target: target, snapshot: snapshot, settings: settings, seed: seed,
+                                    activeCells: activeCells, shapeBackground: shapeBackground,
+                                    progress: progress, stage: stage)
+    }
     func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
                    progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
         try await pass()

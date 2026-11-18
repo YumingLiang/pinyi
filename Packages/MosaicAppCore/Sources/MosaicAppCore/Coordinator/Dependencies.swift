@@ -92,6 +92,10 @@ public protocol MosaicGenerating: Sendable {
                    progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct
     func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
              progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct
+    /// 形状生成。`activeCells == nil` 与无掩码入口相同。
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             activeCells: CellMask?, shapeBackground: ShapeBackground?,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct
     func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
                    progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct
     func invalidateLocalResolution()
@@ -102,6 +106,11 @@ public extension MosaicGenerating {
     func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
              progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
         try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress)
+    }
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             activeCells: CellMask?, shapeBackground: ShapeBackground?,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress, stage: stage)
     }
     func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
                    progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {

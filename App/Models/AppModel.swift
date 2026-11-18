@@ -183,6 +183,11 @@ final class AppModel: ObservableObject {
     func finishAlbumSelection() { coordinator.finishAlbumSelection() }
     func closeAlbumList() { coordinator.closeAlbumList() }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
+    func beginShape() { coordinator.beginShape() }
+    func setShapePreset(_ id: ShapePresetID) { coordinator.setShapePreset(id) }
+    func setShapePalette(_ palette: ShapePalette) { coordinator.setShapePalette(palette) }
+    func setShapeBackground(_ background: ShapeBackground) { coordinator.setShapeBackground(background) }
+    var allowsWorkSave: Bool { coordinator.allowsWorkSave }
     func generateTapped() { Task { await coordinator.generateTapped() } }
     /// 设置页主按钮（B10.14）：只改了叠加强度 →「完成」回原结果；否则「开始拼图」。
     var settingsPrimaryAction: SettingsPrimaryAction { coordinator.settingsPrimaryAction }
