@@ -8,17 +8,124 @@ import MosaicAppCore
 
 /// 形状从「用形状拼」进入，不选用户目标图。fd3c7f0 上结果页仍出现，但 `AppModel.renderPreview` 和
 /// `canExport` 都要求 `coordinator.target`，预览保持空白、导出保持禁用。
-/// 这条测试走 AppModel 的生产构造（观察状态、画预览、同一套依赖），材料是合成缩略图。
+/// 这是 AppModel 集成测试，不是 XCUITest，也不打开可见界面或真机。
+/// 结果页「导出」按钮经档位页调用 `model.saveTapped()`，这里测的就是这个方法。
 @MainActor
 final class ShapeResultScreenTests: XCTestCase {
     private let tile = (r: UInt8(20), g: UInt8(180), b: UInt8(40))
 
+    func testPhotoModeWithoutTargetHasNoPreviewAndDoesNotExport() async throws {
+        let harness = try await makeHarness()
+        defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+        let ready = await waitUntil {
+            harness.model.coordinator.state.indexStatus.hasCompletedInitialScan
+                && harness.model.coordinator.state.indexStatus.available > 0
+        }
+        XCTAssertTrue(ready, "合成素材没有扫进索引")
+        XCTAssertNil(harness.model.flow.shape)
+        XCTAssertNil(harness.model.coordinator.target)
+        XCTAssertNil(harness.model.resultImage)
+        XCTAssertFalse(harness.model.canExport)
+
+        harness.model.generateTapped()
+        let failed = await waitUntil {
+            if case .failed = harness.model.flow.generation.phase { return true }
+            return false
+        }
+        XCTAssertTrue(failed, "没有用户目标图的照片生成应失败，实际 \(harness.model.flow.generation.phase)")
+        XCTAssertNotEqual(harness.model.flow.step, .result)
+        XCTAssertNil(harness.model.coordinator.product)
+        XCTAssertNil(harness.model.resultImage)
+        XCTAssertFalse(harness.model.canExport)
+        harness.model.saveTapped()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await harness.model.coordinator.settle()
+        XCTAssertEqual(harness.library.attemptCount, 0)
+        XCTAssertNotEqual(harness.model.exportPhase, .saved)
+    }
+
     func testShapeEntryShowsPreviewAndEnablesExportWithoutUserPhoto() async throws {
+        let harness = try await makeHarness()
+        defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+        let model = harness.model
+        let library = harness.library
+        let ready = await waitUntil {
+            model.coordinator.state.indexStatus.hasCompletedInitialScan && model.coordinator.state.indexStatus.available > 0
+        }
+        XCTAssertTrue(ready, "合成素材没有扫进索引")
+
+        model.beginShape()
+        XCTAssertNotNil(model.flow.shape)
+        model.setDensity(.coarse)
+        model.flowSend(.next)
+        XCTAssertEqual(model.flow.step, .settings)
+        await model.coordinator.generateTapped()
+        await model.coordinator.settle()
+
+        guard case .result = model.flow.generation.phase else {
+            return XCTFail("没有进入结果页 \(model.flow.generation.phase)")
+        }
+        XCTAssertEqual(model.flow.step, .result)
+        XCTAssertNotNil(model.coordinator.product?.shapeFrame)
+        XCTAssertNil(model.coordinator.target, "这条路径没有用户目标图")
+        XCTAssertFalse(model.allowsWorkSave)
+        XCTAssertTrue(model.canExport, "结果已经生成，导出不应因为没有用户目标图而禁用")
+
+        let product = try XCTUnwrap(model.coordinator.product)
+        let mask = try XCTUnwrap(product.shapeFrame).mask
+        let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
+        let shown = await waitUntil { model.resultImage?.width == mask.columns * previewCell }
+        let image = try XCTUnwrap(model.resultImage, "结果页没有可显示的预览")
+        XCTAssertTrue(shown)
+        XCTAssertEqual(image.height, mask.rows * previewCell)
+        let previewBytes = try bitmap(image)
+        let inside = try XCTUnwrap((0..<mask.cellCount).first { mask.isActive($0) })
+        let previewPixel = pixelFromTop(previewBytes, width: image.width, columns: mask.columns, cellPixels: previewCell, index: inside)
+        assertNear(previewPixel, tile, tolerance: 24, label: "预览内格")
+
+        XCTAssertEqual(library.attemptCount, 0)
+        model.saveTapped()
+        let saved = await waitUntil { if case .saved = model.exportPhase { return true }; return false }
+        XCTAssertTrue(saved, "saveTapped 后不是已写入相册：\(model.exportPhase)")
+        await model.coordinator.settle()
+        XCTAssertEqual(library.successCount, 1)
+        XCTAssertEqual(library.attemptCount, 1)
+        let jpegData = try XCTUnwrap(library.lastJPEG)
+        let jpeg = try XCTUnwrap(decodeJPEG(jpegData))
+        XCTAssertGreaterThan(jpeg.width, 8)
+        let exportCell = jpeg.width / mask.columns
+        XCTAssertEqual(jpeg.width, mask.columns * exportCell)
+        let exportPixel = pixelFromTop(try bitmap(jpeg), width: jpeg.width, columns: mask.columns, cellPixels: exportCell, index: inside)
+        assertNear(exportPixel, tile, tolerance: 36, label: "导出内格")
+
+        model.dismissExportResult()
+        library.setWrite(.fail)
+        model.saveTapped()
+        let failed = await waitUntil { if case .failed(.other) = model.exportPhase { return true }; return false }
+        XCTAssertTrue(failed, "相册写入失败后不是 .failed(.other)：\(model.exportPhase)")
+        await model.coordinator.settle()
+        XCTAssertEqual(library.successCount, 1)
+        XCTAssertEqual(library.attemptCount, 2)
+
+        model.dismissExportResult()
+        library.setAddOnly(.denied)
+        model.saveTapped()
+        let denied = await waitUntil { if case .failed(.addDenied) = model.exportPhase { return true }; return false }
+        XCTAssertTrue(denied, "拒绝添加权限后不是 .failed(.addDenied)：\(model.exportPhase)")
+        await model.coordinator.settle()
+        XCTAssertEqual(library.attemptCount, 2, "权限被拒时不应再调用相册写入")
+    }
+
+    private struct Harness {
+        var root: URL
+        var library: MemoryAlbum
+        var model: AppModel
+    }
+
+    private func makeHarness() async throws -> Harness {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("shape-screen-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let library = SyntheticLibrary(count: 24)
+        let library = MemoryAlbum(count: 24)
         let thumbs = SolidThumbs(r: tile.r, g: tile.g, b: tile.b)
         var config = PhotoIndex.Configuration()
         config.batchSize = 24
@@ -47,56 +154,12 @@ final class ShapeResultScreenTests: XCTestCase {
                              lifecycle: AppLifecycle(), relay: ExportSuccessRelay())
         model.coordinator.start()
         await model.coordinator.settle()
-        let ready = await waitUntil(model.coordinator.state.indexStatus.hasCompletedInitialScan && model.coordinator.state.indexStatus.available > 0)
-        XCTAssertTrue(ready, "合成素材没有扫进索引")
-
-        model.beginShape()
-        XCTAssertNotNil(model.flow.shape)
-        model.setDensity(.coarse)
-        model.flowSend(.next)
-        XCTAssertEqual(model.flow.step, .settings)
-        await model.coordinator.generateTapped()
-        await model.coordinator.settle()
-
-        guard case .result = model.flow.generation.phase else {
-            return XCTFail("没有进入结果页 \(model.flow.generation.phase)")
-        }
-        XCTAssertEqual(model.flow.step, .result)
-        XCTAssertNotNil(model.coordinator.product?.shapeFrame)
-        XCTAssertNil(model.coordinator.target, "这条路径没有用户目标图")
-        XCTAssertFalse(model.allowsWorkSave)
-        XCTAssertTrue(model.canExport, "结果已经生成，导出不应因为没有用户目标图而禁用")
-
-        let product = try XCTUnwrap(model.coordinator.product)
-        let mask = try XCTUnwrap(product.shapeFrame).mask
-        let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
-        let shown = await waitUntil(model.resultImage?.width == mask.columns * previewCell)
-        let image = try XCTUnwrap(model.resultImage, "结果页没有可显示的预览")
-        XCTAssertTrue(shown)
-        XCTAssertEqual(image.height, mask.rows * previewCell)
-        let previewBytes = try bitmap(image)
-        let inside = try XCTUnwrap((0..<mask.cellCount).first { mask.isActive($0) })
-        let previewPixel = pixelFromTop(previewBytes, width: image.width, columns: mask.columns, cellPixels: previewCell, index: inside)
-        assertNear(previewPixel, tile, tolerance: 24, label: "预览内格")
-
-        model.coordinator.shareTapped()
-        await model.coordinator.settle()
-        guard case .sharing(let url) = model.coordinator.state.export else {
-            return XCTFail("导出没有产出文件 \(model.coordinator.state.export)")
-        }
-        defer { model.coordinator.shareFinished() }
-        let jpeg = try XCTUnwrap(decodeJPEG(url))
-        XCTAssertGreaterThan(jpeg.width, 8)
-        let exportCell = jpeg.width / mask.columns
-        XCTAssertEqual(jpeg.width, mask.columns * exportCell)
-        let exportPixel = pixelFromTop(try bitmap(jpeg), width: jpeg.width, columns: mask.columns, cellPixels: exportCell, index: inside)
-        assertNear(exportPixel, tile, tolerance: 36, label: "导出内格")
-        model.coordinator.stop()
+        return Harness(root: root, library: library, model: model)
     }
 
-    private func waitUntil(_ condition: @autoclosure () -> Bool, seconds: Double = 90) async -> Bool {
+    private func waitUntil(seconds: Double = 90, _ condition: @escaping () -> Bool) async -> Bool {
         let start = Date()
-        while !condition() && Date().timeIntervalSince(start) < seconds {
+        while !condition(), Date().timeIntervalSince(start) < seconds {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
         return condition()
@@ -133,20 +196,34 @@ final class ShapeResultScreenTests: XCTestCase {
         return bytes
     }
 
-    private func decodeJPEG(_ url: URL) -> CGImage? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    private func decodeJPEG(_ data: Data) -> CGImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(src, 0, nil)
     }
 }
 
-private final class SyntheticLibrary: PhotoLibraryClient, @unchecked Sendable {
+private final class MemoryAlbum: PhotoLibraryClient, @unchecked Sendable {
+    enum Write: Sendable { case succeed, fail }
     private let assets: [AssetMetadata]
+    private let lock = NSLock()
+    private var write = Write.succeed
+    private var addOnly = PhotoAuthorization.authorized
+    private var successes: [Data] = []
+    private var attempts = 0
+
     init(count: Int) {
         assets = (0..<count).map {
             AssetMetadata(id: "synth-\($0)", modificationDate: Date(timeIntervalSince1970: 1_700_000_000),
                           pixelWidth: 800, pixelHeight: 800)
         }
     }
+
+    func setWrite(_ write: Write) { lock.lock(); self.write = write; lock.unlock() }
+    func setAddOnly(_ auth: PhotoAuthorization) { lock.lock(); addOnly = auth; lock.unlock() }
+    var successCount: Int { lock.lock(); defer { lock.unlock() }; return successes.count }
+    var attemptCount: Int { lock.lock(); defer { lock.unlock() }; return attempts }
+    var lastJPEG: Data? { lock.lock(); defer { lock.unlock() }; return successes.last }
+
     func authorizationStatus() -> PhotoAuthorization { .authorized }
     func requestAuthorization() async -> PhotoAuthorization { .authorized }
     func assetCount() async -> Int { assets.count }
@@ -156,10 +233,18 @@ private final class SyntheticLibrary: PhotoLibraryClient, @unchecked Sendable {
     }
     func albums() async -> [AlbumInfo] { [] }
     func assetIDs(inAlbum albumID: String) async throws -> [String] { [] }
-    func addOnlyAuthorizationStatus() -> PhotoAuthorization { .authorized }
-    func requestAddOnlyAuthorization() async -> PhotoAuthorization { .authorized }
+    func addOnlyAuthorizationStatus() -> PhotoAuthorization { lock.lock(); defer { lock.unlock() }; return addOnly }
+    func requestAddOnlyAuthorization() async -> PhotoAuthorization { addOnlyAuthorizationStatus() }
     func saveImageToLibrary(fileURL: URL) async throws {
-        XCTFail("形状界面测试不应写入系统相册")
+        let data = try Data(contentsOf: fileURL)
+        let shouldFail: Bool = {
+            lock.lock()
+            defer { lock.unlock() }
+            attempts += 1
+            if write == .succeed { successes.append(data) }
+            return write == .fail
+        }()
+        if shouldFail { throw CocoaError(.fileWriteUnknown) }
     }
 }
 
