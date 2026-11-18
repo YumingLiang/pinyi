@@ -35,6 +35,21 @@ public struct WorkRematchResult: Sendable, Equatable {
     }
 }
 
+/// `works_rematch` 的附注。沿用补格结果的 note，但丢掉路径、作品/照片 ID 和原始错误，只留安全汇总。
+public enum WorksRematchMetric {
+    public static func safeNote(_ raw: String, replaced: Int, blank: Int) -> String {
+        isSafe(raw) ? raw : "补格 \(replaced) · 留白 \(blank)"
+    }
+
+    public static func isSafe(_ raw: String) -> Bool {
+        if raw.contains("/") || raw.contains("\\") || raw.contains("://") { return false }
+        if raw.range(of: #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-"#, options: .regularExpression) != nil { return false }
+        let lowered = raw.lowercased()
+        if lowered.contains("error") || lowered.contains("nserror") { return false }
+        return true
+    }
+}
+
 public enum WorkRematchError: Error, Sendable, Equatable {
     /// 索引暂时不可用（还在加载 / 读失败）。调用方不写回作品，下次再试；不当成「找不到替代」留白。
     case indexUnavailable

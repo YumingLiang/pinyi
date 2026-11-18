@@ -49,27 +49,21 @@ final class WorksPrivacyRoundTests: XCTestCase {
 
     // MARK: B
 
-    /// 渲染器直接读 fc 之后，`write` 可以存带纯色格的布局：预览里是这个颜色，不读旧图，重开布局还在。
-    func testWritePersistsFilledCellsIntoPreview() async throws {
+    /// 生产守护仍在：Apple 预览/导出还没有真实编译和像素验收，带 fc 的新存必须拒绝，且不留文件。
+    func testWriteRejectsFilledCellsUntilApplePixelsVerified() async throws {
         let h = Harness()
         var layout = sampleLayout(["a", "", "c"])
-        let color = CellColor(r: 1, g: 2, b: 3)
-        layout.cellAssignments[1].fill = color
-        let saved = try await h.store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.2, origin: .savedManually))
-        let work = try await h.store.load(saved.summary.id)
-        XCTAssertEqual(work.layout.cellAssignments[1].fill, color)
-        XCTAssertEqual(h.images.state.get().imageReads, 0, "不读旧预览")
-        XCTAssertEqual(h.images.state.get().reads, 0)
-        let header = try FakeWorkImages.previewHeader(saved.summary.previewURL)
-        XCTAssertEqual(header, FakeWorkImages.previewBytes(layout))
-        XCTAssertTrue(String(decoding: header, as: UTF8.self).contains("fc#010203"))
-        let pixels = try XCTUnwrap(FakeWorkImages.decodeRaw(Data(contentsOf: saved.summary.previewURL)))
-        let p = pixels.rgb(x: FakeWorkImages.cellPixels, y: 0)
-        XCTAssertEqual(p.r, 1)
-        XCTAssertEqual(p.g, 2)
-        XCTAssertEqual(p.b, 3)
+        layout.cellAssignments[1].fill = CellColor(r: 1, g: 2, b: 3)
+        do {
+            _ = try await h.store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.2, origin: .savedManually))
+            XCTFail("守护未撤，不应当写入")
+        } catch let e as WorksError {
+            XCTAssertEqual(e, .unsupportedFilledCells)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: h.dir.path), [])
         let list = await h.store.list()
-        XCTAssertEqual(list.count, 1)
+        XCTAssertTrue(list.isEmpty)
+        _ = try await h.store.save(WorkDraft(layout: sampleLayout(["a", "", "c"]), target: nil, overlayAlpha: 0.2, origin: .savedManually))
     }
 
     // MARK: D-a 孤儿文件

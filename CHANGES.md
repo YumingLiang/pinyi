@@ -1,5 +1,13 @@
 # CHANGES
 
+## works-missing-fill 契约（本地，未推送）：恢复 fc 生产守护，内容摘要分开
+
+- `write` / 无目标的新草稿 / 显式更新若要提交带 `fc` 的新预览，重新抛 `WorksError.unsupportedFilledCells`。Apple 的 `ImageIOWorkImages.writePreview` 和 `LiveMosaicExporter` 还没有真实编译和像素验收，不能去掉这道守护，也不能把 Linux 假渲染当成验收。
+- 新增 `WorkContentDigest`（`cd1-`）：#17 指纹的数据加上每格 fc 的有无和 RGB。没有 fc 不是黑色。叠加强度仍单独比较。`meta.fingerprint` 继续只做旧指纹兼容和 layout 校验。
+- 没有显式 `updateWorkID` 时按内容摘要去重，不用旧指纹把不同 fc 收成同一次 `unchanged`。显式更新同一张且只改了 fc：版本一致才允许改这一张；版本落后（例如已经 `applyRematch`）抛 `staleWorkRevision`，不假装成功。带 fc 的那次提交目前被守护挡住，磁盘保持原样。
+- 旧作品没有 `contentDigest` / `revision` 仍能打开，不重画，也不取消 `fallbackVersion` 迁移。摘要在下一次本来就要提交的写入里补上。
+- `works_rematch`：`seconds` 为这一次调用的单调时钟墙钟；`items` = 本次 `replacedCells + blankCells`；`note` 去掉路径、ID 和原始错误。取消和错误不记成功的 0。
+
 ## feat/works-missing-fill：渲染器和导出器直接读 fc
 
 - 预览（`ImageIOWorkImages.writePreview` / Linux 假渲染）和导出（`LiveMosaicExporter`）经 `MosaicLayout.renderSource(at:)` 读纯色格 `fc`。有 `fc` 就填这个颜色，不用调用方传来的裁切小图，也不读旧预览。没有 `fc` 的临时兜底小图仍可填空白格。

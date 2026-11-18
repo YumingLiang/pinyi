@@ -37,8 +37,8 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
     case sharpnessProbe
     /// 导出端到端（取图 + 画整张 + JPEG）；note = `ExportPlan.logDescription` + 糊格子/白格子 + 文件大小。峰值 phys_footprint 见 `MemoryPhase.export`。
     case exportTotal
-    /// 作品缺图补格一次 `rematch` 的墙钟。items = 替换格 + 留白格；note = `WorkRematchResult.note`（不含照片 ID）。
-    /// 原始名 `works_rematch`。设计文档只点名这个指标、没有另给字段表，所以用现有 `PerfSample`，不另造结构。
+    /// 一次成功的作品补格。`seconds` 是单调时钟墙钟；`items` = 本次待处理格的 replacedCells + blankCells（互斥：有可用照片 / 仍要纯色）。
+    /// `note` 只留安全汇总。失败、取消、错误不记成成功的 0。原始名 `works_rematch`。
     case worksRematch = "works_rematch"
 
     /// 性能页上的显示名（内部页面，不进文案表）。

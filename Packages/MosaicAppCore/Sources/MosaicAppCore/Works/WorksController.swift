@@ -421,9 +421,14 @@ public final class WorksController {
         let key = StatusKey(revision: ctx.resultRevision, overlayAlpha: ctx.overlayAlpha)
         state.saveStatus = .saving
         do {
+            let rememberedID = rememberedID(for: ctx.resultRevision)
+            let fingerprint = WorkFingerprint.of(layout)
+            let matched = state.summaries.first { $0.id == rememberedID && $0.meta.fingerprint == fingerprint }
             let result = try await store.save(WorkDraft(layout: layout, target: ctx.target, overlayAlpha: ctx.overlayAlpha, tier: nil,
                                                         seed: layout.params.seed, origin: .savedManually,
-                                                        preferredWorkID: rememberedID(for: ctx.resultRevision)))
+                                                        preferredWorkID: rememberedID,
+                                                        updateWorkID: matched?.id,
+                                                        baselineRevision: matched.map { $0.meta.revision ?? 0 }))
             remembered = (ctx.resultRevision, result.summary.id)
             if result.outcome == .updatedOverlay { showToast(.worksUpdated) }
             // 刷新列表（新增 / 预览图换了），再按库重算按钮状态（期间结果可能又变了，按最新的算）
@@ -612,11 +617,11 @@ public final class WorksController {
             do {
                 result = try await rematcher.rematch(work.layout, missing: targets, target: target)
                 if let perf, let started {
-                    // 设计文档没有单独的 works_rematch 字段表。沿用现有 PerfSample：
-                    // phase = works_rematch，seconds = 这一次 rematch 的墙钟，items = 替换格 + 留白格，
-                    // note = `WorkRematchResult.note`（本来就是性能页附注，不含照片 ID）。
+                    let replaced = result.replacedCells
+                    let blank = result.blankCells
                     perf.record(.worksRematch, seconds: max(0, perf.clock.now() - started),
-                                items: result.replacedCells + result.blankCells, note: result.note)
+                                items: replaced + blank,
+                                note: WorksRematchMetric.safeNote(result.note, replaced: replaced, blank: blank))
                 }
             } catch is CancellationError {
                 return nil

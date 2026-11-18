@@ -119,4 +119,96 @@ final class WorksMissingFillTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(120))
         XCTAssertEqual(fires.get(), 1, "取消后不再收起")
     }
+
+    /// 复现：同一网格只改 fc。旧指纹会把第二次 save 收成 unchanged 并留下第一次的颜色。
+    /// 契约之后，没有显式 WorkID 时不得再这样覆盖；守护未撤时带 fc 的新草稿被拒绝，第一张保持原色。
+    func testSameGridDifferentFillKeepsStoredColor() async throws {
+        let dir = makeTempDir()
+        let images = FakeWorkImages()
+        let store = FileWorksStore(directory: dir, images: images, now: FakeWallClock().provider)
+        let existence = FakeExistence()
+        let exporter = RecordingWorkExporter()
+        let controller = WorksController(store: store, existence: existence, images: images)
+        controller.exportHandler = exporter
+
+        let plain = sampleLayout(["a", "", "c"])
+        var colored = plain
+        colored.cellAssignments[1].fill = CellColor(r: 1, g: 2, b: 9)
+        XCTAssertEqual(WorkFingerprint.of(plain), WorkFingerprint.of(colored), "fc 不参与 #17 指纹")
+        XCTAssertNotEqual(WorkContentDigest.of(plain), WorkContentDigest.of(colored))
+
+        let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: 0.2, origin: .savedManually))
+        XCTAssertEqual(saved.outcome, .inserted)
+        do {
+            _ = try await store.save(WorkDraft(layout: colored, target: nil, overlayAlpha: 0.2, origin: .savedManually))
+            XCTFail("无显式 WorkID 时不能按旧指纹 unchanged，守护未撤时也不能把带 fc 的新草稿写进去")
+        } catch let e as WorksError {
+            XCTAssertEqual(e, .unsupportedFilledCells)
+        }
+        let listed = await store.list()
+        XCTAssertEqual(listed.count, 1)
+        var loaded = try await store.load(saved.summary.id)
+        XCTAssertNil(loaded.layout.cellAssignments[1].fill, "第一张没有被草稿的 fc 改掉")
+        XCTAssertFalse(String(decoding: try FakeWorkImages.previewHeader(loaded.summary.previewURL), as: UTF8.self).contains("fc#010209"))
+
+        do {
+            _ = try await store.save(WorkDraft(layout: colored, target: nil, overlayAlpha: 0.25,
+                                              origin: .savedManually, updateWorkID: saved.summary.id,
+                                              baselineRevision: loaded.meta.revision ?? 0))
+            XCTFail("显式更新改了 fc 时不能只改强度；守护未撤，也不能提交新预览")
+        } catch let e as WorksError {
+            XCTAssertEqual(e, .unsupportedFilledCells)
+        }
+        loaded = try await store.load(saved.summary.id)
+        XCTAssertEqual(loaded.meta.overlayAlpha, 0.2, "失败时强度也不能被改掉")
+        XCTAssertNil(loaded.layout.cellAssignments[1].fill)
+
+        let id = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c"]), target: try smallTarget(),
+                                                overlayAlpha: 0.2, origin: .savedManually)).summary.id
+        let base = try await store.load(id)
+        var cleared = base.layout
+        cleared.cellAssignments[1] = .init(localIdentifier: "")
+        let rematched = try await store.applyRematch(
+            WorkRematchResult(layout: cleared, replacedCells: 0, blankCells: 1, droppedPhotos: 1, note: "留白"),
+            base: base.layout, for: id, reasons: ["b": .deleted])
+        let stored = try XCTUnwrap(rematched.layout.cellAssignments[1].fill)
+        XCTAssertEqual(stored, CellColor(r: 200, g: 200, b: 200))
+        var other = rematched.layout
+        other.cellAssignments[1].fill = CellColor(r: 4, g: 5, b: 6)
+        XCTAssertEqual(WorkFingerprint.of(other), WorkFingerprint.of(rematched.layout))
+        do {
+            _ = try await store.save(WorkDraft(layout: other, target: nil, overlayAlpha: 0.2, origin: .savedManually))
+            XCTFail("不能按旧指纹把另一份 fc 收成 unchanged")
+        } catch let e as WorksError {
+            XCTAssertEqual(e, .unsupportedFilledCells)
+        }
+        loaded = try await store.load(id)
+        XCTAssertEqual(loaded.layout.cellAssignments[1].fill, stored)
+        let freshRevision = loaded.meta.revision ?? 0
+        do {
+            _ = try await store.save(WorkDraft(layout: other, target: nil, overlayAlpha: 0.2, origin: .savedManually,
+                                              updateWorkID: id, baselineRevision: freshRevision))
+            XCTFail("新鲜草稿改 fc：守护未撤，不能把新颜色写进预览")
+        } catch let e as WorksError {
+            XCTAssertEqual(e, .unsupportedFilledCells)
+        }
+        do {
+            _ = try await store.save(WorkDraft(layout: other, target: nil, overlayAlpha: 0.2, origin: .savedManually,
+                                              updateWorkID: id, baselineRevision: freshRevision - 1))
+            XCTFail("过期草稿应该冲突")
+        } catch let e as WorksError {
+            XCTAssertEqual(e, .staleWorkRevision)
+        }
+        loaded = try await store.load(id)
+        XCTAssertEqual(loaded.layout.cellAssignments[1].fill, stored, "冲突和守护都没有改掉 applyRematch 的颜色")
+
+        await controller.start()
+        await controller.open(id)
+        await controller.exportOpenedTapped(purpose: .save)
+        let painted = try XCTUnwrap(exporter.fallbacks.last?[1])
+        XCTAssertEqual(painted, FakeWorkImages.RGB8(r: stored.r, g: stored.g, b: stored.b))
+        XCTAssertNotEqual(painted, FakeWorkImages.RGB8(r: 4, g: 5, b: 6))
+        XCTAssertEqual(images.state.get().imageReads, 0)
+        controller.stop()
+    }
 }
