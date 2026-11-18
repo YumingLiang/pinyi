@@ -45,6 +45,8 @@ public final class AppCoordinator {
     public weak var resultSaver: (any CurrentResultSaving)?
     /// 每换一次目标图 +1（PixelBuffer 不做内容比较，用代次判断「目标图换没换」）。
     var targetGeneration = 0
+    /// 当前形状结果是用哪个选择生成的。选新目标图或退回目标页会清掉 `flow.shape`，结果还在时用它恢复，并继续禁止保存。
+    var shapeIdentity: ShapeChoice?
     /// `product` 是用哪组输入生成的（不含叠加强度）。设置页点「开始拼图」时若和当前输入一样，
     /// 说明「再调一调」只改了叠加强度：直接回到上一次结果，不重新生成（B10 第 3/13 条）。
     private var productInputs: ProductInputs?
@@ -400,12 +402,16 @@ public final class AppCoordinator {
         state.flow.shape = shape
         if product != nil, productInputs == currentInputs {
             product?.setShapeBackground(background)
+            if shapeIdentity != nil { shapeIdentity?.background = background }
             state.resultRevision += 1
         }
     }
 
-    /// 形状结果这一阶段不能存作品。按钮不出现；这里再挡一层。
-    public var allowsWorkSave: Bool { state.flow.shape == nil }
+    /// 当前结果是不是形状。以结果上的 `shapeFrame` 为准，不看导航里可能已被清掉的 `flow.shape`。
+    public var currentResultIsShape: Bool { product?.shapeFrame != nil }
+
+    /// 形状结果这一阶段不能存作品。正在选形状、或当前结果本身是形状，都不能存。
+    public var allowsWorkSave: Bool { state.flow.shape == nil && !currentResultIsShape }
     public func setShowScanSheet(_ on: Bool) { state.showScanSheet = on }
     public func setPresentedEmptyState(_ e: LibraryEmptyState?) { state.presentedEmptyState = e }
     public func setExportTier(_ t: ExportTier) {
@@ -516,6 +522,9 @@ public final class AppCoordinator {
             state.flow.endFreshQuickStart(); quickStartOrigin = nil; targetBeforeFreshQuickStart = nil
         }
         state.flow.syncWithGeneration()
+        if state.flow.step == .result, case .result = state.flow.generation.phase {
+            realignShapeChoiceWithResult()
+        }
         for eff in effects {
             switch eff {
             case .run(let id, let seed): run(id: id, seed: seed)
@@ -597,6 +606,7 @@ public final class AppCoordinator {
                 guard let self else { return }
                 if self.state.flow.generation.currentRunID == id {
                     self.product = p
+                    self.shapeIdentity = p.shapeFrame == nil ? nil : shapeChoice
                     self.productInputs = inputs
                     self.state.resultRevision += 1
                     if p.lowRes.enabled {
