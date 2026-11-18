@@ -1,0 +1,3 @@
+# 不含密钥：Bundle ID / Team ID 由环境变量提供（TODO(AndyL)：确定真实 Bundle ID 后可直接写死在这里，它不是秘密）。
+app_identifier(ENV["PINYI_BUNDLE_ID"]) if ENV["PINYI_BUNDLE_ID"]
+team_id(ENV["PINYI_TEAM_ID"]) if ENV["PINYI_TEAM_ID"]

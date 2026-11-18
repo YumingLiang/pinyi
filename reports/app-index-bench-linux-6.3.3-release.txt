@@ -1,0 +1,6 @@
+[bench] index 10k fake scan wall 409 ms (24428 张/秒)
+[bench]   libraryDiff n=1 total=4.9 ms median=4.89 ms
+[bench]   thumbnailFetch n=34 total=23.2 ms median=0.68 ms
+[bench]   featureExtract n=34 total=48.0 ms median=1.42 ms
+[bench]   indexCommit n=11 total=379.3 ms median=34.17 ms
+[bench]   indexLoad n=1 total=0.0 ms median=0.04 ms

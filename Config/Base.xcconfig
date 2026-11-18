@@ -1,0 +1,20 @@
+// 签名与 Bundle ID 的默认值（project.yml 的 configFiles 对 Debug / Release / Internal 三个配置都引用本文件）。
+//
+// 本地覆盖：复制 Config/Local.xcconfig.example 为 Config/Local.xcconfig（已 .gitignore），填自己的 Team ID 和 Bundle ID。
+// 命令行覆盖（优先级最高）：xcodebuild ... DEVELOPMENT_TEAM=XXXXXXXXXX PINYI_BUNDLE_ID=com.example.pinyi.dev
+// CI 不签名构建（CODE_SIGNING_ALLOWED=NO），不需要这两个值。
+
+// Bundle ID：Debug / Release / Internal 共用（fastlane 约定 Internal 与 Release 同一个 Bundle ID、共用 build 号）。
+// 如果想让内测包和正式包同时装在一台手机上，可在 Local.xcconfig 里按配置加后缀，例如
+//   PINYI_BUNDLE_ID[config=Internal] = com.yumingliang.pinyi.dev.internal
+// （免费 Team 每 7 天最多注册 10 个 App ID，后缀会多占一个。）
+PINYI_BUNDLE_ID = com.yumingliang.pinyi
+
+// Apple Developer Team ID（10 位，不是密钥）。默认空：Xcode 会提示在 Signing & Capabilities 里选 Team，或在 Local.xcconfig 填。
+DEVELOPMENT_TEAM =
+
+// 自动签名：免费 Apple ID 的个人 Team 也能用（Xcode 自动生成 7 天有效的开发描述文件）。
+CODE_SIGN_STYLE = Automatic
+
+// 可选的本地覆盖（文件不存在时忽略）。路径相对于本文件。
+#include? "Local.xcconfig"

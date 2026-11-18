@@ -124,14 +124,27 @@ final class PerformanceTests: XCTestCase {
         do {
             _ = try GreedyAssigner().assign(grid: grid, cellFeatures: cells, library: lib, mask: nil,
                                             lightnessVariance: variance, cancellation: t2) { p in
-                if p.phase == .matching, p.completed == max(1, p.total / 3) {
-                    cancelledAt.mutate { $0 = DispatchTime.now().uptimeNanoseconds }
-                    t2.cancel()
+                // >=：进度回调可能跳过恰好 total/3 的值（ProgressCounter 非最终上报用 tryLock）。
+                // 只触发一次，避免重复 cancel。
+                if p.phase == .matching, p.completed >= max(1, p.total / 3) {
+                    var shouldCancel = false
+                    cancelledAt.mutate { current in
+                        if current == 0 {
+                            current = DispatchTime.now().uptimeNanoseconds
+                            shouldCancel = true
+                        }
+                    }
+                    if shouldCancel { t2.cancel() }
                 }
             }
         } catch { thrown = error }
-        let lat = Double(DispatchTime.now().uptimeNanoseconds - cancelledAt.value) / 1e6
-        XCTAssertTrue(thrown is CancellationError)
+        let cancelledNs = cancelledAt.value
+        let fired = cancelledNs != 0
+        XCTAssertTrue(fired, "匹配阶段过了 1/3 应当触发取消")
+        XCTAssertTrue(thrown is CancellationError, "\(String(describing: thrown))")
+        guard fired else { return }
+        // 延迟只打印、不断言（墙钟受机器负载影响）
+        let lat = Double(DispatchTime.now().uptimeNanoseconds - cancelledNs) / 1e6
         print("[bench] cancel latency mid-matching \(cols)x\(rows) × \(library): \(String(format: "%.2f", lat)) ms")
     }
 }

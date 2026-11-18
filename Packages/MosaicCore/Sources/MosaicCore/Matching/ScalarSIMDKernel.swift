@@ -275,11 +275,10 @@ extension UnsafeMutablePointer {
 /// 回调串行化由单独的 `reportLock` 负责：中间进度用 `try()`，拿不到就跳过这次上报（不阻塞工作线程）；
 /// 只上报比上次大的值，所以 `completed` 单调；最后一次（done == total）用阻塞方式上报，保证 100% 一定送达。
 /// 回调可能在任意工作线程上调用，不应做 `DispatchQueue.main.sync` 之类的阻塞操作。
-final class ProgressCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private let reportLock = NSLock()
-    private var done = 0
-    private var reported = 0          // 受 reportLock 保护
+final class ProgressCounter: Sendable {
+    private let done = LockedState(0)
+    /// 上报锁：保护"已上报的最大值"，同时把回调串行化。
+    private let reported = LockedState(0)
     private let total: Int
     private let handler: (@Sendable (Int, Int) -> Void)?
 
@@ -290,20 +289,18 @@ final class ProgressCounter: @unchecked Sendable {
 
     func increment() {
         guard let handler else { return }
-        lock.lock()
-        done += 1
-        let now = done
-        lock.unlock()
+        let now = done.withLock { d -> Int in d += 1; return d }
         let isFinal = now >= total
-        if isFinal { reportLock.lock() } else if !reportLock.try() { return }
-        // 拿到上报锁后读最新计数（可能已被别的线程推进），只报更大的值。
-        lock.lock()
-        let latest = done
-        lock.unlock()
-        if latest > reported {
-            reported = latest
-            handler(latest, total)
+        let done = self.done
+        let total = self.total
+        let report: (inout Int) -> Void = { rep in
+            // 拿到上报锁后读最新计数（可能已被别的线程推进），只报更大的值。
+            let latest = done.get()
+            if latest > rep {
+                rep = latest
+                handler(latest, total)
+            }
         }
-        reportLock.unlock()
+        if isFinal { reported.withLock(report) } else { _ = reported.withLockIfAvailable(report) }
     }
 }

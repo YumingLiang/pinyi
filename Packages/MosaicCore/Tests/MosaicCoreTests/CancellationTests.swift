@@ -4,12 +4,11 @@ import XCTest
 @testable import MosaicCore
 
 /// 线程安全的收集器（测试用）。
-final class Box<T>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _value: T
-    init(_ v: T) { _value = v }
-    var value: T { lock.lock(); defer { lock.unlock() }; return _value }
-    func mutate(_ f: (inout T) -> Void) { lock.lock(); f(&_value); lock.unlock() }
+final class Box<T: Sendable>: Sendable {
+    private let state: LockedState<T>
+    init(_ v: T) { state = LockedState(v) }
+    var value: T { state.get() }
+    func mutate(_ f: (inout T) -> Void) { state.withLock { f(&$0) } }
 }
 
 /// 只实现不可取消接口的内核，用来验证协议默认实现。
@@ -173,7 +172,8 @@ final class CancellationTests: XCTestCase {
                 .assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
                         lightnessVariance: nil, cancellation: token) { p in
                     if cancelled.value { after.mutate { $0 += 1 }; return }
-                    if p.phase == .matching, p.completed == 3 { cancelled.mutate { $0 = true }; token.cancel() }
+                    // >=：ProgressCounter 可能跳过中间值（与 PerformanceTests 同一写法）；上面 cancelled.value 保证只取消一次
+                    if p.phase == .matching, p.completed >= 3 { cancelled.mutate { $0 = true }; token.cancel() }
                 }
         } catch { thrown = error }
         XCTAssertTrue(cancelled.value)

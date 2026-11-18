@@ -8,6 +8,9 @@ public struct MosaicGeneration: Hashable, Sendable {
     public let supply: MaterialSupply
     /// 生成所用密度。
     public let density: Density
+    /// 格子掩码（形状 / 文字拼图）；`nil` = 普通拼图（全部格子都有照片）。
+    /// 非 `nil` 时掩码外 `assignment.tiles[i] == -1`，预览 / 导出把这些格子画成背景色（S3）。
+    public var activeCells: CellMask? = nil
 
     /// 生成所用种子。
     public var seed: UInt64 { assignment.seed }
@@ -52,12 +55,17 @@ public struct MosaicPipeline: Sendable {
     ///   - cancellation: 取消令牌；同步调用时也会检查当前 Task 的取消状态。
     ///   - progress: 进度回调（取样 → 匹配 → 分配）。
     /// - Throws: 取消时抛 `CancellationError`，不产生任何半成品；同种子重跑结果与未被取消时完全一致。
+    ///   - activeCells: 格子掩码（形状 / 文字拼图）；尺寸须等于按 `target` 与 `density` 算出的网格
+    ///     （调用方先调 `Layout.grid` 再建掩码），否则抛 `MosaicError.countMismatch`。`nil` 时与原行为逐位一致。
     public func generate(target: PixelBuffer, density: Density, library: FeatureMatrix, mask: BitMask?,
                          seed: UInt64?, lightnessVariance: [Float]?, cancellation: CancellationToken?,
-                         progress: MosaicProgressHandler?) throws -> MosaicGeneration {
+                         progress: MosaicProgressHandler?, activeCells: CellMask? = nil) throws -> MosaicGeneration {
         let check = CancellationCheck(token: cancellation)
         try check.check()
         let layout = try Layout.grid(width: target.width, height: target.height, density: density)
+        if let activeCells, !activeCells.matches(layout.grid) {
+            throw MosaicError.countMismatch(expected: layout.cellCount, actual: activeCells.cellCount)
+        }
         progress?(MosaicProgress(phase: .sampling, completed: 0, total: 1))
         let cells = try sampler.cellFeatures(of: target, layout: layout)
         progress?(MosaicProgress(phase: .sampling, completed: 1, total: 1))
@@ -66,9 +74,10 @@ public struct MosaicPipeline: Sendable {
         if let seed { assigner.configuration = assigner.configuration.withSeed(seed) }
         let assignment = try assigner.assign(grid: layout.grid, cellFeatures: FeatureMatrix(records: cells),
                                              library: library, mask: mask, lightnessVariance: lightnessVariance,
-                                             cancellation: cancellation, progress: progress)
+                                             cancellation: cancellation, progress: progress, activeCells: activeCells)
         return MosaicGeneration(layout: layout, assignment: assignment,
-                                supply: MaterialSupply.evaluate(library: library, mask: mask), density: density)
+                                supply: MaterialSupply.evaluate(library: library, mask: mask), density: density,
+                                activeCells: activeCells)
     }
 
     /// 以 `FeatureTable`（`features.bin` 读出的形态）为素材：自动带亮度方差并排除 tombstone 行。
@@ -83,13 +92,14 @@ public struct MosaicPipeline: Sendable {
     /// 以快照为素材（推荐的 App 入口，评审 S6）：只会选中快照内（来源 ∧ 已扫描 ∧ 未删除）的行。
     public func generate(target: PixelBuffer, density: Density, snapshot: LibrarySnapshot, seed: UInt64? = nil,
                          cancellation: CancellationToken? = nil,
-                         progress: MosaicProgressHandler? = nil) throws -> MosaicGeneration {
+                         progress: MosaicProgressHandler? = nil, activeCells: CellMask? = nil) throws -> MosaicGeneration {
         let targetSpec = sampler.extractor.spec
         guard snapshot.table.spec == targetSpec else {
             throw MosaicError.featureSpecMismatch(library: snapshot.table.spec, target: targetSpec)
         }
         return try generate(target: target, density: density, library: snapshot.table.matrix, mask: snapshot.mask, seed: seed,
-                            lightnessVariance: snapshot.table.lightnessVariance, cancellation: cancellation, progress: progress)
+                            lightnessVariance: snapshot.table.lightnessVariance, cancellation: cancellation, progress: progress,
+                            activeCells: activeCells)
     }
 
     /// Swift 并发入口（**推荐的 App 入口**，评审 ca6a4ca S-4）：快照 + 口径校验 + 方差 + 可取消。
@@ -99,11 +109,12 @@ public struct MosaicPipeline: Sendable {
     /// （内核另用 `concurrentPerform` 并行）。App 侧不要从 MainActor 直接 `await` 后就做别的 UI 等待；
     /// 建议在 `Task.detached(priority: .userInitiated)` 或专用 `DispatchQueue` 中调用。
     public func generate(target: PixelBuffer, density: Density, snapshot: LibrarySnapshot, seed: UInt64? = nil,
-                         progress: MosaicProgressHandler? = nil) async throws -> MosaicGeneration {
+                         progress: MosaicProgressHandler? = nil,
+                         activeCells: CellMask? = nil) async throws -> MosaicGeneration {
         let token = CancellationToken()
         return try await withTaskCancellationHandler {
             try generate(target: target, density: density, snapshot: snapshot, seed: seed,
-                         cancellation: token, progress: progress)
+                         cancellation: token, progress: progress, activeCells: activeCells)
         } onCancel: {
             token.cancel()
         }
@@ -142,7 +153,8 @@ public struct MosaicPipeline: Sendable {
                           lightnessVariance: [Float]? = nil) throws -> MosaicGeneration {
         try generate(target: target, density: previous.density, library: library, mask: mask,
                      seed: newSeed ?? MosaicSeed.next(after: previous.seed),
-                     lightnessVariance: lightnessVariance, cancellation: nil, progress: nil)
+                     lightnessVariance: lightnessVariance, cancellation: nil, progress: nil,
+                     activeCells: previous.activeCells)
     }
 
     /// 「换一种拼法」（快照版，推荐的 App 入口；可取消）。
@@ -150,14 +162,16 @@ public struct MosaicPipeline: Sendable {
                           newSeed: UInt64? = nil, cancellation: CancellationToken? = nil,
                           progress: MosaicProgressHandler? = nil) throws -> MosaicGeneration {
         try generate(target: target, density: previous.density, snapshot: snapshot,
-                     seed: newSeed ?? MosaicSeed.next(after: previous.seed), cancellation: cancellation, progress: progress)
+                     seed: newSeed ?? MosaicSeed.next(after: previous.seed), cancellation: cancellation, progress: progress,
+                     activeCells: previous.activeCells)
     }
 
     /// 「换一种拼法」（快照版 Swift 并发入口）。
     public func reshuffle(_ previous: MosaicGeneration, target: PixelBuffer, snapshot: LibrarySnapshot,
                           newSeed: UInt64? = nil, progress: MosaicProgressHandler? = nil) async throws -> MosaicGeneration {
         try await generate(target: target, density: previous.density, snapshot: snapshot,
-                           seed: newSeed ?? MosaicSeed.next(after: previous.seed), progress: progress)
+                           seed: newSeed ?? MosaicSeed.next(after: previous.seed), progress: progress,
+                           activeCells: previous.activeCells)
     }
 
     /// 「换一种拼法」（`FeatureTable` 版，可取消）。

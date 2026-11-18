@@ -1,12 +1,12 @@
-# Linux：MosaicCore 纯 Swift 包的构建与测试（技术方案 §11.3 linux-core.yml）。
+# Linux：MosaicCore / MosaicAppCore 纯 Swift 包的构建与测试（技术方案 §11.3 linux-core.yml）。
 # 每个 PR 必跑；便宜（Linux 2 核约 0.006 美元/分钟，公开仓库免费）。
-# ⚠️ 草稿：尚未在 GitHub 上运行过（目前没有远程仓库）。
 name: linux-core
 
 on:
   pull_request:
   push:
-    branches: [main]
+    # feat/app-layer：合入后的树也跑一遍（含 perf-gate），见 perf/README.md「触发」。
+    branches: [main, feat/app-layer]
   workflow_dispatch:
 
 concurrency:
@@ -18,12 +18,13 @@ permissions:
 
 jobs:
   mosaic-core:
-    name: MosaicCore (swift test on Linux)
+    name: MosaicCore + MosaicAppCore (swift test on Linux)
     runs-on: ubuntu-latest
-    # 钉到具体 tag：Docker Hub 官方镜像 `swift:6.3.3-noble`（2026-11-16 用 registry API 核实存在，
-    # 多架构 index digest sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa）。与 ios.yml 所用 macos-26 runner 的默认 Xcode 26.6（自带 Swift 6.3.3）对齐；
-    # 升级 Xcode 时同步改这里。不用浮动 tag（6.3 / latest），避免 CI 无声换编译器。
-    container: swift:6.3.3-noble
+    # 钉到 tag + digest：Docker Hub 官方镜像 `swift:6.3.3-noble` 的多架构 index digest
+    # （2026-11-16 用 registry API `HEAD /v2/library/swift/manifests/6.3.3-noble` 读 Docker-Content-Digest 核实）。
+    # 与 ios.yml 所用 macos-26 runner 的默认 Xcode 26.6（自带 Swift 6.3.3）对齐；升级 Xcode 时三个 job 一起改。
+    # 不用浮动 tag（6.3 / latest），tag 被重推也不会无声换编译器。
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +34,19 @@ jobs:
 
       - name: Zero-network / zero-dependency guard
         run: ./scripts/check-no-network.sh
+
+      # 隐藏照片守护第一层（photo-picker-v0.1 §6.2）：所有 fetchAssets / fetchKeyAssets 必须走 PhotoFetch；第二层是 AppTests 的 PhotoFetchTests。
+      - name: Hidden-photo guard (all fetchAssets / fetchKeyAssets via PhotoFetch)
+        run: ./scripts/check-photo-fetch.sh
+
+      - name: Hidden-photo guard self-test (rule 2 single exception)
+        run: bash scripts/tests/check-photo-fetch-hidden-exception-test.sh
+
+      - name: Hidden-photo guard self-test (rule 4 positive / negative cases)
+        run: bash scripts/tests/check-photo-fetch-test.sh
+
+      - name: Hidden-photo guard self-test (rule 5 InternalTools only in Internal builds)
+        run: bash scripts/tests/check-photo-fetch-internal-test.sh
 
       - name: Localizable.strings 与文案表一致
         run: |
@@ -45,11 +59,54 @@ jobs:
 
       - name: Test MosaicCore
         working-directory: Packages/MosaicCore
+        # PerformanceTests 的 RSD 门槛在共享 runner 上会抖（11-16 有 3 次 testTopKPerformanceBaseline 误报），
+        # 这里先跳过，下一步单独跑且只提示；正式数据看 release 的 bench job。
+        run: swift test --parallel --skip PerformanceTests
+
+      - name: MosaicCore PerformanceTests (debug, 只提示不阻断)
+        working-directory: Packages/MosaicCore
+        continue-on-error: true
+        run: swift test --filter PerformanceTests || { echo "::warning::MosaicCore PerformanceTests 未达阈值（共享 runner 抖动，不阻断）"; exit 1; }
+
+      # App 层纯逻辑包（状态机 / 增量索引 / 权限映射 / 计时统计；fake 相册驱动），同样必须在 Linux 上全过。
+      - name: Test MosaicAppCore
+        working-directory: Packages/MosaicAppCore
         run: swift test --parallel
 
       - name: Build MosaicAccelerate (Linux 上为空模块，只验证可解析/编译)
         working-directory: Packages/MosaicAccelerate
         run: swift build
+
+  # 架构师 G-1：ThreadSanitizer。每个 PR 必跑、阻断合并（需在分支保护里把本 job 设为 required check）。
+  # 跳过性能基准（PerformanceTests / IndexBenchTests：TSan 下慢 5–15 倍且只测耗时，不增加竞态覆盖）。
+  # GenPerfSlowPathTests 也跳过：内含 30 s / 60 s 挂起检测，TSan 放慢后会误报；其计数断言在上面的普通 swift test 里阻断。
+  # macOS 上的 TSan 不在这里（由运维另行评估，手动触发）。
+  tsan:
+    name: ThreadSanitizer (swift test --sanitize=thread, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # 阻断：2026-11-16 在 GitHub runner 上首次完整跑绿（run 43942739430，32ec2b5），因此不设 continue-on-error。
+    # 还需仓库管理员在分支保护里把本 job 设为 required check（架构师 G-1：每个 PR、阻断）。
+    env:
+      SWIFT_IMAGE: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-24.04 runner 默认 vm.mmap_rnd_bits=32，TSan 运行时会直接
+      # "FATAL: Please rerun with lower ASLR entropy"。sysctl 只能在宿主上改，所以本 job 不用 job 级 container，
+      # 先在宿主降熵，再用同一个钉了 digest 的镜像 docker run。
+      - name: Lower ASLR entropy for TSan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: TSan MosaicCore + MosaicAppCore
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1" \
+            "$SWIFT_IMAGE" bash -euo pipefail -c '
+              swift --version
+              (cd Packages/MosaicCore && swift test --sanitize=thread --skip PerformanceTests)
+              (cd Packages/MosaicAppCore && swift test --sanitize=thread --skip '\''IndexBenchTests|GenPerfSlowPathTests'\'')
+            '
 
   # QA A-21：全规模性能基线（10,800 格 × 5 万合成候选，release），单独 job，不拖慢上面的门禁。
   # **只记录、不阻断**：job 级 continue-on-error，且软阈值默认只打印 ::warning::
@@ -58,7 +115,7 @@ jobs:
   mosaic-core-bench:
     name: MosaicCore full-scale bench (A-21, release, informational)
     runs-on: ubuntu-latest
-    container: swift:6.3.3-noble
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
     timeout-minutes: 30
     continue-on-error: true
     env:
@@ -85,3 +142,81 @@ jobs:
           path: |
             Packages/MosaicCore/bench.txt
             Packages/MosaicCore/bench-summary.txt
+
+  # 生成性能回归门禁（AndyL 11-16：「性能要加入到回归中，这个太差了」）。**阻断**，没有 paths 过滤，每次都出结果，
+  # 稳定后设为 feat/app-layer 的 required check。与上面的 A-21（全量 bench，只记录）分开：这里只跑少量门禁指标。
+  # 口径：release；每指标预热 1 次 + 测 MOSAIC_PERF_REPEAT 次取中位数，对照仓库里的 perf/baseline-linux.json，
+  # 中位数 > 基线 × ratio 且绝对差 > min_delta_ms 才算超限（数值与依据见 perf/README.md）；
+  # 第 1 次超限的指标在同一 job 里对所在包重测一次，两次样本合并（10 个）取中位数再判，仍超限才失败（缺失指标直接失败）。
+  # 收录规则：任何包里名为 *PerfGateTests.swift 的测试文件都会被跑（--filter PerfGateTests），QA 的端到端用例照此接入。
+  perf-gate:
+    name: Generation perf regression
+    runs-on: ubuntu-latest
+    container: swift:6.3.3-noble@sha256:1ba0416be43dc57ba6ff7d02114356cad1ab17364024b7669385e3fe41a224aa
+    timeout-minutes: 25
+    env:
+      MOSAIC_PERF_GATE: "1"
+      MOSAIC_PERF_REPEAT: "5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner info
+        run: |
+          nproc
+          grep -m1 'model name' /proc/cpuinfo || true
+          swift --version
+          echo "runner：$(nproc) 核，$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2-)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: python3（门禁脚本用）
+        run: apt-get update -qq && apt-get install -y -qq python3 >/dev/null
+
+      - name: 判定脚本自测（合成数据）
+        run: python3 scripts/test_perf_gate.py
+
+      # 第 1 次测量所有包；有超限指标时，只对这些指标所在的包在同一 job 里重测一次，两次样本合并取中位数再判一次。
+      # 缺失的指标直接失败、不重测。退出码：0 通过 / 1 失败 / 其他 = 脚本或环境错误。
+      - name: Run *PerfGateTests (release) + compare with baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > perf-diag.md
+          scripts/perf-gate-run.sh 1 perf-results.jsonl perf-packages.json
+          set +e
+          python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --failed-out perf-failed.json
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then echo "::error::perf-gate.py 异常退出 $rc"; exit "$rc"; fi
+          if [ "$rc" -eq 0 ]; then
+            python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY" > /dev/null
+            echo "第 1 次全部通过，不重测。" >> "$GITHUB_STEP_SUMMARY"
+            cat perf-diag.md >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if python3 -c 'import json,sys; sys.exit(0 if json.load(open("perf-failed.json"))["missing"] else 1)'; then
+            echo "::error::有门禁指标缺失，直接失败（不重测）"
+            python3 scripts/perf-gate.py check --results perf-results.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY" > /dev/null || true
+            cat perf-diag.md >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          mapfile -t pkgs < <(python3 -c 'import json; f=json.load(open("perf-failed.json")); m=json.load(open("perf-packages.json")); print("\n".join(sorted({m[x] for x in f["regressed"]})))')
+          echo "第 1 次超限：$(python3 -c 'import json; print(", ".join(json.load(open("perf-failed.json"))["regressed"]))')；重测包：${pkgs[*]}"
+          scripts/perf-gate-run.sh 2 perf-results-2.jsonl perf-packages-2.json "${pkgs[@]}"
+          set +e
+          python3 scripts/perf-gate.py check --results perf-results.jsonl --retry-results perf-results-2.jsonl --baseline perf/baseline-linux.json --summary "$GITHUB_STEP_SUMMARY"
+          rc=$?
+          set -e
+          cat perf-diag.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      - name: Upload perf results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          path: |
+            perf-results.jsonl
+            perf-results-2.jsonl
+            perf-packages.json
+            perf-failed.json
+            perf-log.txt

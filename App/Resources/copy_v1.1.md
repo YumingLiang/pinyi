@@ -58,7 +58,7 @@
 | key | 用途 | 文案 |
 |---|---|---|
 | `onboarding.3.title` | 标题 | 选一张目标图，再选用哪些照片来拼 |
-| `onboarding.3.body` | 正文 | 可以用全部照片，也可以只选一个相簿。宝宝相簿、旅行相簿都很适合。拼好后能放大，看清每一块都是哪张照片。 |
+| `onboarding.3.body` | 正文 | 可以用全部照片，也可以选几个相簿。宝宝相簿、旅行相簿都很适合。拼好后能放大，看清每一块都是哪张照片。 |
 | `onboarding.3.start` | 按钮 | 开始使用 |
 | `onboarding.3.allow` | 按钮（若即将弹出系统权限） | 允许访问照片 |
 
@@ -143,12 +143,13 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.list.count_pending` | 张数（扫描未完成时显示资产总数，不随扫描跳动） | 约 {count} 张 |
 | `source.list.title_format` | 组合格式（标题与张数同一行） | {title}  {count} 张 |
 | `source.album.option` | 选项 | 选择相簿 |
-| `source.album.option_desc` | 说明 | 只用一个相簿，比如宝宝相册。 |
-| `source.album.list_title` | 相簿列表标题 | 选择相簿 |
+| `source.album.option_desc` | 说明 | 可以选一个或几个相簿，比如宝宝和旅行。 |
+| `source.album.list_title` | 相簿列表标题 | 选择相簿（可多选） |
 | `source.album.item_count` | 相簿项副文案（规则同 `source.list.count` / `count_pending`） | {count} 张 |
-| `source.album.unreadable` | 无法读取 | 打不开这个相簿，请换一个，或改用全部照片。 |
+| `source.album.unreadable` | 相簿列表里打不开的相簿：这一行置灰、不能勾时的副文案（§2f；00:15 起相簿不见了一律静默去掉，不再作为提示弹出） | 打不开这个相簿，请换一个，或改用全部照片。 |
 | `source.add_photos` | 受限状态下常驻入口（同样调用系统选择器） | 增加可用照片 |
 | `source.next` | 下一步 | 下一步 |
+| `source.excluded_low_res` | 来源页 / 生成后提示：生成时剔除了手机上版本不够清楚的照片（copy v1.2 补充，hd-export-req-v0.2 F5） | 有 {count} 张照片手机上的版本不够清楚，没有用上 |
 
 「全部照片 / 已允许访问的照片」选项下，可用张数用 `source.list.count` 显示，例如「全部照片  1,234 张」「已允许访问的照片  180 张」。  
 `source.list.all` 的说明不必再写「已下载到这台手机」：未下载的照片按第 5 节处理，不在标题里暗示。
@@ -223,6 +224,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `generate.progress.title` | 标题 | 正在拼图 |
 | `generate.progress.body` | 正文 | 请稍等，马上就好。手机可能会有些发热，这是正常的。 |
 | `generate.progress.cancel` | 按钮 | 取消 |
+| `generate.progress.checking` | 生成进度：检查照片清晰度期间的正文（copy v1.2 补充） | 正在挑选清楚的照片… |
 | `generate.cancel_confirm.title` | 取消确认标题 | 要取消这次拼图吗？ |
 | `generate.cancel_confirm.confirm` | 确认 | 取消拼图 |
 | `generate.cancel_confirm.continue` | 返回 | 继续等待 |
@@ -247,6 +249,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `preview.hint` | 提示 | 双指放大，看看每一块都是哪张照片。 |
 | `preview.save` | 按钮 | 保存到相册 |
 | `preview.share` | 按钮 | 分享 |
+| `preview.export` | 结果页导出按钮（hd-export-req v0.2 §B2，key 待产品确认） | 导出 |
 | `preview.adjust` | 按钮 | 再调一调 |
 | `preview.reshuffle` | 按钮 | 换一种拼法 |
 | `shortage.result` | 结果页短提示（仅当可用照片 < 200 张且匹配器实际放宽了约束时显示） | 有些照片重复用了几次 |
@@ -258,10 +261,13 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | key | 用途 | 文案 |
 |---|---|---|
 | `export.size.section` | 区域标题 | 导出尺寸 |
-| `export.size.4000` | 默认档名称 | 标准 |
-| `export.size.4000.desc` | 说明 | 长边约 4000 像素，文件更小，适合保存和分享。（默认） |
-| `export.size.6000` | 较大档名称 | 更细 |
-| `export.size.6000.desc` | 说明 | 长边约 6000 像素，放大更清楚，文件会大一些。 |
+| `export.size.share` | 分享档名称（hd-export-req v0.2 §A3；原 4000 / 6000 作废） | 分享 |
+| `export.size.share.desc` | 说明 | 长边约 4000 像素，适合发微信。 |
+| `export.size.hd` | 高清档名称 | 高清 |
+| `export.size.hd.desc` | 说明（v0.2 原文带「（默认）」，§F 默认改为超清，已移到超清，待产品确认） | 放大能看清每张小照片。 |
+| `export.size.uhd` | 超清档名称（默认） | 超清 |
+| `export.size.uhd.desc` | 说明（copy v1.2 补充） | 放大看得最清楚。（默认） |
+| `export.size.large_hint` | 档位下方固定提示（v0.2 §F1-2 只给文字，key 待产品确认） | 文件较大，导出需要一会儿 |
 | `export.degraded` | 部分原图未在本地、导出时块被降级 | 有些照片还没下载到这台手机，导出后这些小块会稍模糊 |
 | `export.progress.title` | 导出中标题 | 正在导出 |
 | `export.progress.hint` | 导出中提示 | 导出时请停留在这个页面。 |
@@ -330,6 +336,77 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `misc.scan_stopped` | 用户主动停止扫描 | 整理已停止。可以重新开始，或先用已经整理好的照片。 |
 
 不提供「连接网络重试」。本 App 零网络，失败不归因为网络。
+
+### 5.5 我的作品（⚠️ 待文案确认：取自 product/hd-export-req-v0.2 B 节，全栈先行补齐，正式文案以文案表更新为准）
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `works.entry` | 首页右上角入口 | 我的作品 |
+| `works.nav_title` | 作品列表页标题 | 我的作品 |
+| `works.empty` | 作品列表空状态 | 还没有作品，拼好的图可以存在这里 |
+| `works.keep_hint` | 作品列表底部常驻提示 | 删除 App 后作品会一起删除，想长期保留请导出到相册 |
+| `preview.save_to_works` | 结果页次按钮 | 存到我的作品 |
+| `preview.saved_to_works` | 预览页「存到我的作品」按钮：当前结果已存且没有改动时，不可点（B10-5/6，22:45 统一用这个 key） | 已存到我的作品 |
+| `works.save_failed` | 存作品失败（结果页） | 没能存到我的作品，请再试一次 |
+| `works.export` | 作品查看页按钮 | 导出 |
+| `works.delete` | 作品查看页按钮 | 删除 |
+| `works.delete.confirm` | 删除二次确认 | 删除这张作品？相册里的照片不会受影响。 |
+| `works.delete.confirm.ok` | 删除确认按钮 | 删除 |
+| `works.missing` | 查看页：本次原照片用不了、又找不到合格相近照片、改填目标图这一格平均色的格数（按格计；只在本次发生时出一次；v1.8，取消 4b） | 有 {count} 格原来的照片现在用不了，这几格先用相近的颜色填上 |
+| `works.replaced` | 查看页：本次原照片用不了、已换成本机相近照片的格数（4b；按格计；只在本次发生时出一次） | 有 {count} 格原来的照片现在用不了，已换成相近的照片 |
+| `works.open_failed` | 作品读不出来 | 这张作品打不开了 |
+| `works.delete_failed` | 删除失败 | 没能删除，请再试一次 |
+| `works.update` | 存过的作品只改了叠加强度时的按钮（v1.5，不弹确认） | 更新这张作品 |
+| `works.updated` | 更新成功轻提示，约 2 秒自动消失（v1.5） | 已更新这张作品 |
+| `works.limited_placeholder` | 作品查看页：受限访问（不是「允许访问全部照片」）时不显示保存的预览，改显示占位和这句话（v1.7a，04:00） | 这张作品里有些照片拼忆现在看不到，允许访问全部照片后就能查看 |
+| `works.limited_note.settings` | 作品查看页占位下的按钮，打开系统设置里拼忆的页面（v1.7 / v1.7a） | 去设置 |
+
+- 作品列表长按菜单唯一一项复用 `works.delete`「删除」，红色破坏性样式，不新增 key（v1.5 22:40 改，原先的 works.menu.delete 作废）。点了沿用 `works.delete.confirm` 确认框，按钮用「删除」（红色）和「取消」。
+- `works.missing` / `works.replaced` 都按「格」计数（同一张照片可能用在好几格），统一用「现在用不了」，不写「删掉」「隐藏」（v1.3）。`works.replaced` 是一次性提示，作品查看页、导出前、结果页共用这一条。
+- 导出不再自动存（AndyL 22:20 定），不需要「已自动存到我的作品」一类的提示（v1.5）。
+- 已存状态统一用已有的 `preview.saved_to_works`；v1.5 写过的 `works.saved` 作废，不新增（产品 22:45）。
+- `works.missing` v1.8（16:10）：原「这几格会稍模糊」作废——取消 4b 后找不到相近照片的格子一律填目标色。计数（按格）和只提示一次的规则不变。
+- 受限访问时列表缩略图和查看页都不读保存的预览，列表显示灰色占位、查看页显示 `works.limited_placeholder` 和「去设置」（v1.7a，产品 04:00）。`works.limited_note`（v1.7「先用相近的颜色代替」）暂不使用，等现场渲染那版再启用，这里不收。
+
+### 5.6 相簿多选（v1.4，20:55，同步自产品文案表）
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `source.selection.summary` | 相簿列表底部栏 | 已选 {n} 个相簿 · 共 {count} 张 |
+| `source.selection.none` | 底部栏，未勾选 | 还没选相簿 |
+| `source.selection.dedup_note` | 底部栏小字 | 同一张照片在几个相簿里只算一次 |
+| `source.selection.summary_pending` | 底部栏，扫描未完成时 | 已选 {n} 个相簿 · 约 {count} 张 |
+| `source.album.done` | 底部主按钮 | 完成 |
+| `albums.limited_note` | 相簿列表顶部，只在受限访问时显示（00:15） | 只显示你允许拼忆访问的照片 |
+| `source.counting` | 素材标签里的张数位置，相簿列表加载完之前（00:35） | 正在统计… |
+| `quick.source.summary_two` | 确认页，2 个相簿 | 素材：{name1}、{name2} · {count} 张 |
+| `quick.source.summary_many` | 确认页，3 个及以上 | 素材：{name1} 等 {n} 个相簿 · {count} 张 |
+
+### 5.7 「再拼一张」（v1.4，21:20 定稿；quick-start-req-v1.0.md 22:58 定稿沿用，同步自产品文案表）
+
+未保存提示的弹出规则以 hd-export-req-v0.2 B10-4 为准：当前结果没存进作品，或存过的作品改了叠加强度还没存，就弹；导出过不算存过。
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `quick.again` | 预览页、作品查看页的文字按钮 | 再拼一张 |
+| `quick.source.summary` | 确认页，1 个相簿或全部照片 | 素材：{name} · {count} 张 |
+| `quick.source.change` | 确认页 | 换素材 |
+| `quick.unsaved.title` | 未保存确认弹窗 | 这张还没保存，要先存到我的作品吗？ |
+| `quick.unsaved.save` | 弹窗按钮 | 保存 |
+| `quick.unsaved.discard` | 弹窗按钮 | 不保存 |
+| `quick.unsaved.cancel` | 弹窗按钮 | 取消 |
+| `quick.unsaved.update_title` | 存过但叠加强度改了没存时的未保存提示标题（v1.5，B10-11；「保存」等于更新） | 叠加强度改了还没保存，要更新这张作品吗？ |
+
+### 5.8 选图后读不出照片（v1.6，23:55，#18）
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `picker.unavailable` | 用系统选择器选了一张照片，经过共用过滤入口却取不到（隐藏、未授权、已删除、本机读不出来，这几种情况一律用这一句） | 这张照片现在用不了，换一张试试 |
+| `picker.unavailable.change` | 按钮：重新打开选择器 | 换一张 |
+| `picker.unavailable.add_access` | 按钮，只在受限访问（.limited）时显示，点了调用系统的「增加可用照片」 | 增加可用照片 |
+
+- 另一个按钮复用 `common.cancel`「取消」：回到发起页，当前结果保留。
+- 不区分原因，也不出现「隐藏」「授权」「删除」这些字眼。是否显示「增加可用照片」只看整个 App 的权限状态，不看这张照片的情况，所以用户无法从提示里推断某张照片是隐藏的。
 
 ---
 

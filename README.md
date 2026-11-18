@@ -8,8 +8,9 @@ iOS 16+，Swift 6 + SwiftUI，零网络。架构以 `tech-design-v0.2.md` 为准
 photomosaic/
 ├─ Packages/
 │  ├─ MosaicCore/          # 纯 Swift：颜色空间、特征、features.bin、top-k、约束贪心、网格/条带/叠加。Linux 可 build + test
+│  ├─ MosaicAppCore/       # 纯 Swift：App 层状态机 / 增量索引（PhotoIndex）/ 权限映射 / 计时统计；协议抽象相册，fake 驱动测试。Linux 可 test
 │  └─ MosaicAccelerate/    # Apple 专属 DistanceKernel 扩展点（#if canImport(Accelerate)），Linux 上为空模块
-├─ App/                    # SwiftUI 外壳（T1 骨架占位）+ PrivacyInfo.xcprivacy
+├─ App/                    # SwiftUI 视图（Views/）+ PhotoKit/UIKit 适配器（Adapters/）+ AppModel；逻辑全在 MosaicAppCore
 │  └─ Resources/           # copy_v1.1.md（文案源，带 key）+ zh-Hans.lproj/{Localizable,InfoPlist}.strings（生成）
 ├─ AppTests/               # iOS 模拟器单元测试
 ├─ project.yml             # XcodeGen（.xcodeproj 不入库）
@@ -57,6 +58,39 @@ OverlayBlend.blend(tile: px, target: tgt, alpha: 0.15)                 // 原图
 let next = try pipeline.reshuffle(gen, target: targetPixels, table: table)
 ```
 
+## 免费 Apple ID 真机装机（个人 Team）
+
+不需要付费开发者账号。App 没有启用任何付费 capability（没有 entitlements 文件，也没有 iCloud、App Groups、推送）。
+
+1. 准备环境。Mac 上装好 Xcode，然后 `brew install xcodegen`。在 Xcode → Settings → Accounts 里登录你的 Apple ID，会自动出现一个「Personal Team」。
+2. 配置签名。在仓库根目录执行：
+   ```sh
+   cp Config/Local.xcconfig.example Config/Local.xcconfig
+   ```
+   编辑 `Config/Local.xcconfig`（这个文件已被 .gitignore，不会入库）：
+   - `DEVELOPMENT_TEAM = <你的 10 位 Team ID>`
+   - `PINYI_BUNDLE_ID = com.<你的前缀>.pinyi.dev`
+
+   免费 Team 的 Bundle ID 必须全球唯一。不知道 Team ID 的话，可以把 `DEVELOPMENT_TEAM` 留空，生成工程后到 Signing & Capabilities 里选 Team。
+3. 生成工程：`xcodegen generate`，然后打开 `PhotoMosaic.xcodeproj`。
+4. 选 scheme，目标设备选你的 iPhone（用数据线连接，或同一 Wi-Fi 下配对），然后 ⌘R。
+   - `Pinyi`：Run 用 Debug 配置，包含内部工具，显示名「拼忆调试」。
+   - `Pinyi-Internal`：Release 优化加内部工具，显示名「拼忆内测」。
+5. 第一次装机时，iPhone 需要做两件事：
+   - 开启开发者模式：设置 → 隐私与安全性 → 开发者模式 → 打开，然后重启确认。
+   - 信任开发者：设置 → 通用 → VPN 与设备管理 → 开发者 App → 选你的 Apple ID → 信任。
+6. 免费 Team 的描述文件 7 天过期，过期后重新 ⌘R 即可。另外，每 7 天最多只能注册 10 个新的 App ID。
+
+也可以用命令行，不用 Local.xcconfig，直接覆盖这两个值：
+
+```sh
+xcodebuild -project PhotoMosaic.xcodeproj -scheme Pinyi -configuration Debug \
+  -destination 'generic/platform=iOS' -allowProvisioningUpdates \
+  DEVELOPMENT_TEAM=XXXXXXXXXX PINYI_BUNDLE_ID=com.example.pinyi.dev build
+```
+
+默认值在 `Config/Base.xcconfig`（Debug、Release、Internal 三个配置共用；签名方式为 `CODE_SIGN_STYLE = Automatic`）。CI 用 `CODE_SIGNING_ALLOWED=NO` 做不签名构建，不受影响。
+
 ## 测试方法
 
 Linux：CI 钉 `swift:6.3.3-noble`，与 `macos-26` runner 默认的 Xcode 26.6（Swift 6.3.3）一致。box 上装的是 `~/.local/swift-6.3.3/usr/bin`（另有 6.2.4）。Linux 耗时只防回归，**不能**作为 iPhone 11 性能证据，需真机验证：
@@ -66,6 +100,8 @@ cd Packages/MosaicCore
 swift build
 swift test                                   # 全部单元测试
 MOSAIC_BENCH=1 swift test -c release --filter PerformanceTests   # A-21 全规模基准（CI 单独 job，只记录不阻断；加 MOSAIC_BENCH_ASSERT=1 才断言软阈值）
+cd ../MosaicAppCore && swift test            # App 层逻辑（fake 相册 / 缩略图）
+MOSAIC_BENCH=1 swift test -c release --filter IndexBenchTests  # 索引簿记开销（只打印；不是真机证据）
 cd ../MosaicAccelerate && swift build        # Linux 上为空模块，只验证可编译
 cd ../.. && ./scripts/check-no-network.sh    # 零网络守护
 python3 scripts/gen-localizable.py --check   # .strings 与文案表一致
@@ -75,7 +111,7 @@ macOS（未验证，需 Xcode 26 + `brew install xcodegen`）：
 
 ```bash
 xcodegen generate
-xcodebuild test -project PhotoMosaic.xcodeproj -scheme PhotoMosaic \
+xcodebuild test -project PhotoMosaic.xcodeproj -scheme Pinyi \
   -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
 ```
 
