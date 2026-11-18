@@ -97,7 +97,9 @@ struct CoreTextOutline: TextOutlineProviding {
         let attributes = CTRunGetAttributes(run)
         let key = Unmanaged.passUnretained(kCTFontAttributeName).toOpaque()
         guard let raw = CFDictionaryGetValue(attributes, key) else { return nil }
-        guard CFGetTypeID(raw) == CTFontGetTypeID() else { return nil }
+        // CFDictionaryGetValue 给的是 UnsafeRawPointer。CFGetTypeID 要类实例，直接传入会在警告即错误下失败。
+        let typed = Unmanaged<CFTypeRef>.fromOpaque(raw).takeUnretainedValue()
+        guard CFGetTypeID(typed) == CTFontGetTypeID() else { return nil }
         return Unmanaged<CTFont>.fromOpaque(raw).takeUnretainedValue()
     }
 
