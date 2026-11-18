@@ -13,6 +13,7 @@ import MosaicAppCore
 /// 夹具缩略图是固定的红 220,30,30，用来确认形状内画的是这张图，不是背景，也不是特征色块。
 /// 形状内只取一格中心。容差 12（预览）/ 28（JPEG）能分开这张红图和黑白底，也能挡住大约 0.3 的绿色；
 /// 不能据此说轻微叠加的像素差是绝对 0。形状外只抽四角和至多两个其他外格的中心像素，不是整张逐像素比较。
+/// 另有 10 个方向锚点（每个预设 1 个，不计入这 28 组）。方向断言不调用 `sample()`。
 @MainActor
 final class ShapeApplePixelTests: XCTestCase {
     private struct PixelCase: Equatable, Hashable {
@@ -49,6 +50,34 @@ final class ShapeApplePixelTests: XCTestCase {
     func testExecutedCasesRenderPhotoInsideAndExport() async throws {
         for item in Self.executedCases() {
             try await check(preset: item.preset, palette: item.palette, background: item.background)
+        }
+    }
+
+    /// 上下方向。不调用 `sample()`：生产绘制和 `sample()` 一起翻转时，这里仍按位图第一行是上方来读。
+    /// 不对称形状用「内格照片、垂直镜像在形状外的背景」。对称形状用上红下蓝的照片，预览和导出各自对绝对颜色，不拿两张图互相比。
+    /// 这 10 个预设各 1 次，不放进 28 组，也不是 100 组。
+    func testVerticalDirectionAnchorsInPreviewAndExport() async throws {
+        let anchors = try Self.directionAnchors()
+        XCTAssertEqual(anchors.count, 10)
+        XCTAssertEqual(Self.executedCases().count, 28)
+        for name in [ShapePresetID.birthdayCake, .house] {
+            let anchor = try XCTUnwrap(anchors.first { $0.preset == name })
+            XCTAssertNotNil(anchor.mirrorOutside, "\(anchor.basis)")
+        }
+        for anchor in anchors {
+            let product = try await shapeProduct(preset: anchor.preset, palette: .blue, background: .black, density: anchor.density)
+            let mask = try XCTUnwrap(product.shapeFrame).mask
+            XCTAssertEqual(mask.columns, anchor.columns)
+            XCTAssertEqual(mask.rows, anchor.rows)
+            XCTAssertTrue(mask.isActive(anchor.inside), anchor.basis)
+            if let mirror = anchor.mirrorOutside {
+                XCTAssertFalse(mask.isActive(mirror), anchor.basis)
+                XCTAssertNotEqual(anchor.inside / mask.columns, mirror / mask.columns, anchor.basis)
+                try await checkDirection(product, mask: mask, thumbs: CountingThumbs(), anchor: anchor)
+            } else {
+                XCTAssertNil(anchor.mirrorOutside)
+                try await checkDirection(product, mask: mask, thumbs: SplitVerticalThumbs(), anchor: anchor)
+            }
         }
     }
 
@@ -213,13 +242,153 @@ final class ShapeApplePixelTests: XCTestCase {
         return picked
     }
 
-    private func shapeProduct(preset: ShapePresetID, palette: ShapePalette, background: ShapeBackground) async throws -> GenerationProduct {
+    private struct DirectionAnchor {
+        var preset: ShapePresetID
+        var density: DensityChoice
+        var columns: Int
+        var rows: Int
+        var inside: Int
+        var mirrorOutside: Int?
+        var basis: String
+    }
+
+    /// 粗档优先。粗档没有「内格的垂直镜像在形状外」时才改中档、细档，并写进 `basis`。三档都没有就保持粗档，改用上下分色照片。
+    private static func directionAnchors() throws -> [DirectionAnchor] {
+        var anchors: [DirectionAnchor] = []
+        for preset in PresetShapes.registry.map(\.id) {
+            let coarse = try ShapeLayoutRules.preset(preset, density: .coarse).mask
+            if let pair = farthestMirrorPair(coarse) {
+                anchors.append(anchor(preset, .coarse, coarse, pair, "粗档有镜像对"))
+                continue
+            }
+            var finer: DirectionAnchor?
+            for density in [DensityChoice.medium, .fine] {
+                let mask = try ShapeLayoutRules.preset(preset, density: density.density).mask
+                if let pair = farthestMirrorPair(mask) {
+                    finer = anchor(preset, density, mask, pair, "粗档没有镜像对，改用\(density == .medium ? "中档" : "细档")")
+                    break
+                }
+            }
+            if let finer {
+                anchors.append(finer)
+                continue
+            }
+            let inside = try XCTUnwrap((0..<coarse.cellCount).first { coarse.isActive($0) })
+            let row = inside / coarse.columns
+            let column = inside % coarse.columns
+            anchors.append(DirectionAnchor(
+                preset: preset, density: .coarse, columns: coarse.columns, rows: coarse.rows,
+                inside: inside, mirrorOutside: nil,
+                basis: "\(preset.rawValue) 粗档上下对称，没有镜像对；内格 r\(row) c\(column)，夹具上红 220,30,30 下蓝 30,30,220"))
+        }
+        return anchors
+    }
+
+    private static func anchor(_ preset: ShapePresetID, _ density: DensityChoice, _ mask: CellMask,
+                               _ pair: (inside: Int, outside: Int), _ why: String) -> DirectionAnchor {
+        let insideRow = pair.inside / mask.columns
+        let insideColumn = pair.inside % mask.columns
+        let outsideRow = pair.outside / mask.columns
+        return DirectionAnchor(
+            preset: preset, density: density, columns: mask.columns, rows: mask.rows,
+            inside: pair.inside, mirrorOutside: pair.outside,
+            basis: "\(preset.rawValue) \(why)：内格 r\(insideRow) c\(insideColumn) 应为照片红，垂直镜像 r\(outsideRow) 在形状外应为黑底")
+    }
+
+    /// 同一列里，形状内格子与它的垂直镜像（行号 `rows - 1 - row`）相距最远、且镜像在形状外的一对。
+    private static func farthestMirrorPair(_ mask: CellMask) -> (inside: Int, outside: Int)? {
+        var best: (distance: Int, inside: Int, outside: Int)?
+        for index in 0..<mask.cellCount where mask.isActive(index) {
+            let column = index % mask.columns
+            let row = index / mask.columns
+            let mirroredRow = mask.rows - 1 - row
+            if mirroredRow == row { continue }
+            let mirrored = mirroredRow * mask.columns + column
+            guard !mask.isActive(mirrored) else { continue }
+            let distance = abs(row - mirroredRow)
+            if best == nil || distance > best!.distance {
+                best = (distance, index, mirrored)
+            }
+        }
+        return best.map { ($0.inside, $0.outside) }
+    }
+
+    private enum DirectionSlot { case upper, center, lower }
+
+    private func checkDirection(_ product: GenerationProduct, mask: CellMask, thumbs: any ThumbnailProviding,
+                                anchor: DirectionAnchor) async throws {
+        let unusedTarget = try solid(width: 8, height: 8, r: 0, g: 255, b: 0)
+        let rendered = await MosaicPreviewRenderer.thumbnails(product, target: unusedTarget, overlayAlpha: 0, thumbnails: thumbs)
+        let preview = try XCTUnwrap(rendered)
+        let previewBytes = try bitmap(preview)
+        let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
+        XCTAssertGreaterThanOrEqual(previewCell, 8, anchor.basis)
+        XCTAssertEqual(preview.width, mask.columns * previewCell)
+        XCTAssertEqual(preview.height, mask.rows * previewCell)
+        try assertDirectionPixels(previewBytes, width: preview.width, cellPixels: previewCell, anchor: anchor,
+                                  tolerance: 12, backgroundTolerance: 2, label: "preview")
+
+        let request = ExportRequest(product: product, target: unusedTarget, overlayAlpha: 0, tier: .share)
+        let url = try await LiveMosaicExporter(thumbnails: thumbs).export(request) { _ in }
+        defer { try? FileManager.default.removeItem(at: url) }
+        let jpeg = try XCTUnwrap(decodeJPEG(url))
+        let jpegBytes = try bitmap(jpeg)
+        let exportCell = jpeg.width / mask.columns
+        XCTAssertGreaterThanOrEqual(exportCell, 8, anchor.basis)
+        XCTAssertEqual(jpeg.width, mask.columns * exportCell)
+        XCTAssertEqual(jpeg.height, mask.rows * exportCell)
+        try assertDirectionPixels(jpegBytes, width: jpeg.width, cellPixels: exportCell, anchor: anchor,
+                                  tolerance: 28, backgroundTolerance: 18, label: "export")
+    }
+
+    private func assertDirectionPixels(_ bytes: [UInt8], width: Int, cellPixels: Int, anchor: DirectionAnchor,
+                                       tolerance: Int, backgroundTolerance: Int, label: String) throws {
+        if let mirror = anchor.mirrorOutside {
+            let inside = pixelFromTop(bytes, width: width, columns: anchor.columns, cellPixels: cellPixels,
+                                      index: anchor.inside, slot: .center)
+            let outside = pixelFromTop(bytes, width: width, columns: anchor.columns, cellPixels: cellPixels,
+                                       index: mirror, slot: .center)
+            assertNear(inside, (220, 30, 30), tolerance: tolerance, label: "\(anchor.basis) \(label) 内格")
+            assertNear(outside, (0, 0, 0), tolerance: backgroundTolerance, label: "\(anchor.basis) \(label) 镜像外格")
+        } else {
+            let upper = pixelFromTop(bytes, width: width, columns: anchor.columns, cellPixels: cellPixels,
+                                     index: anchor.inside, slot: .upper)
+            let lower = pixelFromTop(bytes, width: width, columns: anchor.columns, cellPixels: cellPixels,
+                                     index: anchor.inside, slot: .lower)
+            assertNear(upper, (220, 30, 30), tolerance: tolerance, label: "\(anchor.basis) \(label) 上")
+            assertNear(lower, (30, 30, 220), tolerance: tolerance, label: "\(anchor.basis) \(label) 下")
+        }
+    }
+
+    /// 位图第一行是上方。故意不调用 `sample()`。
+    private func pixelFromTop(_ bytes: [UInt8], width: Int, columns: Int, cellPixels: Int, index: Int,
+                              slot: DirectionSlot) -> (UInt8, UInt8, UInt8) {
+        let column = index % columns
+        let row = index / columns
+        let x = column * cellPixels + cellPixels / 2
+        let yInCell: Int
+        switch slot {
+        case .upper: yInCell = cellPixels / 4
+        case .center: yInCell = cellPixels / 2
+        case .lower: yInCell = cellPixels - 1 - cellPixels / 4
+        }
+        let y = row * cellPixels + yInCell
+        let o = y * width * 4 + x * 4
+        guard o >= 0, o + 2 < bytes.count else {
+            XCTFail("方向锚点越界 row \(row) x \(x) y \(y)")
+            return (0, 0, 0)
+        }
+        return (bytes[o], bytes[o + 1], bytes[o + 2])
+    }
+
+    private func shapeProduct(preset: ShapePresetID, palette: ShapePalette, background: ShapeBackground,
+                              density: DensityChoice = .coarse) async throws -> GenerationProduct {
         let choice = ShapeChoice(preset: preset, palette: palette, background: background)
-        let grid = try ShapeGenerationPlan.grid(choice, density: .coarse)
+        let grid = try ShapeGenerationPlan.grid(choice, density: density.density)
         let target = try ShapeGenerationPlan.target(choice, grid: grid, photoColors: [])
         let snap = try snapshot(count: 40)
         return try await GenerationRunner().run(target: target, snapshot: snap,
-                                                settings: GenerationSettings(density: .coarse, overlayAlpha: 0.3),
+                                                settings: GenerationSettings(density: density, overlayAlpha: 0.3),
                                                 seed: 5, activeCells: grid.mask, shapeBackground: background)
     }
 
@@ -239,6 +408,12 @@ final class ShapeApplePixelTests: XCTestCase {
                            cellPixels: image.width / mask.columns, index: index)
         for channel in [pixel.0, pixel.1, pixel.2] {
             XCTAssertLessThanOrEqual(abs(Int(channel) - Int(expected)), tolerance, "\(label) \(pixel)")
+        }
+    }
+
+    private func assertNear(_ pixel: (UInt8, UInt8, UInt8), _ expected: (UInt8, UInt8, UInt8), tolerance: Int, label: String) {
+        for pair in [(pixel.0, expected.0), (pixel.1, expected.1), (pixel.2, expected.2)] {
+            XCTAssertLessThanOrEqual(abs(Int(pair.0) - Int(pair.1)), tolerance, "\(label) \(pixel)")
         }
     }
 
@@ -347,6 +522,28 @@ private func positiveControlsOffMainActor(_ iterations: Int) async -> [Bool] {
         var values: [Bool] = []
         for await value in group { values.append(value) }
         return values
+    }
+}
+
+private struct SplitVerticalThumbs: ThumbnailProviding {
+    let tile: PixelBuffer
+
+    init() {
+        var bytes = [UInt8](repeating: 255, count: 8 * 8 * 4)
+        for row in 0..<8 {
+            let upper = row < 4
+            for column in 0..<8 {
+                let o = (row * 8 + column) * 4
+                bytes[o] = upper ? 220 : 30
+                bytes[o + 1] = 30
+                bytes[o + 2] = upper ? 30 : 220
+            }
+        }
+        tile = try! PixelBuffer(width: 8, height: 8, bytes: bytes)
+    }
+
+    func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {
+        .image(tile)
     }
 }
 
