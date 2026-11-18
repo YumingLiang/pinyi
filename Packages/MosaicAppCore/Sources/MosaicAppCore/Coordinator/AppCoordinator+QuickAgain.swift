@@ -52,7 +52,7 @@ extension AppCoordinator {
     }
 
     private func startNewFromResult() {
-        if isCurrentResultKept {
+        if isCurrentResultKept || !allowsWorkSave {
             beginQuickAgain()
         } else {
             ask(.startNew)
@@ -81,6 +81,10 @@ extension AppCoordinator {
         // 没有作品 ID（旧调用）时，「再调一调」途中按设置页发起算。
         nextQuickStartOrigin = workID.map { .work(id: $0) } ?? (isAdjustingResult ? .adjust : nil)
         if isAdjustingResult, !isCurrentResultKept {
+            if !allowsWorkSave {
+                beginFreshQuickStart()
+                return
+            }
             ask(.startNewFromAdjust)
             return
         }
@@ -99,7 +103,7 @@ extension AppCoordinator {
     /// 预览页返回首页等会丢掉当前结果的离开方式（「再调一调」「换一种拼法」不走这里）。
     public func leaveResultTapped() {
         guard state.canStartNewMosaic else { return }
-        if isCurrentResultKept {
+        if isCurrentResultKept || !allowsWorkSave {
             discardResultAndReturnToStart()
         } else {
             ask(.leaveResult)
