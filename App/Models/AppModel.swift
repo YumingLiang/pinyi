@@ -37,7 +37,7 @@ final class AppModel: ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var changeObserver: LibraryChangeObserver?
 
-    init(buildFlags: BuildFlags) {
+    convenience init(buildFlags: BuildFlags) {
         let perf = PerfRecorder()
         let lifecycle = AppLifecycle()
         let thumbnails = PhotoKitThumbnails()
