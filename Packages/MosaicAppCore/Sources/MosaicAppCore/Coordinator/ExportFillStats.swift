@@ -35,6 +35,12 @@ public struct ExportFillStats: Sendable, Hashable {
         }
     }
 
+    /// 形状外的格子不记入糊格 / 白格。导出循环和测试都走这个入口。
+    public mutating func record(step: ShapeStripExport.Step, fill: Fill) {
+        guard step.countsInFillStats else { return }
+        add(fill)
+    }
+
     /// 取图结果分类：高清成功优先，否则退回扫描缩略图，都没有则为空白。
     /// 不区分「资产是否可见」；导出路径请用 `decision(afterHighQuality:)`。
     public static func fill(highQuality: Bool, scanThumbnail: Bool) -> Fill {

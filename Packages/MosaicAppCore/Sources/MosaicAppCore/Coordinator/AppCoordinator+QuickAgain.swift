@@ -52,7 +52,7 @@ extension AppCoordinator {
     }
 
     private func startNewFromResult() {
-        if isCurrentResultKept {
+        if isCurrentResultKept || !allowsWorkSave {
             beginQuickAgain()
         } else {
             ask(.startNew)
@@ -81,6 +81,10 @@ extension AppCoordinator {
         // 没有作品 ID（旧调用）时，「再调一调」途中按设置页发起算。
         nextQuickStartOrigin = workID.map { .work(id: $0) } ?? (isAdjustingResult ? .adjust : nil)
         if isAdjustingResult, !isCurrentResultKept {
+            if !allowsWorkSave {
+                beginFreshQuickStart()
+                return
+            }
             ask(.startNewFromAdjust)
             return
         }
@@ -99,7 +103,7 @@ extension AppCoordinator {
     /// 预览页返回首页等会丢掉当前结果的离开方式（「再调一调」「换一种拼法」不走这里）。
     public func leaveResultTapped() {
         guard state.canStartNewMosaic else { return }
-        if isCurrentResultKept {
+        if isCurrentResultKept || !allowsWorkSave {
             discardResultAndReturnToStart()
         } else {
             ask(.leaveResult)
@@ -117,6 +121,11 @@ extension AppCoordinator {
     @discardableResult
     public func unsavedPromptSaveTapped() -> Task<Void, Never>? {
         guard let prompt = state.unsavedPrompt, !state.isSavingBeforeLeaving else { return nil }
+        if !allowsWorkSave {
+            state.unsavedPrompt = nil
+            state.unsavedPromptIsUpdate = false
+            return nil
+        }
         state.unsavedPrompt = nil
         state.unsavedPromptIsUpdate = false
         state.isSavingBeforeLeaving = true
@@ -124,6 +133,10 @@ extension AppCoordinator {
     }
 
     private func finishSaveBeforeLeaving(_ prompt: UnsavedResultPrompt) async {
+        if !allowsWorkSave {
+            state.isSavingBeforeLeaving = false
+            return
+        }
         let ok = await resultSaver?.saveCurrentResult() ?? false
         state.isSavingBeforeLeaving = false
         guard ok else { return }
@@ -190,6 +203,13 @@ extension AppCoordinator {
         }
         settingsBeforeQuickAgain = nil
         quickStartOrigin = nil
+        realignShapeChoiceWithResult()
+    }
+
+    /// 回到仍在的形状结果时，把导航上的形状选择放回去。选新图或退回目标页可以暂时清掉它，但不能把这张结果变成可保存的照片。
+    func realignShapeChoiceWithResult() {
+        guard product?.shapeFrame != nil, let shapeIdentity else { return }
+        state.flow.shape = shapeIdentity
     }
 
     /// 开始生成新图（由 `send` 在 `.run` 之前调用）：丢弃旧结果，换上新目标图。
@@ -217,6 +237,7 @@ extension AppCoordinator {
     private func discardResult() {
         guard product != nil else { return }
         product = nil
+        shapeIdentity = nil
         state.resultRevision += 1
         state.postFilterShortageNotice = false
     }

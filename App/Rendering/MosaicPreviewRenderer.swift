@@ -14,13 +14,15 @@ enum MosaicPreviewRenderer {
 
     /// 特征色块占位预览（同步、很快）。故意用每格 8 px，避免和缩略图预览同时占两份大图内存。
     static func colorBlocks(_ product: GenerationProduct) -> CGImage? {
-        guard let p = try? PreviewRenderer.render(product.generation, table: product.snapshot.library.table, cellPixels: 8) else { return nil }
+        guard let p = try? PreviewRenderer.render(product.generation, table: product.snapshot.library.table, cellPixels: 8,
+                                                  background: product.shapeBackground) else { return nil }
         return ImagePixels.cgImage(p)
     }
 
     /// 缩略图预览。在调用方的隔离域（MainActor）上画，取图在后台有界并发。
+    /// 形状结果没有用户目标图：`target == nil`，并且形状本来就不叠加目标图。
     @MainActor
-    static func thumbnails(_ product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double,
+    static func thumbnails(_ product: GenerationProduct, target: PixelBuffer?, overlayAlpha: Double,
                            thumbnails: any ThumbnailProviding) async -> CGImage? {
         let g = product.generation
         let cp = cellPixels(for: g)
@@ -30,9 +32,17 @@ enum MosaicPreviewRenderer {
                                   bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
         ctx.setFillColor(CGColor(colorSpace: cs, components: [1, 1, 1, 1])!)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        let grid = g.layout.grid
+        if let shape = product.shapeFrame, shape.mask.columns == g.layout.columns, shape.mask.rows == g.layout.rows {
+            let (r, gg, b) = shape.background.srgb8
+            ctx.setFillColor(CGColor(colorSpace: cs, components: [CGFloat(r) / 255, CGFloat(gg) / 255, CGFloat(b) / 255, 1])!)
+            for index in 0..<shape.mask.cellCount where !shape.mask.isActive(index) {
+                let (cx, cy) = grid.position(of: index)
+                ctx.fill(CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
+            }
+        }
         // MF-6：按素材分组、有界并发（12）取图，每取到一张画完它的所有格子即丢弃，不留全量缓存。
         let plan = ThumbnailPreviewPlan(cellAssetIDs: product.cellAssetIDs, maxConcurrent: 12)
-        let grid = g.layout.grid
         do {
             try await plan.run(fetch: { id in await thumbnails.thumbnail(for: id, request: .scanDisplay) }) { group, pb in
                 guard let img = ImagePixels.cgImage(pb) else { return }
@@ -45,8 +55,8 @@ enum MosaicPreviewRenderer {
         } catch {
             return nil   // 被取消
         }
-        let alpha = OverlayBlendLimits.clamp(overlayAlpha)
-        if alpha > 0, let t = ImagePixels.cgImage(target) {
+        let alpha = product.shapeFrame == nil ? OverlayBlendLimits.clamp(overlayAlpha) : 0
+        if alpha > 0, let target, let t = ImagePixels.cgImage(target) {
             let crop = g.layout.cropRect
             if let cropped = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height)) {
                 ctx.setAlpha(alpha)

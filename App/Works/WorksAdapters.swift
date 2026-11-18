@@ -70,10 +70,21 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ctx.setFillColor(CGColor(colorSpace: cs, components: [1, 1, 1, 1])!)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .medium
+        let steps = ShapeStripExport.steps(columns: layout.cols, rows: layout.rows, cellPixels: cp, shape: layout.shapeFrame)
+        for step in steps {
+            guard let background = step.background else { continue }
+            let (r, g, b) = background.srgb8
+            ctx.setFillColor(CGColor(colorSpace: cs, components: [
+                CGFloat(r) / 255, CGFloat(g) / 255, CGFloat(b) / 255, 1,
+            ])!)
+            let cx = step.index % layout.cols, cy = step.index / layout.cols
+            ctx.fill(CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
+        }
 
-        // 兜底格：不取照片，旧预览裁出的小图放大填满（双线性 / .high，不用最近邻）
+        // 兜底格：不取照片，旧预览裁出的小图放大填满（双线性 / .high，不用最近邻）。形状外不画兜底图。
         ctx.interpolationQuality = .high
-        for (cell, tile) in fallbacks where cell < layout.cellCount {
+        let outside = Set(steps.compactMap { $0.background == nil ? nil : $0.index })
+        for (cell, tile) in fallbacks where cell < layout.cellCount && !outside.contains(cell) {
             guard let img = ImagePixels.cgImage(tile) else { continue }
             let cx = cell % layout.cols, cy = cell / layout.cols
             ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
@@ -81,7 +92,8 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ctx.interpolationQuality = .medium
 
         let ids: [String?] = layout.cellAssignments.enumerated().map { i, c in
-            c.localIdentifier.isEmpty || fallbacks[i] != nil ? nil : c.localIdentifier
+            if outside.contains(i) { return nil }
+            return c.localIdentifier.isEmpty || fallbacks[i] != nil ? nil : c.localIdentifier
         }
         let cols = layout.cols
         let thumbs = thumbnails
@@ -94,7 +106,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
                 ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
             }
         }
-        let alpha = OverlayBlendLimits.clamp(overlayAlpha)
+        let alpha = layout.shapeFrame == nil ? OverlayBlendLimits.clamp(overlayAlpha) : 0
         if alpha > 0, let target, let t = ImagePixels.cgImage(target) {
             let crop = Self.scaledCrop(layout, toTargetWidth: target.width, height: target.height)
             if let part = t.cropping(to: crop.integral) {
@@ -130,6 +142,9 @@ struct ImageIOWorkImages: WorkImageEncoding {
 
     /// 预览图 / 兜底图原尺寸解码（裁兜底格用；不降采样）。
     func readImage(at url: URL) async throws -> PixelBuffer {
+        #if INTERNAL_TOOLS
+        PreviewReadProbe.recordFileRead()
+        #endif
         guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
               let pb = ImagePixels.opaqueSRGB(cg)
@@ -166,6 +181,9 @@ struct ImageIOWorkImages: WorkImageEncoding {
 
     /// 列表缩略图 / 查看页：ImageIO 降采样解码（不整张解码大图）。
     static func loadImage(_ url: URL, maxPixel: Int) -> CGImage? {
+        #if INTERNAL_TOOLS
+        PreviewReadProbe.recordFileRead()
+        #endif
         guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         let opts = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -176,6 +194,98 @@ struct ImageIOWorkImages: WorkImageEncoding {
         return CGImageSourceCreateThumbnailAtIndex(src, 0, opts)
     }
 }
+
+#if INTERNAL_TOOLS
+import os
+
+/// 内测计数：列表和查看页读预览文件的真实入口是 `ImageIOWorkImages.loadImage` / `readImage`。
+/// 日志只有次数。不记路径、作品 ID、相册名或错误内容。不改变谁可以读。
+///
+/// `loadImage` 是非隔离同步函数，查看页从 `WorksModel`（MainActor）调用，正对照和测试会在别的线程调用。
+/// `readImage` 是非隔离 async。次数因此不能放在 MainActor 上，也不能是非隔离的全局 `var`。
+/// 可变的 `Int` 放进 `LockedState`（全仓库的锁原语）；这里只留一个不可变的 `let`。
+enum PreviewReadProbe {
+    static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "pinyi", category: "preview-read")
+    private static let fileReads = LockedState(0)
+
+    static var fileReadCount: Int { fileReads.get() }
+
+    static func reset() {
+        fileReads.set(0)
+        log.info("previewFileReads \(0, privacy: .public)")
+    }
+
+    static func recordFileRead() {
+        let n = fileReads.withLock { value -> Int in
+            value += 1
+            return value
+        }
+        log.info("previewFileReads \(n, privacy: .public)")
+    }
+
+    /// 在临时目录写一张合成图，再直接调用 `ImageIOWorkImages.loadImage`。成功时读取次数加 1。
+    /// 不经过作品列表，也不经过 `WorksState.decodePreview`。
+    static func positiveControl() -> Bool {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pinyi-probe-\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard writeSyntheticJPEG(to: url), ImageIOWorkImages.loadImage(url, maxPixel: 32) != nil else {
+            log.info("positiveControl failed")
+            return false
+        }
+        return true
+    }
+
+    private static func writeSyntheticJPEG(to url: URL) -> Bool {
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { return false }
+        ctx.setFillColor(CGColor(colorSpace: cs, components: [0.2, 0.4, 0.6, 1])!)
+        ctx.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        guard let image = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
+        else { return false }
+        CGImageDestinationAddImage(dest, image, nil)
+        return CGImageDestinationFinalize(dest)
+    }
+}
+
+/// 一次抄下来的次数和时间。页面上的数字只来自这种抄录，不会自动跟着读文件变。
+struct PreviewReadSample: Equatable, Sendable {
+    var count: Int
+    var at: Date
+}
+
+/// 一段取证。起点、正对照增量、操作后的手动刷新分开记。
+/// 本类型不调用 `reset`。没刷新过时 `canUseAsMeasurement` 为 false，不能把 0 当成没读过。
+struct PreviewReadSession: Equatable, Sendable {
+    var baseline: PreviewReadSample
+    /// 操作结束后手动刷新抄到的次数。nil 表示这段还没有刷新。
+    var refreshed: PreviewReadSample?
+    /// 正对照调用前后的差。只覆盖 `loadImage`，不覆盖作品列表。
+    var controlDelta: Int?
+
+    init(baselineCount: Int, at: Date) {
+        baseline = PreviewReadSample(count: baselineCount, at: at)
+    }
+
+    var deltaSinceBaseline: Int? {
+        guard let refreshed else { return nil }
+        return refreshed.count - baseline.count
+    }
+
+    /// 只有操作之后手动刷新过，这段次数才是测量值。
+    var canUseAsMeasurement: Bool { refreshed != nil }
+
+    mutating func noteRefresh(count: Int, at: Date) {
+        refreshed = PreviewReadSample(count: count, at: at)
+    }
+
+    mutating func noteControl(delta: Int) {
+        controlDelta = delta
+    }
+}
+#endif
 
 /// 从作品再导出 → 导出线 `AppCoordinator.export(layout:target:purpose:)`（按保存的显式布局，档位用当前 `exportTier`）。
 /// 弱引用协调器（`WorksController` 强持有本桥）。

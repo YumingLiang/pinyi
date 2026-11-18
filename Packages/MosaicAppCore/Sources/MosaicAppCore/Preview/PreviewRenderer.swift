@@ -7,15 +7,30 @@ public enum PreviewRenderer {
     /// - Parameters:
     ///   - cellPixels: 每格像素（偶数时 2×2 子块精确对齐）。
     /// - Returns: RGBA8 sRGB 不透明图像，尺寸 = 列数 × cellPixels，行数 × cellPixels。
-    public static func render(_ generation: MosaicGeneration, table: FeatureTable, cellPixels: Int = 8) throws -> PixelBuffer {
+    /// - Parameter background: 形状外的背景色。只有 `generation.activeCells != nil` 且该格 `tile < 0` 时使用；
+    ///   不传则用白。`activeCells == nil` 时忽略这个参数，像素与原来一致（`tile < 0` 仍是零向量特征色）。
+    public static func render(_ generation: MosaicGeneration, table: FeatureTable, cellPixels: Int = 8,
+                              background: ShapeBackground? = nil) throws -> PixelBuffer {
         let cp = max(2, cellPixels)
         let cols = generation.layout.columns, rows = generation.layout.rows
         let w = cols * cp, h = rows * cp
         var bytes = [UInt8](repeating: 255, count: w * h * 4)
         let half = cp / 2
+        let shapeOutside = generation.activeCells
+        let bg = (background ?? .white).srgb8
         for cell in 0..<generation.layout.cellCount {
             let (cx, cy) = generation.layout.grid.position(of: cell)
             let tile = generation.assignment.tiles[cell]
+            if shapeOutside != nil, tile < 0 {
+                for y in (cy * cp)..<((cy + 1) * cp) {
+                    var o = (y * w + cx * cp) * 4
+                    for _ in 0..<cp {
+                        bytes[o] = bg.r; bytes[o + 1] = bg.g; bytes[o + 2] = bg.b; bytes[o + 3] = 255
+                        o += 4
+                    }
+                }
+                continue
+            }
             let vec = tile >= 0 && tile < table.count ? table.record(tile).vector : FeatureVector()
             for b in 0..<4 {
                 let rgb = srgbBytes(fromFeatureBlock: vec.block(b), colorSpace: table.spec.colorSpace)

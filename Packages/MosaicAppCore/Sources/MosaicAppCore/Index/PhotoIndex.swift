@@ -99,6 +99,11 @@ public struct IndexSnapshot: Sendable {
     public var library: LibrarySnapshot
     public var assetIDsByRow: [String?]
     public var availableCount: Int { library.availableCount }
+
+    public init(library: LibrarySnapshot, assetIDsByRow: [String?]) {
+        self.library = library
+        self.assetIDsByRow = assetIDsByRow
+    }
 }
 
 public enum PhotoIndexError: Error, Sendable, Equatable {

@@ -8,7 +8,8 @@ import MosaicCore
 /// - 不含任何像素数据；目标图（叠加层用）由调用方另给。
 /// - 复用 MosaicCore 已有的 `CropRect`（`Hashable, Sendable`）；它不是 `Codable`，这里手写编码，避免对外部类型做追溯一致性。
 public struct MosaicLayout: Sendable, Codable, Equatable {
-    /// 当前格式版本。改字段含义时 +1，解码端按版本迁移。
+    /// 现在写盘的布局版本。设计里的 manifest v2（`source` / `color` / `background` / bits-v1 mask）由 S5 写入。
+    /// S3 不把缺 source 的形状记录写成 formatVersion 2。
     public static let currentFormatVersion = 1
 
     /// 一格的分配。
@@ -80,6 +81,8 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
     /// 网格在目标图里的区域（目标图像素；短边方向已居中裁掉余量）。
     public var targetCrop: CropRect
     public var params: Params
+    /// 预览 / 导出用的形状掩码和背景。不进 JSON。nil = 普通拼图。
+    public var shapeFrame: ShapeFrame?
 
     public struct Size: Sendable, Codable, Equatable {
         public var width: Int
@@ -88,7 +91,7 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
     }
 
     public init(cols: Int, rows: Int, cellAssignments: [CellAssignment], targetSize: Size, targetCrop: CropRect,
-                params: Params, formatVersion: Int = MosaicLayout.currentFormatVersion) {
+                params: Params, shapeFrame: ShapeFrame? = nil, formatVersion: Int = MosaicLayout.currentFormatVersion) {
         self.formatVersion = formatVersion
         self.cols = cols
         self.rows = rows
@@ -96,6 +99,7 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
         self.targetSize = targetSize
         self.targetCrop = targetCrop
         self.params = params
+        self.shapeFrame = shapeFrame
     }
 
     public var cellCount: Int { cols * rows }
@@ -131,6 +135,7 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
         targetSize = try c.decode(Size.self, forKey: .targetSize)
         targetCrop = try Self.decodeRect(c.decode([Double].self, forKey: .targetCrop))
         params = try c.decode(Params.self, forKey: .params)
+        shapeFrame = nil
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -159,11 +164,13 @@ extension MosaicLayout {
     public init(product: GenerationProduct, overlayAlpha: Double) {
         let g = product.generation
         let ids = product.cellAssetIDs
+        let shape = product.shapeFrame
         self.init(cols: g.layout.columns, rows: g.layout.rows,
                   cellAssignments: ids.map { CellAssignment(localIdentifier: $0 ?? "") },
                   targetSize: Size(width: g.layout.imageWidth, height: g.layout.imageHeight),
                   targetCrop: g.layout.cropRect,
-                  params: Params(overlayAlpha: overlayAlpha, density: Self.name(g.density), seed: g.seed))
+                  params: Params(overlayAlpha: shape == nil ? overlayAlpha : 0, density: Self.name(g.density), seed: g.seed),
+                  shapeFrame: shape)
     }
 
     static func name(_ d: Density) -> String {

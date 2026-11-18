@@ -12,6 +12,8 @@ public struct MainFlow: Sendable, Hashable {
     public private(set) var targetNotice: L10nKey?
     public var source = SourcePickerState()
     public var settings = GenerationSettings()
+    /// 预设形状。nil = 用目标图的普通拼图。文字入口不在这一阶段。
+    public var shape: ShapeChoice?
     public var generation: GenerationMachine
     /// 「再拼一张」进行中（需求 v1.0 §2e）：已离开预览页去选新目标图 / 确认页，但上一张结果**还在**——
     /// 在选图页返回就回到原预览页；真正开始生成新图时（协调器 `commitQuickAgain`）才结束这个状态、丢弃旧结果。
@@ -44,6 +46,8 @@ public struct MainFlow: Sendable, Hashable {
         case changeSource
         /// 作品查看页「再拼一张」、主流程没有停在结果页：去选目标图，选好直接进确认页。
         case freshQuickStartStarted
+        /// 首页「用形状拼」：跳过目标图，去现有的素材页。默认爱心、按相册取色、白底。
+        case beginShape
     }
 
     public mutating func send(_ e: Event) {
@@ -51,6 +55,7 @@ public struct MainFlow: Sendable, Hashable {
         case .targetLoaded:
             hasTarget = true
             targetNotice = nil
+            shape = nil
             // 2b：再拼一张选好照片直接进确认页（素材沿用上次），保证 ≤ 3 次点击。
             if isQuickAgain || isFreshQuickStart, step == .target { step = .settings }
         case .targetFailed:
@@ -83,7 +88,9 @@ public struct MainFlow: Sendable, Hashable {
                 return
             }
             switch step {
-            case .source: step = .target
+            case .source:
+                shape = nil
+                step = .target
             case .settings: step = .source
             case .result: step = .settings
             case .target: break
@@ -97,6 +104,10 @@ public struct MainFlow: Sendable, Hashable {
             step = .target
         case .changeSource:
             if step == .settings { step = .source }
+        case .beginShape:
+            guard step == .target, !isQuickAgain, !isFreshQuickStart else { return }
+            shape = ShapeChoice()
+            step = .source
         case .freshQuickStartStarted:
             guard !isQuickAgain else { return }
             if case .result = generation.phase { return }   // 停在结果页时走 quickAgainStarted
@@ -143,6 +154,7 @@ public struct MainFlow: Sendable, Hashable {
         isFreshQuickStart = false
         hasTarget = false
         targetNotice = nil
+        shape = nil
         step = .target
     }
 

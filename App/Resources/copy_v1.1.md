@@ -170,6 +170,34 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 
 使用上限、邻域半径不向用户开放，无控件文案。
 
+### 4.3b 预设形状（首版）
+
+首页可改走形状，然后仍用现有的素材来源。文字拼图和「存到我的作品」这一阶段不出现。10 个形状 ID 与设计锁定表一致。
+
+| key | 用途 | 文案 |
+|---|---|---|
+| `shape.entry` | 目标图页入口 | 用形状拼 |
+| `shape.section` | 确认页形状 | 形状 |
+| `shape.palette.section` | 配色 | 颜色 |
+| `shape.palette.auto` | 按相册 | 按相册 |
+| `shape.palette.warmRed` | 暖红 | 暖红 |
+| `shape.palette.pink` | 粉 | 粉 |
+| `shape.palette.blue` | 蓝 | 蓝 |
+| `shape.palette.gold` | 金 | 金 |
+| `shape.background.section` | 背景 | 背景 |
+| `shape.background.white` | 白 | 白 |
+| `shape.background.black` | 黑 | 黑 |
+| `shape.preset.heart` | 爱心 | 爱心 |
+| `shape.preset.star` | 星星 | 星星 |
+| `shape.preset.circle` | 圆形 | 圆形 |
+| `shape.preset.birthdayCake` | 生日蛋糕 | 生日蛋糕 |
+| `shape.preset.flower` | 花朵 | 花朵 |
+| `shape.preset.moon` | 月亮 | 月亮 |
+| `shape.preset.fourLeafClover` | 四叶草 | 四叶草 |
+| `shape.preset.house` | 小房子 | 小房子 |
+| `shape.preset.speechBubble` | 对话框 | 对话框 |
+| `shape.preset.roundedSquare` | 圆角方块 | 圆角方块 |
+
 ### 4.4 原图叠加强度
 
 | key | 用途 | 文案 |

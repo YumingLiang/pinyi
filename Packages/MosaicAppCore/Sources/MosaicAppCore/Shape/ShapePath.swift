@@ -15,6 +15,19 @@ public struct ShapePoint: Codable, Sendable, Hashable {
     }
 }
 
+/// `ShapePath.normalized` 的结果，外加归一化前曲线外接框的宽和高（与 `path.aspect` 同一套细分）。
+public struct NormalizedShapePath: Sendable, Equatable {
+    public var path: ShapePath
+    public var width: Double
+    public var height: Double
+
+    public init(path: ShapePath, width: Double, height: Double) {
+        self.path = path
+        self.width = width
+        self.height = height
+    }
+}
+
 /// 归一化到 0…1 的路径（y 向下，外接框左上 = (0, 0)、右下 = (1, 1)），**非零环绕**填充。
 /// `aspect` 是外接框 宽 / 高：光栅化时按它等比放进网格。
 public struct ShapePath: Codable, Sendable, Equatable {
@@ -39,6 +52,12 @@ public struct ShapePath: Codable, Sendable, Equatable {
     /// 把任意单位的路径归一化：按**曲线实际外接框**（细分后求）平移、缩放到 0…1，并记下宽高比。
     /// 空路径或退化（宽或高为 0）返回 `nil`。
     public static func normalized(_ raw: [Element]) -> ShapePath? {
+        normalizedReportingBounds(raw)?.path
+    }
+
+    /// `normalized` 的同一结果，并带回归一化前的曲线外接框宽高。
+    /// 文字轮廓用它把外接框换成 em（`TextOutlineAssembler`），宽高比与 `path.aspect` 是同一套细分。
+    public static func normalizedReportingBounds(_ raw: [Element]) -> NormalizedShapePath? {
         let polys = flatten(raw, transform: { $0 }, tolerance: 1e-4 * max(1, rawExtent(raw)))
         var minX = Double.infinity, minY = Double.infinity, maxX = -Double.infinity, maxY = -Double.infinity
         for poly in polys {
@@ -59,7 +78,7 @@ public struct ShapePath: Codable, Sendable, Equatable {
             case .close: return .close
             }
         }
-        return ShapePath(elements: elements, aspect: w / h)
+        return NormalizedShapePath(path: ShapePath(elements: elements, aspect: w / h), width: w, height: h)
     }
 
     /// 细分成闭合多边形（每个子路径一个，首尾不重复）。`transform` 把归一化坐标映射到目标坐标（例如格子坐标），

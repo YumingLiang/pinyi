@@ -92,6 +92,10 @@ public protocol MosaicGenerating: Sendable {
                    progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct
     func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
              progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct
+    /// 形状生成。`activeCells == nil` 与无掩码入口相同。
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             activeCells: CellMask?, shapeBackground: ShapeBackground?,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct
     func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
                    progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct
     func invalidateLocalResolution()
@@ -102,6 +106,11 @@ public extension MosaicGenerating {
     func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
              progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
         try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress)
+    }
+    func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+             activeCells: CellMask?, shapeBackground: ShapeBackground?,
+             progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress, stage: stage)
     }
     func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
                    progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
@@ -148,7 +157,8 @@ public struct ExportRequest: Sendable {
                 cellFallbacks: [Int: PixelBuffer] = [:]) {
         self.layout = layout
         self.target = target
-        self.overlayAlpha = target == nil ? 0 : (overlayAlpha ?? layout.params.overlayAlpha)
+        // 形状模式叠加固定 0（设计 §6）。无形状时与原来一样：没有目标图为 0，否则用传入值或布局里的强度。
+        self.overlayAlpha = (target == nil || layout.shapeFrame != nil) ? 0 : (overlayAlpha ?? layout.params.overlayAlpha)
         self.tier = tier
         self.cellFallbacks = cellFallbacks
     }

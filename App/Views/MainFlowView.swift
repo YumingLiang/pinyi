@@ -85,6 +85,10 @@ struct TargetStepView: View {
             Button { model.flowSend(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(!model.flow.canGoNextFromTarget)
+            if !model.flow.isQuickAgain && !model.flow.isFreshQuickStart {
+                Button { model.beginShape() } label: { Text(L10nKey.shapeEntry).frame(maxWidth: .infinity) }
+                    .buttonStyle(.bordered)
+            }
         }
         .padding(24)
         .navigationTitle(Text(L10nKey.targetNavTitle))
@@ -273,6 +277,44 @@ struct SettingsStepView: View {
                     Button { model.flowSend(.changeSource) } label: { Text(L10nKey.quickSourceChange) }
                 }
             }
+            if let shape = model.flow.shape {
+                Section(header: Text(L10nKey.shapeSection)) {
+                    ForEach(PresetShapes.registry, id: \.id) { entry in
+                        Button { model.setShapePreset(entry.id) } label: {
+                            HStack {
+                                Text(entry.id.titleKey)
+                                Spacer()
+                                if shape.preset == entry.id { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                }
+                Section(header: Text(L10nKey.shapePaletteSection)) {
+                    ForEach(ShapePalette.allCases, id: \.self) { palette in
+                        Button { model.setShapePalette(palette) } label: {
+                            HStack {
+                                Text(palette.titleKey)
+                                Spacer()
+                                if shape.palette == palette { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                }
+                Section(header: Text(L10nKey.shapeBackgroundSection)) {
+                    ForEach(ShapeBackground.allCases, id: \.self) { background in
+                        Button { model.setShapeBackground(background) } label: {
+                            HStack {
+                                Text(background == .white ? L10nKey.shapeBackgroundWhite : L10nKey.shapeBackgroundBlack)
+                                Spacer()
+                                if shape.background == background { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                }
+            }
             Section(header: Text(L10nKey.densitySection)) {
                 ForEach(DensityChoice.allCases, id: \.self) { d in
                     Button { model.setDensity(d) } label: {
@@ -288,10 +330,12 @@ struct SettingsStepView: View {
                     .foregroundStyle(.primary)
                 }
             }
+            if model.flow.shape == nil {
             Section(header: Text(L10nKey.overlaySection), footer: Text(L10nKey.overlayHint)) {
                 Slider(value: $model.overlayAlpha, in: 0...OverlayBlendLimits.maxAlpha) {
                     Text(L10nKey.overlaySection)
                 } minimumValueLabel: { Text(L10nKey.overlayLeft).font(.caption2) } maximumValueLabel: { Text(L10nKey.overlayRight).font(.caption2) }
+            }
             }
             Section(footer: Text(L10nKey.generatePrivacyHint)) {
                 // B10.14：「再调一调」进来只动了叠加强度 →「完成」回原结果（不重新生成）；否则「开始拼图」
@@ -382,7 +426,9 @@ struct ResultView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!model.canExport)
-            SaveToWorksButton()   // 需求 B2 / B10：次按钮「存到我的作品」（导出不自动存）
+            if model.allowsWorkSave {
+                SaveToWorksButton()   // 形状这一阶段不出现，避免点了才被保存防线拒绝
+            }
             // 需求 v1.0 §2e：第三级文字按钮，紧挨「存到我的作品」下面，不和「再调一调」「换一种拼法」同排。
             // 生成中 / 导出中 / 提示弹着时不可点（判断在 AppState.canStartNewMosaic）。
             Button { model.startNewMosaicTapped() } label: {

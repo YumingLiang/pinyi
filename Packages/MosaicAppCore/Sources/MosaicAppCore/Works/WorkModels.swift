@@ -450,4 +450,7 @@ public enum WorksStoreError: Error, Sendable, Equatable {
 public enum WorksError: Error, Sendable, Equatable {
     /// `write(_ draft:)` 收到带纯色格（`fc`）的布局：新存作品的预览渲染还不读 fc，先拒绝（长期改法见 works-missing-fill）。
     case unsupportedFilledCells
+    /// 形状结果还不能存成作品。设计里的 manifest v2 要有 source / color / background / bits-v1 mask，由 S5 写入。
+    /// S3 只有预览和导出用的运行时掩码，不会写成另一种 formatVersion 2。
+    case unsupportedShapeSave
 }
