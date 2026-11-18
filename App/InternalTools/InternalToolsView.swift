@@ -136,6 +136,8 @@ struct PreviewReadProbeView: View {
                     .font(.footnote)
                 Text(verbatim: "正对照只直接调用 loadImage，不经过作品列表。它的增量不能代替列表或查看页。")
                     .font(.footnote)
+                Text(verbatim: "App进程重启或更换进程会使计数归零，之前那段测量证据失效，须重新记起点与正对照。")
+                    .font(.footnote)
             }
             Section {
                 Button {

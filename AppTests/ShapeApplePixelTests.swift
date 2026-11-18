@@ -15,7 +15,7 @@ import MosaicAppCore
 /// 不能据此说轻微叠加的像素差是绝对 0。形状外只抽四角和至多两个其他外格的中心像素，不是整张逐像素比较。
 @MainActor
 final class ShapeApplePixelTests: XCTestCase {
-    private struct PixelCase: Equatable {
+    private struct PixelCase: Equatable, Hashable {
         var preset: ShapePresetID
         var palette: ShapePalette
         var background: ShapeBackground
