@@ -172,7 +172,8 @@ final class CancellationTests: XCTestCase {
                 .assign(grid: f.grid, cellFeatures: f.cells, library: f.lib, mask: nil,
                         lightnessVariance: nil, cancellation: token) { p in
                     if cancelled.value { after.mutate { $0 += 1 }; return }
-                    if p.phase == .matching, p.completed == 3 { cancelled.mutate { $0 = true }; token.cancel() }
+                    // >=：ProgressCounter 可能跳过中间值（与 PerformanceTests 同一写法）；上面 cancelled.value 保证只取消一次
+                    if p.phase == .matching, p.completed >= 3 { cancelled.mutate { $0 = true }; token.cancel() }
                 }
         } catch { thrown = error }
         XCTAssertTrue(cancelled.value)

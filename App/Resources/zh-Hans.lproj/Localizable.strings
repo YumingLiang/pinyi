@@ -417,10 +417,10 @@
 /* 删除确认按钮（copy_v1.1.md:354） */
 "works.delete.confirm.ok" = "删除";
 
-/* 查看页 / 导出前：原照片现在用不了的格数（按格计，v1.3 17:20）（copy_v1.1.md:355） 参数: %1$@=count */
-"works.missing" = "有 %1$@ 格原来的照片现在用不了，这几格会稍模糊";
+/* 查看页：本次原照片用不了、又找不到合格相近照片、改填目标图这一格平均色的格数（按格计；只在本次发生时出一次；v1.8，取消 4b）（copy_v1.1.md:355） 参数: %1$@=count */
+"works.missing" = "有 %1$@ 格原来的照片现在用不了，这几格先用相近的颜色填上";
 
-/* 作品查看页 / 导出前 / 结果页，一次性提示：原照片用不了的格子已换成相近照片（按格计，17:20 定稿）（copy_v1.1.md:356） 参数: %1$@=count */
+/* 查看页：本次原照片用不了、已换成本机相近照片的格数（4b；按格计；只在本次发生时出一次）（copy_v1.1.md:356） 参数: %1$@=count */
 "works.replaced" = "有 %1$@ 格原来的照片现在用不了，已换成相近的照片";
 
 /* 作品读不出来（copy_v1.1.md:357） */
@@ -435,122 +435,128 @@
 /* 更新成功轻提示，约 2 秒自动消失（v1.5）（copy_v1.1.md:360） */
 "works.updated" = "已更新这张作品";
 
-/* 相簿列表底部栏（copy_v1.1.md:371） 参数: %1$@=n, %2$@=count */
+/* 作品查看页：受限访问（不是「允许访问全部照片」）时不显示保存的预览，改显示占位和这句话（v1.7a，04:00）（copy_v1.1.md:361） */
+"works.limited_placeholder" = "这张作品里有些照片拼忆现在看不到，允许访问全部照片后就能查看";
+
+/* 作品查看页占位下的按钮，打开系统设置里拼忆的页面（v1.7 / v1.7a）（copy_v1.1.md:362） */
+"works.limited_note.settings" = "去设置";
+
+/* 相簿列表底部栏（copy_v1.1.md:375） 参数: %1$@=n, %2$@=count */
 "source.selection.summary" = "已选 %1$@ 个相簿 · 共 %2$@ 张";
 
-/* 底部栏，未勾选（copy_v1.1.md:372） */
+/* 底部栏，未勾选（copy_v1.1.md:376） */
 "source.selection.none" = "还没选相簿";
 
-/* 底部栏小字（copy_v1.1.md:373） */
+/* 底部栏小字（copy_v1.1.md:377） */
 "source.selection.dedup_note" = "同一张照片在几个相簿里只算一次";
 
-/* 底部栏，扫描未完成时（copy_v1.1.md:374） 参数: %1$@=n, %2$@=count */
+/* 底部栏，扫描未完成时（copy_v1.1.md:378） 参数: %1$@=n, %2$@=count */
 "source.selection.summary_pending" = "已选 %1$@ 个相簿 · 约 %2$@ 张";
 
-/* 底部主按钮（copy_v1.1.md:375） */
+/* 底部主按钮（copy_v1.1.md:379） */
 "source.album.done" = "完成";
 
-/* 相簿列表顶部，只在受限访问时显示（00:15）（copy_v1.1.md:376） */
+/* 相簿列表顶部，只在受限访问时显示（00:15）（copy_v1.1.md:380） */
 "albums.limited_note" = "只显示你允许拼忆访问的照片";
 
-/* 素材标签里的张数位置，相簿列表加载完之前（00:35）（copy_v1.1.md:377） */
+/* 素材标签里的张数位置，相簿列表加载完之前（00:35）（copy_v1.1.md:381） */
 "source.counting" = "正在统计…";
 
-/* 确认页，2 个相簿（copy_v1.1.md:378） 参数: %1$@=name1, %2$@=name2, %3$@=count */
+/* 确认页，2 个相簿（copy_v1.1.md:382） 参数: %1$@=name1, %2$@=name2, %3$@=count */
 "quick.source.summary_two" = "素材：%1$@、%2$@ · %3$@ 张";
 
-/* 确认页，3 个及以上（copy_v1.1.md:379） 参数: %1$@=name1, %2$@=n, %3$@=count */
+/* 确认页，3 个及以上（copy_v1.1.md:383） 参数: %1$@=name1, %2$@=n, %3$@=count */
 "quick.source.summary_many" = "素材：%1$@ 等 %2$@ 个相簿 · %3$@ 张";
 
-/* 确认页，1 个相簿、没有相簿名且相簿列表没加载完（产品 03:16）；{count} 位置显示 `source.counting`（copy_v1.1.md:380） 参数: %1$@=count */
+/* 确认页，1 个相簿、没有相簿名且相簿列表没加载完（产品 03:16）；{count} 位置显示 `source.counting`（copy_v1.1.md:384） 参数: %1$@=count */
 "quick.source.summary_counting" = "素材：%1$@";
 
-/* 确认页，多个相簿、其中有相簿还没有名字且相簿列表没加载完（产品 03:25，§2f 补充 9）；{count} 位置显示 `source.counting`（copy_v1.1.md:381） 参数: %1$@=n, %2$@=count */
+/* 确认页，多个相簿、其中有相簿还没有名字且相簿列表没加载完（产品 03:25，§2f 补充 9）；{count} 位置显示 `source.counting`（copy_v1.1.md:385） 参数: %1$@=n, %2$@=count */
 "quick.source.summary_albums_counting" = "素材：%1$@ 个相簿 · %2$@";
 
-/* 预览页、作品查看页的文字按钮（copy_v1.1.md:389） */
+/* 预览页、作品查看页的文字按钮（copy_v1.1.md:393） */
 "quick.again" = "再拼一张";
 
-/* 确认页，1 个相簿或全部照片（copy_v1.1.md:390） 参数: %1$@=name, %2$@=count */
+/* 确认页，1 个相簿或全部照片（copy_v1.1.md:394） 参数: %1$@=name, %2$@=count */
 "quick.source.summary" = "素材：%1$@ · %2$@ 张";
 
-/* 确认页（copy_v1.1.md:391） */
+/* 确认页（copy_v1.1.md:395） */
 "quick.source.change" = "换素材";
 
-/* 未保存确认弹窗（copy_v1.1.md:392） */
+/* 未保存确认弹窗（copy_v1.1.md:396） */
 "quick.unsaved.title" = "这张还没保存，要先存到我的作品吗？";
 
-/* 弹窗按钮（copy_v1.1.md:393） */
+/* 弹窗按钮（copy_v1.1.md:397） */
 "quick.unsaved.save" = "保存";
 
-/* 弹窗按钮（copy_v1.1.md:394） */
+/* 弹窗按钮（copy_v1.1.md:398） */
 "quick.unsaved.discard" = "不保存";
 
-/* 弹窗按钮（copy_v1.1.md:395） */
+/* 弹窗按钮（copy_v1.1.md:399） */
 "quick.unsaved.cancel" = "取消";
 
-/* 存过但叠加强度改了没存时的未保存提示标题（v1.5，B10-11；「保存」等于更新）（copy_v1.1.md:396） */
+/* 存过但叠加强度改了没存时的未保存提示标题（v1.5，B10-11；「保存」等于更新）（copy_v1.1.md:400） */
 "quick.unsaved.update_title" = "叠加强度改了还没保存，要更新这张作品吗？";
 
-/* 用系统选择器选了一张照片，经过共用过滤入口却取不到（隐藏、未授权、已删除、本机读不出来，这几种情况一律用这一句）（copy_v1.1.md:402） */
+/* 用系统选择器选了一张照片，经过共用过滤入口却取不到（隐藏、未授权、已删除、本机读不出来，这几种情况一律用这一句）（copy_v1.1.md:406） */
 "picker.unavailable" = "这张照片现在用不了，换一张试试";
 
-/* 按钮：重新打开选择器（copy_v1.1.md:403） */
+/* 按钮：重新打开选择器（copy_v1.1.md:407） */
 "picker.unavailable.change" = "换一张";
 
-/* 按钮，只在受限访问（.limited）时显示，点了调用系统的「增加可用照片」（copy_v1.1.md:404） */
+/* 按钮，只在受限访问（.limited）时显示，点了调用系统的「增加可用照片」（copy_v1.1.md:408） */
 "picker.unavailable.add_access" = "增加可用照片";
 
-/* App 显示名（copy_v1.1.md:415） */
+/* App 显示名（copy_v1.1.md:419） */
 "app.display_name" = "拼忆";
 
-/* 建议 App Store 副标题（copy_v1.1.md:416） */
+/* 建议 App Store 副标题（copy_v1.1.md:420） */
 "app.store_subtitle" = "照片马赛克";
 
-/* 建议展示名（copy_v1.1.md:417） */
+/* 建议展示名（copy_v1.1.md:421） */
 "app.store_full_name" = "拼忆 - 照片马赛克";
 
-/* 取消（copy_v1.1.md:418） */
+/* 取消（copy_v1.1.md:422） */
 "common.cancel" = "取消";
 
-/* 完成（copy_v1.1.md:419） */
+/* 完成（copy_v1.1.md:423） */
 "common.done" = "完成";
 
-/* 返回（copy_v1.1.md:420） */
+/* 返回（copy_v1.1.md:424） */
 "common.back" = "返回";
 
-/* 确定（copy_v1.1.md:421） */
+/* 确定（copy_v1.1.md:425） */
 "common.ok" = "确定";
 
-/* 关闭（copy_v1.1.md:422） */
+/* 关闭（copy_v1.1.md:426） */
 "common.close" = "关闭";
 
-/* 重试（copy_v1.1.md:423） */
+/* 重试（copy_v1.1.md:427） */
 "common.retry" = "再试一次";
 
-/* 设置页标题（copy_v1.1.md:424） */
+/* 设置页标题（copy_v1.1.md:428） */
 "settings.title" = "设置";
 
-/* 内部 TestFlight 设置页入口（编译开关控制；正式版隐藏）（copy_v1.1.md:425） */
+/* 内部 TestFlight 设置页入口（编译开关控制；正式版隐藏）（copy_v1.1.md:429） */
 "settings.performance" = "性能测试";
 
-/* 关于入口（copy_v1.1.md:426） */
+/* 关于入口（copy_v1.1.md:430） */
 "settings.about" = "关于拼忆";
 
-/* 关于页标题（copy_v1.1.md:427） */
+/* 关于页标题（copy_v1.1.md:431） */
 "about.title" = "关于拼忆";
 
-/* 诊断导出说明（copy_v1.1.md:428） */
+/* 诊断导出说明（copy_v1.1.md:432） */
 "diagnostics.export_note" = "仅包含技术诊断信息，不含照片。";
 
-/* 关于正文（copy_v1.1.md:429） */
+/* 关于正文（copy_v1.1.md:433） */
 "about.body" = "拼忆在这台 iPhone 上，用你自己的照片拼出一张新的马赛克图。所有处理都在本地完成，照片不会上传。";
 
-/* 正式版隐藏入口说明（不对用户展示；连点版本号 5 次进入性能测试）（copy_v1.1.md:430） */
+/* 正式版隐藏入口说明（不对用户展示；连点版本号 5 次进入性能测试）（copy_v1.1.md:434） */
 "about.performance_hidden" = "（无文案，手势入口）";
 
-/* 隐私说明入口（copy_v1.1.md:431） */
+/* 隐私说明入口（copy_v1.1.md:435） */
 "privacy.entry" = "照片如何被使用";
 
-/* 隐私说明正文（copy_v1.1.md:432） */
+/* 隐私说明正文（copy_v1.1.md:436） */
 "privacy.body" = "拼忆会读取你允许访问的照片，用于生成马赛克图，也可以在你同意后把成品保存到相册。照片不会上传，也不会用于分析或广告。";

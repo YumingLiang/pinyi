@@ -23,6 +23,8 @@ struct TestAlbumView: View {
     @State private var progress = TestAlbumProgress()
     @State private var task: Task<Void, Never>?
     @State private var confirmCreate = false
+    @State private var hiddenNote: String?
+    @EnvironmentObject var model: AppModel
     private let writer = TestAlbumWriter()
 
     var body: some View {
@@ -52,6 +54,17 @@ struct TestAlbumView: View {
                 .disabled(task != nil)
                 if task != nil { Button { task?.cancel() } label: { Text(L10nKey.commonCancel) } }
             }
+            // 隐藏照片验收（需求 v0.4 §4.8 验收 8 / 9）：隐藏一张已用在最新作品里的测试照片 → 回到「我的作品」打开该作品、高清重导出
+            Section {
+                Button { hideOneUsedInLatestWork() } label: { Text(verbatim: "隐藏一张测试照片（优先最新作品里用到的）") }
+                    .disabled(task != nil)
+                Button {
+                    let w = writer
+                    Task { hiddenNote = (try? await w.unhideAll()).map { "已取消隐藏 \($0) 张" } ?? "取消隐藏失败" }
+                } label: { Text(verbatim: "取消隐藏全部测试照片") }
+                    .disabled(task != nil)
+                if let hiddenNote { Text(verbatim: hiddenNote).font(.caption) }
+            }
             Section {
                 ProgressView(value: progress.fraction)
                 Text(verbatim: "\(progress.written) / \(progress.total)  \(String(describing: progress.phase))").font(.caption).monospacedDigit()
@@ -64,6 +77,25 @@ struct TestAlbumView: View {
                 start { report in try await w.create(plan: plan, progress: report) }
             } label: { Text(verbatim: "写入") }
             Button(role: .cancel) {} label: { Text(L10nKey.commonCancel) }
+        }
+    }
+
+    private func hideOneUsedInLatestWork() {
+        let w = writer
+        let controller = model.works.controller
+        let latest = model.works.summaries.first?.id
+        Task {
+            var preferred = Set<String>()
+            if let latest, let work = try? await controller.store.load(latest) { preferred = Set(work.layout.uniqueAssetIDs) }
+            do {
+                if let i = try await w.hideOne(preferring: preferred) {
+                    hiddenNote = "已隐藏相簿里第 \(i + 1) 张" + (preferred.isEmpty ? "（没有作品）" : "（最新作品里用到的优先）")
+                } else {
+                    hiddenNote = "相簿里没有可隐藏的照片"
+                }
+            } catch {
+                hiddenNote = "隐藏失败：\(error)"
+            }
         }
     }
 

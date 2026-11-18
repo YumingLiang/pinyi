@@ -20,6 +20,189 @@
 - 测试：`AlbumDeletedDuringGenerateTests` 3 个（确认框弹着时删相簿 → 全部照片出结果、全部照片也不到 200 张不再弹、结果输入是全部照片）；
   `MaterialSummaryNamelessTests` 3 个（没名字 / 部分没名字、有名字照旧、新 key 在 allUsed）。
 
+## feat/works-hidden（追加 6）：#11 隐私修复轮（产品 03:55 Q1–Q4、04:00 / 04:05 修订，copy v1.7a；架构师 11-17 A–D）
+
+- **Q1 / A 取消 4b**：`MissingCellFill.decide` 只剩 `candidate` / `targetColor`（`previewCrop` 删掉）：删除、隐藏、拿不准一律填目标图这一格的平均色，按格计入 `works.missing`。
+  `performApply` / `fallbackTiles` 里裁旧预览的分支删掉，补格、导出都不读旧预览、不读存盘兜底图；`classifyMissing` 的原因只用于统计和文案。
+  不再产生新的 `WorkFallbackImages` 兜底图；还登记着兜底图的作品（v1，以及 v2 时删除格裁的）一律按旧版迁移（`needsFallbackMigration = fallbackFile != nil || v1 有兜底格`）。
+  守护测试 `MissingCellFillTests.testNoPathProducesPreviewCrop`（所有原因 / 有无候选；store 写回、导出补格读图 0 次；源码里没有裁切调用）。
+- **Q2 受限访问占位（04:00 / 04:05 口径）**：不是完整权限时所有作品都占位（不逐个判断、不逐张查）。`WorksState.limitedAccess`（启动、回到前台 `refreshLibraryAccess()`、打开作品时重读）；
+  `WorkSummary.accessRestricted` → `showsPlaceholder`；`WorksState.previewDisplay(for:)` / `decodePreview(for:_:)` 是列表缩略图和查看页读预览的唯一入口，先看权限、受限时解码闭包调用 0 次。
+  查看页显示 `works.limited_placeholder` +「去设置」（`works.limited_note.settings`，打开 `UIApplication.openSettingsURLString`）。受限访问下**不改写作品**（迁移也等完整权限），导出照样填色不写回。
+  回到前台权限变了刷新列表；变成完整权限且查看页开着，重新打开一次（这时才做缺图处理 / 迁移）。`works.limited_note` 不收（v1.7a 暂不使用）。
+- **B**：`write(_ draft:)` 遇到带 `fc` 的布局抛 `WorksError.unsupportedFilledCells`（长期改法在 works-missing-fill：渲染器直接读 fc）。
+- **C**：核对 check-photo-fetch：豁免只有 PhotoFetch.swift 本身、`classifyMissing` 元数据例外（限定文件 + 函数 + 一处标记）、InternalTools（规则 5 保证只进内测包）；没有别的。
+- **D 孤儿文件**：提交点仍是 meta.json。a) `removeIncomplete()`（启动）和 `removeOrphans(for:)`（打开作品前）删掉作品目录里 meta 没登记的 `preview*` / `fallback*` / 临时预览；
+  该作品正在写回时跳过，meta 读不出不删。b) meta 指纹 ≠ 实际布局指纹（`Work.isLayoutOutOfSync`）按待处理，下次打开重新走一遍写回，不读旧文件。
+- **Q3**：不改（放到 5e GoneLog，04:05）。**Q4**：加测试，取消隐藏 / 从「最近删除」恢复的照片补格时能重新被选中（没有黑名单）。
+- **copy v1.8**：`works.missing` 改为「有 {count} 格原来的照片现在用不了，这几格先用相近的颜色填上」（「稍模糊」作废）；计数和只提示一次不变；经 copy_v1.1.md → gen-localizable。
+- 打开后马上导出（没有新变化）：本次查看里还没消失的 `works.missing` / `works.replaced` 提示保留到自动消失，不提前清（QA Q1 门禁）。
+- 测试：新增 `WorksPrivacyRoundTests`（B、D-a、D-b/D-c 被杀窗口无哨兵、Q2 读预览 0 次 + 前台刷新、文案）、`WorksRematchNoBlacklistTests`（Q4）；
+  `WorksFallbackTests` / `WorksFallbackMigrationTests` / `MissingCellFillTests` / `WorksControllerTests` / `WorksRematchTests` 按 Q1 改期望（删除格填色、没有兜底图、受限不迁移）。
+
+## feat/works-hidden（追加 5）：架构师 11-17 最终方案（#11 P0）
+
+- **merge origin/feat/app-layer 57eff11**（含 #19 的 5cd6eb4 和 #21），没有 rebase；CHANGES.md、linux-core.yml 两边都保留。A-21 测试保持与 app-layer 一致，不单独再改。
+- **分类接口**：`enum MissingReason { hidden, deleted, unknown }`；App 侧 `PhotoFetch.classifyMissing(_ ids: Set<String>) -> [String: MissingReason]`
+  （原 `missingPhotoMetadata` 改名、改返回值）：一次 `fetchAssets(withLocalIdentifiers:)` + `includeHiddenAssets`，只读查不查得到和 `isHidden`，
+  不请求图像；注释标明是唯一的 metadata-only 例外。规则：查到且 isHidden → hidden；受限访问且查不到 → unknown；完整权限且查不到 → deleted；其他 → unknown
+  （纯逻辑 `MissingPhotoClassifier.classify(_:access:lookup:)`，`LibraryAccess { full, limited, none }`）。
+- **`PhotoExistenceChecking.availability(among:) -> PhotoAvailability { present, missing: [ID: MissingReason] }`**：原「只回在的 ID」扩成「在的 ID + 缺失原因」，
+  `missingReasons` 去掉；`WorksController` 的缺图处理、导出临时补格都从这里拿原因，统一走 `MissingCellFill.decide`。
+- **去掉清晰度探测**：补格只做一次匹配（`rematch(_:missing:target:)`，没有逐张探测、没有 sharpness 参数）；删 `MissingCellRematching.invalidateLocalResolution`、
+  `LocalResolutionCache.remove`、`coordinator.worksRematcher`。测试：计数缩略图假实现断言补格取图 0 次、分类取图 0 次；源码守护 Works/ 下不出现
+  `LocalResolutionChecker` / `PhotoKitResolutionProbe` / `invalidateLocalResolution`。生成链路的 `GenerationRunner.invalidateLocalResolution` 不属于 Works，未动。
+- **旧作品兜底迁移（`WorkMeta.fallbackVersion = 2`）**：版本 < 2 且存过兜底格的作品，打开 / 导出时旧兜底图整体作废并删文件（不逐格判断），这些格子重新走
+  匹配 → 分类 → decide，旧作品里的删除格也一律填目标色（旧预览可能带隐藏像素）；只经 `FileWorksStore` 串行入口（`applyRematch(..., migrateFallbacks:)`）
+  重画预览 / 缩略图、写版本 2。受限访问也迁移（缺失照片的格子不动）；索引没好时也迁移（不补，只作废旧兜底）。新写的作品都带版本 2。
+  迁移完成前 `WorkSummary.showsPlaceholder`（= `needsFallbackMigration`）为真：列表显示灰底占位、查看页显示转圈，不解码旧预览；迁移前取兜底（`fallbackTiles`）也不用旧兜底图 / 旧预览。
+- **P3**：同一作品重找留白格没找到后记下布局指纹，相册没变化前再打开不重找；`WorksController.libraryDidChange()`（App 的相册变化回调里调）清记录。
+- **`check-photo-fetch.sh`**：规则 2 / 2b 改认 `classifyMissing`；新规则 5（TestAlbumWriter 等 InternalTools 豁免的前提）：InternalTools 下每个文件首尾是
+  `#if INTERNAL_TOOLS` / `#endif`，其类型在别处只能在 `#if INTERNAL_TOOLS` 内引用、AppTests 不引用，project.yml 只在 Debug / Internal 配置定义 INTERNAL_TOOLS、
+  不把 InternalTools 收进别的 target，xcconfig 不定义它。自测 `scripts/tests/check-photo-fetch-internal-test.sh`（16 例），linux-core 加一步。
+- 测试：新增 `WorksFallbackMigrationTests`（7 个：占位规则、打开迁移且哨兵色不出现在预览 / 兜底 / 导出 / 重开导出、迁移前取兜底不用旧图、受限访问迁移、
+  迁移时补格、P3 不重找直到相册变化、Works 源码守护）；`MissingCellFillTests` +1（分类一次元数据查询、取图 0 次）；AppTests 改为 `testClassifyMissingReturnsReasonsOnly`。
+- 纯色格的颜色存在 layout.json 每格的 `"fc"`（meta 不重复存）；`WorkFallbackImages` 只存删除格的裁切。
+- 不在本次：works_rematch 性能指标（随 feat/works-missing-fill）。
+
+## feat/works-hidden（追加 4）：被隐藏的格子不用旧预览裁切（需求 4.8 第 5e 条，架构师 11-17 意见二）
+
+- **缺图兜底分两种**：找不到相近照片时，原照片**确认删除** → 照旧按 4b 用旧预览裁切（进 `WorkFallbackImages`）；**被隐藏或拿不准**
+  （受限访问、查到却不是隐藏的竞态、没给原因）→ 填目标图这一格的平均色（目标图副本按格区域求平均；没有副本时中性灰），
+  按格计入 `works.missing`，**不读旧预览、不进 `WorkFallbackImages`**。
+  - 纯函数 `MissingCellFill.decide(reason:hasCandidate:)` → `.candidate` / `.previewCrop` / `.targetColor`（查看页、导出、5d 结果页、5e 后台队列共用）；
+    `MissingPhotoClassifier.classify`（只有完整权限下「查不到」才算删除）。
+  - 布局：`CellAssignment.fill`（JSON 可选字段 `"fc": [r, g, b]`，只在纯色格写出；旧布局、普通格子 JSON 与指纹不变）。
+  - 预览重画、只改叠加强度的重画、高清导出（`fallbackTiles`）都用 `MissingCellFill.colorTiles` 的同一颜色，两边一致。
+  - 受限访问下导出时临时补的格子同样按原因分（拿不准 → 填色，不再从当前预览裁）。
+- **只读元数据分类**：`PhotoExistenceChecking.missingReasons(among:)`；App 侧 `PhotoFetch.missingPhotoMetadata`——对取不到的 ID
+  调一次 `fetchAssets(withLocalIdentifiers:)`、开 `includeHiddenAssets`，只看查不查得到和 `isHidden`，不请求图像、不返回 `PHAsset`。
+  **全 App 唯一一处 `includeHiddenAssets = true`**。
+- **`check-photo-fetch.sh`**：规则 2 只放行 `App/Adapters/PhotoFetch.swift` 里带 `// photo-fetch: hidden-metadata-only <理由>` 的那一行，全仓只许一处；
+  新规则 2b：这一行必须在 `func missingPhotoMetadata` 函数体内，函数体里不许出现任何取图 API。自测 `scripts/tests/check-photo-fetch-hidden-exception-test.sh`（19 例），linux-core 加一步跑它。
+- `performApply` 写 meta 指纹改用 `WorkFingerprint.of(layout)`（#17 口径）。
+- 测试：新增 `MissingCellFillTests`（10 个：决策表、分类、目标平均色、`fc` 往返、隐藏无候选填色且旧预览读取 0 次 / 输出不含旧预览像素、
+  删除无候选用旧预览裁切、混合 + 导出与预览同色 + 重开一致、纯色格升级、受限访问导出填色、分类只走元数据）；`FakeExistence` 区分 `hide` / `delete`，
+  原先测「旧预览裁切」的用例改用 `delete`，测隐藏的用例改断言为填色。AppTests 加 `testMissingPhotoMetadataOnlyReturnsFlags`。
+- 只改测试：`PerformanceTests.testEndToEndWithVarianceAndCancellation` 断言 `fired` 为真、`thrown` 是 `CancellationError`，延迟只打印
+  （`>= max(1, total/3)` + 只取消一次已在 ce0b932）；`CancellationTests` 同类写法 `completed == 3` 改 `>= 3`。内核未改。
+
+## feat/works-hidden（追加 3）：QA 复核 qa/pr11-works-hidden-report.md
+
+- **H8 提示几秒后自动消失**（copy v1.3「一次性轻提示，几秒后自动消失，不打断操作」）：`works.replaced` / `works.missing` 出现后
+  `WorksController.cellNoticeDuration`（4 秒）自动收起（`dismissCellNotice()`，只清本次格数，不改作品）；关掉查看页 / 换作品作废计时。只出一次的规则不变。
+- **merge origin/feat/app-layer（2b2fb93，含 #17、#18）**，没有 rebase；CHANGES.md 两边都保留。合并后：作品 meta 同时有 #17 的
+  `updatedAt` / `pendingPreviewFile` 和本分支的兜底字段；`missingCount(_:)` 按格计（#18 口径）；只改叠加强度更新原作品时重画预览带上兜底格。
+- **按 ID 取图统一走 PhotoFetch**：`WorksAdapters`（原照片还在不在）、`PhotoKitThumbnails` 都用 `PhotoFetch.visibleImages(withLocalIdentifiers:)` +
+  `VisibleAssetFilter`，代码与 #15（feat/preview-detail-layer）逐字一致（`PhotoFetch.swift` 那段补丁、`VisibleAssetFilter.swift` 原样拷贝），#15 合入时不冲突。
+- **内部工具不再用 `includeHiddenAssets = true`**（守护规则 2，QA 第 3 条）：`TestAlbumWriter.hideOne` 把隐藏的 ID 记在本机 UserDefaults，`unhideAll` 按这些 ID 取。
+- **P3 清晰度缓存**：生成链路不再带 sharpness 后，`AppCoordinator.libraryDidChange` 原来那行只清生成器的缓存（已是空操作）。
+  现在作品补格器自己的缓存也清（`coordinator.worksRematcher`）；补格写回后再清一次，被换掉的原照片（删除 / 隐藏）从「已知合格」里去掉，不会再被当兜底候选
+  （`MissingCellRematching.invalidateLocalResolution(dropping:)`，`LocalResolutionCache.remove(_:)`）。
+- 测试：`WorksRematchTests` +4（替换 / 留白提示自动消失、替换后清缓存、相册变化清补格缓存）；合并后 3 个旧测试按 #11 的假预览格式（第一行是布局摘要）和 #17 的指纹口径改断言。
+- #5 逐张清晰度检查的替代方案只出方案，见 /workspace/pr11-sharpness-plan.md（不在本次实现）。
+
+## feat/works-hidden（追加 2）：找不到替代的格子用旧预览兜底；文案定稿、按格计；受限访问不再反复提示
+
+依据：hd-export-req-v0.2 F 节（`works.missing`「这几格会稍模糊」）；AndyL 17:23 要求。
+
+- **预览兜底**（`Works/WorkFallbackImages.swift`，纯 Swift）：找不到合格相近照片的格子，在重画预览**之前**从旧预览裁出该格区域，
+  按「预览 = (1 − α)·格子 + α·目标」按位置去掉叠加（否则重画 / 导出会叠两次），存进作品目录 `fallback-<随机>.png`（按格拼成一张，无损）。
+  - 布局：`CellAssignment.fallback`（JSON 可选字段 `"fb": true`，只在兜底格写出；旧版布局照常解码，普通格子编码逐字节不变、指纹不变）。
+  - meta：`fallbackFile: String?`（指向兜底图）、`fallbackCellCount: Int`（按格累计，`works.missing`；旧作品缺省 0）；`droppedPhotoCount` 保留（按张，兼容）。
+  - 预览重画（`WorkImageEncoding.writePreview(..., fallbacks:)`）与高清导出（`ExportRequest.cellFallbacks` → `LiveMosaicExporter`）都把小图
+    `.high` 插值放大填满该格（不用最近邻），兜底格不再按 ID 取图；导出计入「糊格子」。
+  - 已经兜底、这次仍没补上的格子直接搬旧兜底图（不从新预览二次裁，不会一代代变糊）；**升级成照片**的格子丢掉兜底图，全部升级后兜底图文件删除。
+  - **没有旧预览**（读不出 / 尺寸不对）的格子才真的留白。
+  - 原子写回顺序：兜底图、新预览先写 `.tmp-*` 再 rename 成新文件名 → meta.json → layout.json → 删旧预览 / 旧兜底图；任一步失败都不留孤儿文件；
+    取消（关掉查看页）不写回。
+- **文案定稿**（copy_v1.1.md → gen-localizable.py）：`works.replaced`「有 {count} 格原来的照片现在用不了，已换成相近的照片」、
+  `works.missing`「有 {count} 格原来的照片现在用不了，这几格会稍模糊」，两者都**按格**计（`works.missing` 原来按张）。仓库只有 zh-Hans。
+- **受限访问 / 索引未就绪 / 写回失败**：作品没改写，**不提示**（每次打开都不出）；没处理的缺失数记在 meta.missingCount，只在性能页显示（`pendingMissing=`）。
+  导出时这些格子临时从当前预览裁切放大（`WorksStore.fallbackTiles(transientCells:)`，不存盘、布局不变，自动保存查重照样命中）。
+- **5c 已定为不处理**（AndyL）：目标图副本和叠加层保持不变。
+- 协议改动：`WorkImageEncoding` 加 `readImage(at:)`、`writeFallback(_:into:)`，`writePreview` 加 `fallbacks:`；`WorkExportHandling.exportWork` 加 `fallbacks:`；
+  `AppCoordinator.export(layout:target:fallbacks:purpose:)`（`fallbacks` 默认空，结果页导出不变）。
+- 性能页 manifest 行：`replaced= fallback= dropped= pendingMissing=`。
+- 测试：新增 `WorksFallbackTests` 11 个（文案与按格计数、兜底图生成并持久、重导出（含重开后）用兜底图、兜底保留 / 搬移 / 升级、没有旧预览才留白、
+  写兜底图失败作品不变、按位置去叠加、拼图往返、旧版 layout / meta 解码、旧版留白作品安静打开），`WorksCoordinatorIntegrationTests` +1（兜底格经协调器交给导出器）；
+  已有用例按兜底 / 按格 / 受限访问不提示更新。
+
+## feat/works-hidden（追加）：4b 缺图补格——换成本机、可见、清晰的相近照片
+
+依据：hd-export-req-v0.2 F2 第 2 条 / F5「N 格已替换」；quick-start-req-v0.4 §4.8 5a / 5b、验收 8 / 9；协调人 17:00 要求（白格不接受）。
+
+- **`IndexWorkRematcher`**（`Works/WorkCellRematcher.swift`，实现 `MissingCellRematching`）：
+  - 目标特征：作品里存了 `layout.json`（每格 ID + 裁剪、`targetSize`、`targetCrop`）和 `target.jpg`（目标图副本）；没存每格特征和索引行号。
+    有副本时按 `targetCrop` 换算到副本尺寸取该格区域，用生成同一个 `FeatureExtractor` 提特征；没有副本时取相邻 8 格（仍在索引里）照片特征的平均。
+  - 候选：`AppCoordinator.worksRematchSnapshot()`（`index.snapshot(for: .allPhotos)`），去掉缺失照片和清晰度缓存里已知不合格的。
+  - 选法：top‑16（`MosaicPipeline.refillCandidateCount`）里按「不在作品里也不在相邻格」→「不在相邻格」→「最近」选，逐格选（补上的格也算邻居）；
+    只探测选中的：先查可见（不含隐藏照片，索引里可能还有后来被隐藏的），再 `LocalResolutionChecker` ≥ 256 px；不合格剔除重选，最多 3 轮；
+    最后兜底只在本次已确认可见且清晰的照片里取最近（同 `refill`，忽略单张上限）。仍没有才清成空格子（写回时用旧预览兜底，见「追加 2」）。
+  - 索引暂时不可用（还没加载完）：抛 `WorkRematchError.indexUnavailable`，作品不动，下次打开再补（不当成留白）。
+- **写回**：`FileWorksStore.applyRematch`（原 `dropMissingPhotos` 的原子写回顺序不变；磁盘上的布局已不是计算时那份就不写）。
+  meta 新增 `replacedCellCount`（累计格数，`works.replaced`），`droppedPhotoCount` 改为「至少一格留白的原照片数」（`works.missing`）。
+- **取消**：补格在打开作品的 Task 里跑，关掉查看页即取消；取消时不写回任何东西（探测结果也不入缓存），下次打开重做。
+- 目标图副本只读，不改、不删；叠加层不动（5c 已定为不处理）。受限访问不改写、`droppedPhotoCount` 保留。
+- 文案：新增 `works.replaced`，只改 copy_v1.1.md 再生成（定稿见「追加 2」）。
+- App：`AppModel` 注入补格器（复用生成用的 `GenerationRunner.pipeline` 与 `sharpness` 缓存）；查看页显示 `works.replaced`；性能页显示最近一次补格附注与 `replaced=`。
+- **提示只出一次（QA H8 / H8b）**：`works.replaced` / `works.missing` 只在本次处理真的发生了新替换 / 新留白时出一次
+  （`OpenedWork.replacedCount` / `missingCount` 是本次的数，不是累计数）；同一作品第二次打开、再导出、杀掉 App 重开都不再出。
+  meta.missingCount 只记「还没处理的」（受限访问等情况见「追加 2」：不提示）。
+- **留白格之后再试**：有补格器、作品有留白记录（`droppedPhotoCount > 0`）时，每次打开把留白格一起重新找；补上了写回并按 `works.replaced` 出一次，
+  仍没有就不写回、不提示。`droppedPhotoCount` 是历史累计，不回退。
+- 测试：`WorksRematchTests`（13 个，含 H8：替换 / 留白各自的第二次打开、再导出、重开不再提示；留白格后来升级成照片提示一次）。
+
+## feat/works-hidden：「我的作品」里后来被隐藏的照片按缺图处理 + 重画预览；manifest 加两个可选字段
+
+依据：photo-picker-v0.1 §5.1「我的作品」、§6.1（最后两条）、§6.2；quick-start-req-v0.4 §4.8 5a / 5b、验收 8 / 9。
+
+- **同一条缺图路径**：按 ID 取图显式 `includeHiddenAssets = false`（`PhotoKitExistenceChecker` 与 `PhotoKitThumbnails.assets(_:)` 各一行，
+  注释「合入 picker-t3 后由 PhotoFetch 取代」），后来被隐藏的照片和已删除的一样「取不到」。
+- **`WorksController.reconcileMissing`**（打开作品、查看页导出前都走）：
+  - 没有缺失：什么都不动，不重画预览；
+  - 有缺失且完整相册权限：用到这些照片的格子清成缺图格（`MosaicLayout.clearingAssets`，空串 = 没有分到照片），
+    `FileWorksStore.dropMissingPhotos` 重画预览并写回；再导出用处理后的布局，隐藏照片不会再被取；
+  - 受限访问 / 无权限（`PhotoExistenceChecking.canConfirmMissing() == false`）或写回失败：只计数提示，不改作品（防止受限访问下把整张作品清空）。
+  - 照片恢复 / 取消隐藏后格子不改回去（5b），`works.missing` 张数也不减（累计在 `droppedPhotoCount`）。
+- **写回的原子性**（不整目录替换）：新预览先写 `.tmp-*` 再 rename 成新文件名 `preview-<随机>.jpg` → meta.json 原子替换（新预览、新指纹、累计张数）
+  → layout.json 原子替换 → 删旧预览。被杀在任一步都不会出现「新布局 + 旧预览」；最坏是下次打开再处理一遍。指纹随新布局更新，再导出后自动保存仍查重命中。
+  同一作品的写回串行（打开和导出前同时触发只处理一次）。
+- **列表 / 查看页刷新**：列表缩略图 `.task(id: summary.previewURL)`，查看页预览在 `previewURL` 变化时重新解码。
+- **manifest（meta.json）新字段**：`targetLocalLongSide: Int?`、`overlayDegradeFactor: Double?`（旧作品缺省 nil，nil 不写出；改写作品时保留），
+  另加 `droppedPhotoCount: Int`（缺省 0）。只在内部性能页「我的作品 manifest」显示（最近 10 个，只有作品 id 前 8 位，不含照片 ID）。
+  降级系数不在这里算（OverlayDegrade 另一条线）。
+- **内部工具 TestAlbumWriter**：「隐藏一张测试照片（优先最新作品里用到的）」（`PHAssetChangeRequest.isHidden = true`，只动「马赛克测试」相簿）、
+  「取消隐藏全部测试照片」。
+- 4b（相近照片补格）与预览兜底见上面两节「追加」。
+- 5c（目标图本身被隐藏 / 删除时去掉叠加层）：已定为不处理。
+- 测试：`WorksHiddenPhotoTests`（11 个），`WorksControllerTests` 缺失用例按新行为更新 + 新增 1 个。
+
+## fix/picker-unavailable-cancel（追加）：QA 复核 pr22-picker-cancel-report.md + 产品 03:16 / 03:25 口径
+
+- **merge origin/feat/app-layer 57eff11**（含 #19、#21），CHANGES.md 两边都保留，没有 rebase。
+- **P1-2 原目标图恢复**：作品页 /「再调一调」进来的「再拼一张」开始时记下 `target` 和代次（`targetBeforeFreshQuickStart`）；选图提示「取消」回发起页时原样放回。
+  中途选过能用的照片、确认页返回、再选用不了的再取消，「再调一调」页仍是原目标图、主按钮仍是「完成」。开始生成新图 / 回首页时清掉。
+- **P1-3 发起页**：从作品查看页点「再拼一张」一律记 `.work(id:)`（含「再调一调」途中）；取消 → 回作品查看页，下面的主流程恢复成「再调一调」设置页（结果、「完成」、「已存」都在）。
+  没有作品 ID 的旧调用在「再调一调」途中仍按 `.adjust`。
+- **P3 / 产品 03:25 第 3 条 重开的层级**：`WorkReopenRequest.routes` = 作品列表 → 查看页；平台层先推 `WorksListView(reopenWorkID:)`，列表再自动推查看页（只推一次）。
+  从查看页返回到作品列表，和平时一样；再返回才回主流程（发起前那一页）。
+- **P3 已删作品不重开**：`CurrentResultSaving.hasWork(_:)`（`WorksController`：本次运行里删掉的作品返回 false）；作品在取消前被删了就不发 `reopenWorkRequest`，停在恢复好的主流程。
+- 测试：`PickerUnavailableCancelOriginTests` 按新口径改 2 个（「再调一调」途中从作品页发起 → `.work(id:)`、回查看页），新增 4 个（没有作品 ID 的旧调用回设置页、P1-2 原目标图和代次恢复、
+  开始生成后清掉快照、已删作品不重开）；新增 `WorkReopenRoutesTests` 2 个（routes、平台层先推列表再推查看页的源码守护）。
+
+## fix/picker-unavailable-cancel：选图提示「取消」回到发起「再拼一张」的那一页（P2，copy v1.6）
+
+- 问题：`picker.unavailable` 弹窗点「取消」，从作品查看页 /「再调一调」设置页发起的「再拼一张」停在选图页。
+- 修法：协调器记下这次「再拼一张」的发起页 `QuickStartOrigin`（`.preview` / `.work(id:)` / `.adjust`），「取消」（含系统收起弹窗）按它回去：
+  - 预览页 → 原预览页（不变，`quickAgainCancelled` 释放新目标图、恢复设置）；
+  - 作品查看页 → 主流程退回进来前那一页（停在结果页的回原预览页；没有结果的回原来那一步，目标图不动），`AppState.reopenWorkRequest`（作品 ID + token）让平台层重新打开那张作品的查看页（`MainFlowView.navigationDestination`）；
+  - 「再调一调」设置页（验收 7a）→ 回那个设置页，结果保留，「完成」照常回原结果。
+  - 原结果、作品、「已存」状态都不动；开始生成新图后发起页记录清掉。
+- `MainFlow.cancelFreshQuickStart()`：fresh quick start 在选图页放弃时恢复进来前的那一步和目标图状态。
+- `startNewFromWorkTapped(workID:)`：作品查看页传入作品 ID（默认 nil 兼容旧调用）。
+- 测试：`PickerUnavailableCancelOriginTests` +8（预览页已存 / 没存不保存、作品查看页（主流程在结果页 / 没有结果）、「再调一调」没存 / 已存、系统收起同取消、开始生成后清掉发起页）。
+
 ## feat/album-multiselect：相簿多选 + 记住来源（quick-start-req v1.0 §1a、§2f，验收 12；photo-picker-v0.1 §6.4）
 
 **依赖 #18（feat/start-new）和 #17（已在 app-layer 78ce569）**：本分支已 merge `origin/feat/app-layer` 和 `origin/feat/start-new`（都是 merge，没有 rebase）。

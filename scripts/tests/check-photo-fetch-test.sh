@@ -54,7 +54,7 @@ run_case "同一行标记 + 理由" 0 $F 'let r = PhotoFetch.allImages(order: .n
 run_case "注释里提到原始 API" 0 $F $'/// 以前用 `PhotoFetch.images(in:)`\n// PhotoFetch.allImages 已不用'
 run_case "#15 isPickedAssetAvailable" 0 $F 'guard PhotoFetch.isPickedAssetAvailable(id) else { return }'
 run_case "PhotoFetch.swift 自己" 0 App/Adapters/PhotoFetch.swift $'enum PhotoFetch { static func x() { _ = PhotoFetch.allImages(order: .x) } }'
-run_case "InternalTools 不查规则 4" 0 App/InternalTools/Tool.swift 'let r = PhotoFetch.allImages(order: .newestFirst)'
+run_case "InternalTools 不查规则 4" 0 App/InternalTools/Tool.swift $'#if INTERNAL_TOOLS\nlet r = PhotoFetch.allImages(order: .newestFirst)\n#endif'
 run_case "前缀相同的别的名字" 0 $F 'let r = PhotoFetch.imagesCount + PhotoFetch.allImagesTotal'
 
 # ---- #19 follow-up：QA 攻击 A1–A12（qa/tests/pr19/check-photo-fetch-attack.sh），必须报红 ----

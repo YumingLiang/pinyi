@@ -3,6 +3,11 @@
 CI：`.github/workflows/linux-core.yml` 的 job `perf-gate`（显示名 **Generation perf regression**）。
 ubuntu-latest + `swift:6.3.3-noble`（钉 digest），`swift test -c release --filter PerfGateTests`，**阻断**，无 paths 过滤。
 
+触发：每个 PR（pull_request，测 PR 与目标分支的 merge ref）+ push 到 `main` / `feat/app-layer`（测合入后的真实树；几个 PR 先后合入时，
+各自 PR 上的结果不等于合入后的结果，尤其是 preview 这类随测试二进制换档的指标）。整个 linux-core 都在 push 上跑，job 名不变，
+required check 不受影响。并发组按 ref（`linux-core-refs/heads/feat/app-layer`），连续 push 时旧的 run 会被取消、只留最新一次。
+push 事件上门禁不依赖 base（只对照仓库里的 `perf/baseline-linux.json`），行为与 PR 上相同。
+
 > ⚠️ Linux 上的毫秒数只用来防回归，不能当 iPhone 11 性能退出线（中档 ≤ 10 秒等）的证据。
 
 ## 判定规则

@@ -62,7 +62,7 @@ final class WorksAtomicUpdateTests: XCTestCase {
         XCTAssertEqual(list.first?.meta.overlayAlpha, 0.15)
         let work = try await store.load(w.id)
         XCTAssertEqual(work.layout.params.overlayAlpha, 0.15)
-        let preview = try String(contentsOf: w.workDir.appendingPathComponent("preview.jpg"), encoding: .utf8)
+        let preview = String(decoding: try FakeWorkImages.previewHeader(w.workDir.appendingPathComponent("preview.jpg")), as: UTF8.self)   // #11 的假预览第一行之后是像素
         XCTAssertTrue(preview.hasPrefix("PREVIEW:3x1:"), "还是原来的预览：\(preview)")
 
         await store.removeIncomplete()

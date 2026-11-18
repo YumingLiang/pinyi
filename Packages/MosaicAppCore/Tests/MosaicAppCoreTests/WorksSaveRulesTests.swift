@@ -306,7 +306,7 @@ final class WorksSaveRulesTests: XCTestCase {
         XCTAssertEqual(list.map(\.id), [a.summary.id])
         XCTAssertEqual(list.first?.meta.overlayAlpha, 0.10)
         XCTAssertEqual(list.first?.previewURL, a.summary.previewURL)
-        XCTAssertEqual(try Data(contentsOf: a.summary.previewURL), FakeWorkImages.previewBytes(sampleLayout(["a", "b", "c"])), "预览图没被动")
+        XCTAssertEqual(try FakeWorkImages.previewHeader(a.summary.previewURL), FakeWorkImages.previewBytes(sampleLayout(["a", "b", "c"])), "预览图没被动")
         let layout = try await store.load(a.summary.id).layout
         XCTAssertEqual(layout.params.overlayAlpha, 0.10)
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix(".") }

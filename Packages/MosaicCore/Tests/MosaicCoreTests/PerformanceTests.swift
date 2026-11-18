@@ -139,12 +139,12 @@ final class PerformanceTests: XCTestCase {
             }
         } catch { thrown = error }
         let cancelledNs = cancelledAt.value
-        if cancelledNs == 0 {
-            XCTFail("没有取消")
-            return
-        }
+        let fired = cancelledNs != 0
+        XCTAssertTrue(fired, "匹配阶段过了 1/3 应当触发取消")
+        XCTAssertTrue(thrown is CancellationError, "\(String(describing: thrown))")
+        guard fired else { return }
+        // 延迟只打印、不断言（墙钟受机器负载影响）
         let lat = Double(DispatchTime.now().uptimeNanoseconds - cancelledNs) / 1e6
-        XCTAssertTrue(thrown is CancellationError)
         print("[bench] cancel latency mid-matching \(cols)x\(rows) × \(library): \(String(format: "%.2f", lat)) ms")
     }
 }

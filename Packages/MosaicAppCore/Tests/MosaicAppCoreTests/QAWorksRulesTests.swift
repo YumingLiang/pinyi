@@ -135,11 +135,11 @@ final class QAWorksRulesTests: XCTestCase {
         }
     }
 
-    /// B7（22:45 已改）+ copy v1.3：works.missing 精确等于「有 {count} 格原来的照片现在用不了，这几格会稍模糊」（strings 里 {count} 为 %1$@）。
+    /// B7（22:45 已改）+ copy v1.8（16:10，原 v1.3「这几格会稍模糊」作废）：works.missing 精确等于「有 {count} 格原来的照片现在用不了，这几格先用相近的颜色填上」（strings 里 {count} 为 %1$@）。
     /// 全栈同步前保持红。
     func testCopy_WorksMissingMatchesCopyV13() throws {
         let v = try XCTUnwrap(try Self.stringsValue("works.missing"))
-        XCTAssertEqual(v, "有 %1$@ 格原来的照片现在用不了，这几格会稍模糊")
+        XCTAssertEqual(v, "有 %1$@ 格原来的照片现在用不了，这几格先用相近的颜色填上")   // copy v1.8（16:10）
         XCTAssertFalse(v.contains("删掉") || v.contains("隐藏"))
     }
 
@@ -320,7 +320,7 @@ final class QAWorksRulesTests: XCTestCase {
     final class AlphaImages: WorkImageEncoding, Sendable {
         let previews = Locked(0)
         func writePreview(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, maxLongEdge: Int,
-                          into directory: URL) async throws -> WorkImageFile {
+                          fallbacks: [Int: PixelBuffer], into directory: URL) async throws -> WorkImageFile {
             previews.update { $0 += 1 }
             try Data("PREVIEW:alpha=\(overlayAlpha):\(layout.cellAssignments.map(\.localIdentifier).joined(separator: ","))".utf8)
                 .write(to: directory.appendingPathComponent("preview.jpg"))
@@ -332,6 +332,11 @@ final class QAWorksRulesTests: XCTestCase {
         }
         func readTarget(at url: URL) async throws -> PixelBuffer {
             try PixelBuffer(width: 2, height: 2, bytes: [UInt8](repeating: 128, count: 16))
+        }
+        func readImage(at url: URL) async throws -> PixelBuffer { throw CocoaError(.fileReadCorruptFile) }
+        func writeFallback(_ image: PixelBuffer, into directory: URL) async throws -> WorkImageFile {
+            try Data("FALLBACK".utf8).write(to: directory.appendingPathComponent("fallback.png"))
+            return WorkImageFile(fileName: "fallback.png", pixelWidth: image.width, pixelHeight: image.height)
         }
     }
 

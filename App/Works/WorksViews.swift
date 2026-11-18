@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import MosaicCore
 import MosaicAppCore
 
@@ -54,6 +55,10 @@ struct SaveToWorksButton: View {
 /// `deleteConfirmed(id)`，不在按钮里现读 `pendingDelete`（弹窗收起时它会先被 `deleteCancelled()` 清掉）。
 struct WorksListView: View {
     @EnvironmentObject var works: WorksModel
+    /// 选图提示「取消」回作品查看页时由主流程带进来：列表出现后自动再推这张作品的查看页（只推一次）。
+    var reopenWorkID: WorkID? = nil
+    @State private var reopenedDetailShown = false
+    @State private var didReopen = false
     /// 长按「删除」选中的作品（列表自己的确认框用）。
     @State private var deleteCandidate: WorkID?
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
@@ -90,6 +95,14 @@ struct WorksListView: View {
         }
         .navigationTitle(Text(L10nKey.worksNavTitle))
         .task { await works.controller.reload() }
+        .navigationDestination(isPresented: $reopenedDetailShown) {
+            if let id = reopenWorkID { WorkDetailView(id: id) }
+        }
+        .onAppear {
+            guard reopenWorkID != nil, !didReopen else { return }
+            didReopen = true
+            reopenedDetailShown = true
+        }
         // 列表自己的确认框只看 deleteCandidate（查看页的确认框看 pendingDelete == 它的 id，两边不互相触发）
         .confirmationDialog(Text(L10nKey.worksDeleteConfirm),
                             isPresented: Binding(get: { deleteCandidate != nil },
@@ -121,8 +134,14 @@ struct WorkCell: View {
             Text(verbatim: WorksModel.dateFormatter.string(from: summary.createdAt))
                 .font(.caption).foregroundStyle(.secondary)
         }
-        // 按 summary 整体（含 meta 的叠加强度 / updatedAt）重新解码：只改叠加强度更新原作品时 id 和预览文件名都不变
-        .task(id: summary) { image = works.thumbnail(for: summary) }
+        // 按 summary 整体重新解码：只改叠加强度更新原作品时 id 和预览文件名都不变；缺图处理重画预览后文件名会变，同样刷新。
+        // 权限变了（回到前台重读）也刷新：受限时 thumbnail 返回 nil、不读文件
+        .task(id: ThumbKey(summary: summary, limited: works.state.limitedAccess)) { image = works.thumbnail(for: summary) }
+    }
+
+    private struct ThumbKey: Hashable {
+        let summary: WorkSummary
+        let limited: Bool
     }
 }
 
@@ -132,11 +151,22 @@ struct WorkDetailView: View {
     @EnvironmentObject var works: WorksModel
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     let id: WorkID
 
     var body: some View {
         VStack(spacing: 12) {
-            if let img = works.openedPreview, let opened = works.state.opened, opened.id == id {
+            if works.state.opened?.id == id, works.state.openedPreviewDisplay == .limitedAccess {
+                // 受限访问（v1.7a）：不读保存的预览，显示占位说明 +「去设置」
+                Spacer()
+                Image(systemName: "photo.on.rectangle.angled").font(.largeTitle).foregroundStyle(.secondary)
+                Text(L10nKey.worksLimitedPlaceholder).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                } label: { Text(L10nKey.worksLimitedNoteSettings) }
+                    .buttonStyle(.bordered)
+                Spacer()
+            } else if let img = works.openedPreview, let opened = works.state.opened, opened.id == id {
                 ZoomableContainer(aspectRatio: Double(img.width) / Double(max(1, img.height)),
                                   columns: opened.summary.meta.columns, rows: opened.summary.meta.rows,
                                   zoom: $works.detailZoom) {
@@ -147,6 +177,9 @@ struct WorkDetailView: View {
                 Spacer()
                 ProgressView()
                 Spacer()
+            }
+            if let line = works.state.replacedLine {   // 4b：已换成相近照片的格数
+                Text(line).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             if let line = works.state.missingLine {
                 Text(line).font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center)
@@ -160,7 +193,7 @@ struct WorkDetailView: View {
             .controlSize(.large)
             .disabled(works.state.opened?.id != id || model.exportPhase.isBusy)
             // quick-start v1.0 §2a：查看页也能「再拼一张」（第三级文字按钮）。退回主流程后同预览页的流程和未保存提示。
-            Button { model.startNewFromWork() } label: {
+            Button { model.startNewFromWork(id: id) } label: {
                 Label { Text(L10nKey.quickAgain) } icon: { Image(systemName: "plus") }
             }
             .buttonStyle(.borderless)

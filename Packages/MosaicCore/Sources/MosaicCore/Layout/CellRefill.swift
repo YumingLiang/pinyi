@@ -29,7 +29,9 @@ extension MosaicPipeline {
         guard mask.setCount > 0 else { throw MosaicError.noCandidates }
         let a = generation.assignment
         let cellCount = a.tiles.count
-        let todo = Array(Set(cells.filter { $0 >= 0 && $0 < cellCount })).sorted()
+        // 形状模式：掩码外的格子（tiles = -1）不补（设计 shape-mosaic-v0.1 §5 CellRefill）。
+        let active = generation.activeCells
+        let todo = Array(Set(cells.filter { $0 >= 0 && $0 < cellCount && (active?.isActive($0) ?? true) })).sorted()
         guard !todo.isEmpty else { return generation }
 
         let all = try sampler.cellFeatures(of: target, layout: generation.layout)
@@ -57,9 +59,9 @@ extension MosaicPipeline {
 
         var stats = a.statistics
         var levelCounts = Array(repeating: 0, count: FallbackLevel.allCases.count)
-        for l in levels { levelCounts[l.rawValue] += 1 }
+        for (cell, l) in levels.enumerated() where active?.isActive(cell) ?? true { levelCounts[l.rawValue] += 1 }
         var uses: [Int: Int] = [:]
-        for t in tiles { uses[t, default: 0] += 1 }
+        for t in tiles where t >= 0 { uses[t, default: 0] += 1 }
         stats.levelCounts = levelCounts
         stats.distinctTilesUsed = uses.count
         stats.maxUses = uses.values.max() ?? 0
@@ -69,7 +71,7 @@ extension MosaicPipeline {
         let assignment = MosaicAssignment(grid: a.grid, tiles: tiles, distances: distances, levels: levels,
                                           statistics: stats, seed: a.seed)
         return MosaicGeneration(layout: generation.layout, assignment: assignment, supply: snapshot.supply,
-                                density: generation.density)
+                                density: generation.density, activeCells: generation.activeCells)
     }
 
     /// `refill` 的 Swift 并发入口：Task 取消即停，抛 `CancellationError`。
