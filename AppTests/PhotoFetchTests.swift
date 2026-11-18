@@ -94,4 +94,16 @@ final class PhotoFetchTests: XCTestCase {
         XCTAssertTrue(fetch.contains("!visibleImages(withLocalIdentifiers: [id]).isEmpty"),
                       "isPickedAssetAvailable 应走 visibleImages，不单独 images + isHidden")
     }
+
+    /// 缺图分类（唯一的 includeHiddenAssets 例外，只读元数据）：空输入不查；不存在的 ID 不会被当成隐藏
+    /// （完整权限 → deleted，受限 / 未授权 → unknown）。
+    func testClassifyMissingReturnsReasonsOnly() {
+        XCTAssertEqual(PhotoFetch.classifyMissing([]), [:])
+        let id = "00000000-0000-0000-0000-000000000000/L0/001"
+        let r: [String: MissingReason] = PhotoFetch.classifyMissing([id])
+        XCTAssertEqual(Set(r.keys), [id])
+        XCTAssertNotEqual(r[id], .hidden, "查不到的不是隐藏")
+        let expected: MissingReason = PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized ? .deleted : .unknown
+        XCTAssertEqual(r[id], expected)
+    }
 }

@@ -39,8 +39,14 @@ jobs:
       - name: Hidden-photo guard (all fetchAssets / fetchKeyAssets via PhotoFetch)
         run: ./scripts/check-photo-fetch.sh
 
+      - name: Hidden-photo guard self-test (rule 2 single exception)
+        run: bash scripts/tests/check-photo-fetch-hidden-exception-test.sh
+
       - name: Hidden-photo guard self-test (rule 4 positive / negative cases)
         run: bash scripts/tests/check-photo-fetch-test.sh
+
+      - name: Hidden-photo guard self-test (rule 5 InternalTools only in Internal builds)
+        run: bash scripts/tests/check-photo-fetch-internal-test.sh
 
       - name: Localizable.strings 与文案表一致
         run: |

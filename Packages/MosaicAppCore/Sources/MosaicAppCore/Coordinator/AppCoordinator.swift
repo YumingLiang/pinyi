@@ -602,9 +602,10 @@ public final class AppCoordinator {
     }
 
     /// 从任意布局导出（「我的作品」查看页用：给保存的布局 + 目标图副本）。档位用 `state.exportTier`。
-    public func export(layout: MosaicLayout, target: PixelBuffer?, purpose: ExportPurpose) async {
+    /// `fallbacks`：作品兜底格（`ExportRequest.cellFallbacks`）。
+    public func export(layout: MosaicLayout, target: PixelBuffer?, fallbacks: [Int: PixelBuffer] = [:], purpose: ExportPurpose) async {
         guard !state.export.isBusy, !state.isGenerating, layout.isValid else { return }
-        exportSource = ExportSource(layout: layout, target: target)
+        exportSource = ExportSource(layout: layout, target: target, fallbacks: fallbacks)
         switch purpose {
         case .save: await startSave()
         case .share: startShare()
@@ -672,7 +673,7 @@ public final class AppCoordinator {
         let onSucceeded = dependencies.onExportSucceeded
         let request = ExportRequest(layout: source.layout, target: source.target,
                                     overlayAlpha: source.target == nil ? 0 : source.layout.params.overlayAlpha,
-                                    tier: state.exportTier)
+                                    tier: state.exportTier, cellFallbacks: source.fallbacks)
         if let free = exporter.availableBytes(), free < exporter.estimatedBytes(for: request) {
             state.export = .failed(.diskFull)
             return
@@ -805,6 +806,7 @@ public final class AppCoordinator {
 struct ExportSource: Sendable {
     var layout: MosaicLayout
     var target: PixelBuffer?
+    var fallbacks: [Int: PixelBuffer] = [:]
 }
 
 extension GenerationMachine.Phase {

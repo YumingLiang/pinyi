@@ -24,6 +24,24 @@ final class WorksCoordinatorIntegrationTests: XCTestCase {
         h.coordinator.stop()
     }
 
+    /// 从作品再导出：兜底格的小图经协调器原样交给导出器（`ExportRequest.cellFallbacks`）；结果页导出不带。
+    func testWorkExportPassesFallbacksToExporter() async throws {
+        let h = CoordinatorHarness(assets: 300)
+        try await generated(h)
+        let c = h.coordinator
+        let layout = sampleFallbackLayout(["a", "", "c"])
+        let tile = try PixelBuffer.solid(width: 4, height: 4, red: 1, green: 2, blue: 3)
+        await c.export(layout: layout, target: nil, fallbacks: [1: tile], purpose: .share)
+        await waitFor(c, "导出完成") { if case .sharing = $0.export { return true } else { return false } }
+        XCTAssertEqual(h.exporter.state.get().fallbackCells.last, [1])
+        c.shareFinished()
+        await c.export(layout: layout, target: nil, purpose: .share)
+        await waitFor(c, "导出完成") { if case .sharing = $0.export { return true } else { return false } }
+        XCTAssertEqual(h.exporter.state.get().fallbackCells.last, [], "不给就不带")
+        c.shareFinished()
+        c.stop()
+    }
+
     func testResultContextAndReshuffleDoesNotSave() async throws {
         let h = CoordinatorHarness(assets: 300)
         let c = h.coordinator

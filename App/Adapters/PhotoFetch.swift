@@ -8,6 +8,7 @@ import MosaicAppCore
 /// - 所有 `PHAsset.fetchAssets(with:)` / `fetchAssets(in:)` / `fetchAssets(withLocalIdentifiers:)` 以及
 ///   `fetchKeyAssets(in:)` 都必须用 `PhotoFetch.options(...)` 生成的选项，或直接调用下面的包装；**不允许 `options: nil`**。
 /// - `includeHiddenAssets = false` 显式写死，不依赖系统默认值；调用方拿到选项后不得改它。
+///   唯一例外：`classifyMissing`（只读元数据分隐藏 / 删除，不请求图像、不返回 PHAsset；脚本规则 2 / 2b 精确放行）。
 /// - `includeAssetSourceTypes` 按场景显式传（见 `Sources`），不留默认。
 /// - 调用方只可以再改 `fetchLimit`（例如判断空相簿用 1）。
 ///
@@ -100,6 +101,33 @@ enum PhotoFetch {
     /// 走 `visibleImages`（#15 的 isHidden 双保险），不单独再滤一遍。
     static func isPickedAssetAvailable(_ id: String) -> Bool {
         !visibleImages(withLocalIdentifiers: [id]).isEmpty
+    }
+
+    /// 缺图分类（架构师 11-17 最终方案）：取不到的原照片是 hidden / deleted / unknown。
+    ///
+    /// ⚠️ **这是全 App 唯一一处 metadata-only 例外 `includeHiddenAssets = true`**（`scripts/check-photo-fetch.sh` 规则 2 只对这一行放行）：
+    /// - 一次 `fetchAssets(withLocalIdentifiers:)`，只读「查不查得到」和 `isHidden`；**不请求任何图像**
+    ///   （不碰 PHImageManager / 缩略图 / 资源），结果也不返回 `PHAsset`，隐藏照片不可能经这里流到任何界面或匹配；
+    /// - 规则（`MissingPhotoClassifier`）：查得到且 isHidden → hidden；受限访问且查不到 → unknown；
+    ///   完整权限且查不到 → deleted；其他 → unknown。
+    /// 「不请求图像」的保证：规则 2b 要求放行行在本函数体内、且函数体里不出现任何取图 API（脚本自测有正反例）；
+    /// 调用链上的计数测试在 MosaicAppCore（`MissingCellFillTests`：分类时取图 0 次）。
+    static func classifyMissing(_ ids: Set<String>) -> [String: MissingReason] {
+        let access: LibraryAccess
+        switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
+        case .authorized: access = .full
+        case .limited: access = .limited
+        default: access = .none
+        }
+        return MissingPhotoClassifier.classify(ids, access: access) { identifiers in
+            let o = PHFetchOptions()
+            o.includeHiddenAssets = true   // photo-fetch: hidden-metadata-only 只读元数据分类隐藏/删除，不请求图像（唯一例外）
+            o.includeAssetSourceTypes = Sources.any
+            let r = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: o)
+            var found: [String: Bool] = [:]
+            r.enumerateObjects { a, _, _ in found[a.localIdentifier] = a.isHidden }
+            return found
+        }
     }
 
     /// 集合的代表照片（封面）。选项同样走 `options`（写死 `includeHiddenAssets = false`），不允许 `options: nil`。

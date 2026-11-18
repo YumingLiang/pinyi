@@ -52,10 +52,21 @@ final class AppModel: ObservableObject {
         let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
                                                              onExportSucceeded: relay.handler))
         self.coordinator = coordinator
+        // 4b 补格：索引快照 + 生成用的同一套匹配器（一次匹配，不做逐张清晰度探测；架构师 11-17），零网络
+        let runner = coordinator.dependencies.generator as? GenerationRunner
+        let existence = PhotoKitExistenceChecker()
+        let rematcher = IndexWorkRematcher(
+            snapshot: { [weak coordinator] in
+                guard let coordinator else { throw WorkRematchError.indexUnavailable }
+                return try await coordinator.worksRematchSnapshot()
+            },
+            existence: existence,
+            pipeline: runner?.pipeline ?? MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())))
         let worksController = WorksController(store: FileWorksStore(directory: WorksLocation.directory,
                                                                     images: ImageIOWorkImages(thumbnails: thumbnails)),
-                                              existence: PhotoKitExistenceChecker(),
-                                              images: ImageIOWorkImages(thumbnails: thumbnails))
+                                              existence: existence,
+                                              images: ImageIOWorkImages(thumbnails: thumbnails),
+                                              rematcher: rematcher)
         worksController.attach(resultContext: { [weak coordinator] in
             guard let c = coordinator else {
                 return WorkResultContext(layout: nil, target: nil, overlayAlpha: 0, tier: nil, resultRevision: 0)
@@ -101,7 +112,10 @@ final class AppModel: ObservableObject {
         }
         if case .main = s.route, changeObserver == nil {
             changeObserver = LibraryChangeObserver { [weak self] in
-                Task { @MainActor in self?.coordinator.libraryDidChange() }
+                Task { @MainActor in
+                    self?.coordinator.libraryDidChange()
+                    self?.works.libraryDidChange()   // P3：相册变了，之前「重找过没找到」的作品下次打开再找
+                }
             }
         }
     }
@@ -146,7 +160,11 @@ final class AppModel: ObservableObject {
         coordinator.start()
         await works.start()
     }
-    func scenePhaseChanged(_ phase: ScenePhase) { lifecycle.scenePhaseChanged(phase) }
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        lifecycle.scenePhaseChanged(phase)
+        // 回到前台重读相册权限（v1.7a）：受限 ↔ 完整变了就刷新作品列表 / 查看页
+        if phase == .active { Task { await works.refreshLibraryAccess() } }
+    }
     func onboardingButtonTapped() { Task { await coordinator.onboardingButtonTapped() } }
     func onboardingSwiped(to page: Int) { coordinator.onboardingSwiped(to: page) }
     func permissionAction(_ action: PermissionAction, on prompt: PermissionPrompt) {

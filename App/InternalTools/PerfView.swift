@@ -39,6 +39,15 @@ struct PerfView: View {
                     Text(verbatim: note).font(.footnote).textSelection(.enabled)
                 }
             }
+            // 作品 manifest（photo-picker-v0.1 §6.1：目标图本机有效长边、叠加降级系数；只在这里显示）+ 缺图处理去掉的照片数
+            if !model.works.summaries.isEmpty {
+                Section(header: Text(verbatim: "我的作品 manifest（最近 10 个）")) {
+                    ForEach(model.works.summaries.prefix(10)) { w in
+                        Text(verbatim: Self.manifestLine(w.meta)).font(.footnote).monospacedDigit()
+                    }
+                    if let n = model.works.controller.lastRematchNote { Text(verbatim: "最近一次补格：\(n)").font(.footnote) }
+                }
+            }
             // MF-7：各阶段峰值内存（phys_footprint，0.5 s 采样）
             Section(header: Text(verbatim: "峰值内存（phys_footprint）")) {
                 ForEach(MemoryPhase.allCases, id: \.self) { p in
@@ -80,7 +89,15 @@ struct PerfView: View {
             peaks[p].map { "memory\t\(p.rawValue)\tpeak_bytes=\($0.peakBytes)\tdelta_bytes=\($0.deltaBytes)" }
         }
         let export = model.perf.latestNote(of: .exportTotal).map { "export\t\($0)" }
-        return ([report.plainText(deviceNote: deviceNote)] + mem + [export].compactMap { $0 } + [SQLiteTriggerCheck.plainText(triggers)]).joined(separator: "\n")
+        let works = model.works.summaries.prefix(10).map { "work\t\(Self.manifestLine($0.meta))" }
+        return ([report.plainText(deviceNote: deviceNote)] + mem + [export].compactMap { $0 } + works + [SQLiteTriggerCheck.plainText(triggers)]).joined(separator: "\n")
+    }
+
+    /// 不含照片 ID，只有作品 id 前 8 位（与 os_log 一致不记资产 ID）。
+    static func manifestLine(_ m: WorkMeta) -> String {
+        let side = m.targetLocalLongSide.map(String.init) ?? "-"
+        let k = m.overlayDegradeFactor.map { String(format: "%.3f", $0) } ?? "-"
+        return "\(m.id.directoryName.prefix(8)) targetLocalLongSide=\(side) overlayDegradeFactor=\(k) replaced=\(m.replacedCellCount) fallback=\(m.fallbackCellCount) dropped=\(m.droppedPhotoCount) pendingMissing=\(m.missingCount)"
     }
 
     private var deviceNote: String {
