@@ -68,6 +68,11 @@ public struct WorkMeta: Sendable, Hashable, Codable {
     public var seed: UInt64?
     /// 内容指纹（v2 起为 `WorkFingerprint`）：「同一张」只存一份（需求 B10 / B9-2）。
     public var fingerprint: String
+    /// 含 fc 的内容摘要（`WorkContentDigest`，前缀 `cd1-`）。旧作品没有这一项：按 #17 指纹校验，不当成损坏，也不把「没有 fc」当成黑色。
+    /// 下次成功提交（新存、改强度、补格、显式更新）时和 layout、预览一起写上。不单独为了补摘要去重画。
+    public var contentDigest: String? = nil
+    /// 同一 `WorkID` 的提交版本。旧作品没有时按 0。显式更新要带上看到的版本；对不上就是冲突，不能假装没变化。
+    public var revision: Int? = nil
     /// 最近一次「只改叠加强度、更新原作品」的时间；从没更新过 / 旧数据为 nil。只记录，不参与排序，界面不显示（B10-7）。
     public var updatedAt: Date?
     /// 更新叠加强度的提交日志：meta.json（新强度）写下时，新预览图还在作品目录里的这个临时文件名下，
@@ -138,6 +143,7 @@ public struct WorkMeta: Sendable, Hashable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case formatVersion, id, createdAt, columns, rows, tier, photoCount, missingCount, overlayAlpha, seed, fingerprint,
+             contentDigest, revision,
              origin, previewFile, previewPixelWidth, previewPixelHeight, targetFile, updatedAt, pendingPreviewFile,
              droppedPhotoCount, replacedCellCount, fallbackCellCount, fallbackFile, targetLocalLongSide, overlayDegradeFactor,
              fallbackVersion
@@ -156,6 +162,8 @@ public struct WorkMeta: Sendable, Hashable, Codable {
         overlayAlpha = try c.decodeIfPresent(Double.self, forKey: .overlayAlpha) ?? 0
         seed = try c.decodeIfPresent(UInt64.self, forKey: .seed)
         fingerprint = try c.decodeIfPresent(String.self, forKey: .fingerprint) ?? ""
+        contentDigest = try c.decodeIfPresent(String.self, forKey: .contentDigest)
+        revision = try c.decodeIfPresent(Int.self, forKey: .revision)
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
         origin = try c.decodeIfPresent(WorkOrigin.self, forKey: .origin) ?? .savedManually
         previewFile = try c.decodeIfPresent(String.self, forKey: .previewFile) ?? "preview.jpg"
@@ -207,6 +215,36 @@ public enum WorkFingerprint {
 
     /// 叠加强度是否算「没改」（滑杆值经 JSON 往返，按 1e-6 比较）。
     public static func sameOverlay(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-6 }
+}
+
+/// 作品内容摘要（契约：版本化，覆盖 #17 指纹的数据，再加每格 fc 的有无和 RGB）。
+/// 叠加强度不在摘要里，另外比较。没有 fc 只记一个「无」位，不记成黑色 (0,0,0)。
+public enum WorkContentDigest {
+    public static let version = 1
+    public static let prefix = "cd1-"
+
+    public static func of(_ layout: MosaicLayout) -> String {
+        var h = FNV1a64()
+        h.add(Array("pinyi.work.cd1".utf8))
+        h.add(Int64(bitPattern: layout.params.seed))
+        h.add(Int64(layout.cols))
+        h.add(Int64(layout.rows))
+        h.add(layout.targetCrop)
+        h.add(Int64(layout.cellAssignments.count))
+        for cell in layout.cellAssignments {
+            h.add(Array(cell.localIdentifier.utf8))
+            h.add([0])
+            h.add(cell.crop)
+            if let fill = cell.fill {
+                h.add([1, fill.r, fill.g, fill.b])
+            } else {
+                h.add([0])
+            }
+        }
+        return prefix + h.hex
+    }
+
+    public static func isCurrent(_ digest: String) -> Bool { digest.hasPrefix(prefix) }
 }
 
 /// FNV-1a 64 累加器。
@@ -313,7 +351,13 @@ public struct Work: Sendable {
     /// meta 已提交、layout.json 没写成（写回途中被杀，架构师 11-17 D-b）：meta 的指纹和实际布局对不上。
     /// 只认本轮写过的作品（`fallbackVersion` 有值、指纹是当前口径）；这样的作品下次打开时按待处理重新走一遍写回。
     public var isLayoutOutOfSync: Bool {
-        meta.fallbackVersion != nil && WorkFingerprint.isCurrent(meta.fingerprint) && meta.fingerprint != WorkFingerprint.of(layout)
+        if meta.fallbackVersion != nil && WorkFingerprint.isCurrent(meta.fingerprint) && meta.fingerprint != WorkFingerprint.of(layout) {
+            return true
+        }
+        if let digest = meta.contentDigest, WorkContentDigest.isCurrent(digest), digest != WorkContentDigest.of(layout) {
+            return true
+        }
+        return false
     }
     public init(summary: WorkSummary, layout: MosaicLayout, targetURL: URL?) {
         self.summary = summary
@@ -333,9 +377,14 @@ public struct WorkDraft: Sendable {
     public var origin: WorkOrigin
     /// 结果页记住的「当前结果对应的作品」（存过 / 更新过之后；经「再调一调」来回不丢）。还在且同指纹时优先命中它。
     public var preferredWorkID: WorkID?
+    /// 显式更新这一张作品（身份是 WorkID）。设置后 fc 变化必须改这一张，不能另存，也不能只改强度丢掉草稿里的 fc。
+    public var updateWorkID: WorkID?
+    /// 起草时看到的 `revision`。和磁盘不一致则冲突，调用方应重载。没有就按 0（旧作品）。
+    public var baselineRevision: Int?
 
     public init(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, tier: String? = nil, seed: UInt64? = nil,
-                origin: WorkOrigin, preferredWorkID: WorkID? = nil) {
+                origin: WorkOrigin, preferredWorkID: WorkID? = nil, updateWorkID: WorkID? = nil,
+                baselineRevision: Int? = nil) {
         self.layout = layout
         self.target = target
         self.overlayAlpha = overlayAlpha
@@ -343,6 +392,8 @@ public struct WorkDraft: Sendable {
         self.seed = seed
         self.origin = origin
         self.preferredWorkID = preferredWorkID
+        self.updateWorkID = updateWorkID
+        self.baselineRevision = baselineRevision
     }
 }
 
@@ -371,8 +422,9 @@ public struct WorkImageFile: Sendable, Hashable {
 /// 实现约定：只往给定的 `directory`（作品的临时目录）里写，文件名自定（如 `preview.jpg`）；
 /// 失败就抛错——存储层会把整个临时目录删掉，不留半个作品。
 public protocol WorkImageEncoding: Sendable {
-    /// 按布局渲染预览图（长边 ≤ `maxLongEdge`）。`fallbacks`：格子下标 → 预览兜底图（`WorkFallbackImages`），
-    /// 这些格子不取照片，把兜底图放大填满该格（双线性 / `.high`，不用最近邻），再照常叠加目标图。
+    /// 按布局渲染预览图（长边 ≤ `maxLongEdge`）。
+    /// 纯色格直接读 `layout.renderSource(at:)` 的 `fc`，不读旧预览，也不用 `fallbacks` 里的裁切小图覆盖它。
+    /// `fallbacks` 只填「还没有 `fc`」的格子（旧调用方的临时补格）：不取照片，把小图放大填满（双线性 / `.high`），再照常叠加目标图。
     func writePreview(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, maxLongEdge: Int,
                       fallbacks: [Int: PixelBuffer], into directory: URL) async throws -> WorkImageFile
     /// 写目标图副本（长边 ≤ `maxLongEdge`，原图更小就不放大）。
@@ -446,8 +498,11 @@ public enum WorksStoreError: Error, Sendable, Equatable {
     case corrupted
 }
 
-/// 作品写入的前置条件错误（架构师 11-17 B）。
+/// 作品写入的前置条件错误。
 public enum WorksError: Error, Sendable, Equatable {
-    /// `write(_ draft:)` 收到带纯色格（`fc`）的布局：新存作品的预览渲染还不读 fc，先拒绝（长期改法见 works-missing-fill）。
+    /// 新存或显式更新要写入带 `fc` 的预览。Apple 的 `ImageIOWorkImages` / `LiveMosaicExporter` 还没有真实编译和像素验收，生产路径继续拒绝。
+    /// `applyRematch` 仍按 #11 已发布的写回画纯色，不走这个守护。
     case unsupportedFilledCells
+    /// 显式更新的 `baselineRevision` 和磁盘上的版本不一致（例如期间 `applyRematch` 已提交）。不能覆盖，也不能当成没变化。
+    case staleWorkRevision
 }

@@ -49,21 +49,20 @@ final class WorksPrivacyRoundTests: XCTestCase {
 
     // MARK: B
 
-    /// `write(_ draft:)` 收到带 fc 的布局直接拒绝，不留任何文件。
-    func testWriteRejectsFilledCells() async throws {
+    /// 生产守护仍在：Apple 预览/导出还没有真实编译和像素验收，带 fc 的新存必须拒绝，且不留文件。
+    func testWriteRejectsFilledCellsUntilApplePixelsVerified() async throws {
         let h = Harness()
         var layout = sampleLayout(["a", "", "c"])
         layout.cellAssignments[1].fill = CellColor(r: 1, g: 2, b: 3)
         do {
             _ = try await h.store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.2, origin: .savedManually))
-            XCTFail("应当拒绝")
+            XCTFail("守护未撤，不应当写入")
         } catch let e as WorksError {
             XCTAssertEqual(e, .unsupportedFilledCells)
         }
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: h.dir.path), [])
         let list = await h.store.list()
         XCTAssertTrue(list.isEmpty)
-        // 没有 fc 的照常存
         _ = try await h.store.save(WorkDraft(layout: sampleLayout(["a", "", "c"]), target: nil, overlayAlpha: 0.2, origin: .savedManually))
     }
 

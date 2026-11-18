@@ -71,17 +71,28 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .medium
 
-        // 兜底格：不取照片，旧预览裁出的小图放大填满（双线性 / .high，不用最近邻）
+        // 纯色格：直接读布局 fc，不取照片，也不用 fallbacks 里的裁切小图。
+        for index in layout.cellAssignments.indices {
+            guard case .fill(let fill) = layout.renderSource(at: index) else { continue }
+            let cx = index % layout.cols, cy = index / layout.cols
+            let comps = [CGFloat(fill.r) / 255, CGFloat(fill.g) / 255, CGFloat(fill.b) / 255, 1]
+            ctx.setFillColor(CGColor(colorSpace: cs, components: comps)!)
+            ctx.fill(CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
+        }
+
+        // 还没有 fc 的兜底格：不取照片，小图放大填满（双线性 / .high，不用最近邻）。
         ctx.interpolationQuality = .high
         for (cell, tile) in fallbacks where cell < layout.cellCount {
+            if case .fill = layout.renderSource(at: cell) { continue }
             guard let img = ImagePixels.cgImage(tile) else { continue }
             let cx = cell % layout.cols, cy = cell / layout.cols
             ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
         }
         ctx.interpolationQuality = .medium
 
-        let ids: [String?] = layout.cellAssignments.enumerated().map { i, c in
-            c.localIdentifier.isEmpty || fallbacks[i] != nil ? nil : c.localIdentifier
+        let ids: [String?] = layout.cellAssignments.indices.map { i in
+            guard case .photo(let id, _) = layout.renderSource(at: i), fallbacks[i] == nil else { return nil }
+            return id
         }
         let cols = layout.cols
         let thumbs = thumbnails

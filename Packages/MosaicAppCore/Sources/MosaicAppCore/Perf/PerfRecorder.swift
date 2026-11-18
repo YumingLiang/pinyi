@@ -37,6 +37,9 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
     case sharpnessProbe
     /// 导出端到端（取图 + 画整张 + JPEG）；note = `ExportPlan.logDescription` + 糊格子/白格子 + 文件大小。峰值 phys_footprint 见 `MemoryPhase.export`。
     case exportTotal
+    /// 一次成功的作品补格。`seconds` 是单调时钟墙钟；`items` = 本次待处理格的 replacedCells + blankCells（互斥：有可用照片 / 仍要纯色）。
+    /// `note` 只留安全汇总。失败、取消、错误不记成成功的 0。原始名 `works_rematch`。
+    case worksRematch = "works_rematch"
 
     /// 性能页上的显示名（内部页面，不进文案表）。
     public var label: String {
@@ -58,6 +61,7 @@ public enum PerfPhase: String, Sendable, Hashable, CaseIterable, Codable {
         case .scanCommitTotal: return "扫描·提交累计"
         case .sharpnessProbe: return "清晰度探测"
         case .exportTotal: return "导出·总计"
+        case .worksRematch: return "作品补格"
         }
     }
 }

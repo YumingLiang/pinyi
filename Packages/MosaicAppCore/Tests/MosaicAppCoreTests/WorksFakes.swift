@@ -24,11 +24,20 @@ final class FakeWorkImages: WorkImageEncoding, Sendable {
     /// 假预览每格像素（预览文件里存真像素，裁兜底格时能读回）。
     static let cellPixels = 4
 
-    /// 预览文件的第一行（布局摘要）：照片 ID；兜底格写成 `fb#rrggbb`（兜底小图的平均色）。
+    /// 预览文件的第一行（布局摘要）。纯色格写成 `fc#rrggbb`（直接读布局的 fc，不用兜底小图）；
+    /// 没有 fc 的兜底小图写成 `fb#rrggbb`；其余是照片 ID。
     static func previewBytes(_ layout: MosaicLayout, fallbacks: [Int: RGB8] = [:]) -> Data {
-        let cells = layout.cellAssignments.enumerated().map { i, c -> String in
-            if let f = fallbacks[i] { return String(format: "fb#%02x%02x%02x", f.r, f.g, f.b) }
-            return c.localIdentifier
+        let cells = layout.cellAssignments.indices.map { i -> String in
+            switch layout.renderSource(at: i) {
+            case .fill(let color):
+                return String(format: "fc#%02x%02x%02x", color.r, color.g, color.b)
+            case .photo(let id, _):
+                if let f = fallbacks[i] { return String(format: "fb#%02x%02x%02x", f.r, f.g, f.b) }
+                return id
+            case .blank:
+                if let f = fallbacks[i] { return String(format: "fb#%02x%02x%02x", f.r, f.g, f.b) }
+                return ""
+            }
         }
         return Data("PREVIEW:\(layout.cols)x\(layout.rows):\(cells.joined(separator: ","))".utf8)
     }
@@ -71,7 +80,7 @@ final class FakeWorkImages: WorkImageEncoding, Sendable {
         return try? PixelBuffer(width: parts[0], height: parts[1], bytes: bytes)
     }
 
-    /// 按布局「画」预览：每格纯色（照片色 / 兜底小图平均色 / 白），再按 α 叠加目标图（与 App 同一换算），存真像素。
+    /// 按布局「画」预览：纯色格用 fc（盖过兜底小图）；其余是兜底小图 / 照片色 / 白。再按 α 叠加目标图。
     static func render(_ layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, fallbacks: [Int: RGB8]) -> PixelBuffer {
         let cp = cellPixels, w = layout.cols * cp, h = layout.rows * cp
         let alpha = target == nil ? 0 : OverlayBlendLimits.clamp(overlayAlpha)
@@ -80,8 +89,15 @@ final class FakeWorkImages: WorkImageEncoding, Sendable {
         for py in 0..<h {
             for px in 0..<w {
                 let cell = (py / cp) * layout.cols + px / cp
-                let id = layout.cellAssignments[cell].localIdentifier
-                let c = fallbacks[cell] ?? (id.isEmpty ? RGB8(r: 255, g: 255, b: 255) : color(of: id))
+                let c: RGB8
+                switch layout.renderSource(at: cell) {
+                case .fill(let color):
+                    c = RGB8(r: color.r, g: color.g, b: color.b)
+                case .photo(let id, _):
+                    c = fallbacks[cell] ?? color(of: id)
+                case .blank:
+                    c = fallbacks[cell] ?? RGB8(r: 255, g: 255, b: 255)
+                }
                 var v = (Double(c.r), Double(c.g), Double(c.b))
                 if alpha > 0, let target, let crop {
                     let t = WorkFallbackImages.bilinear(target, crop.x + (Double(px) + 0.5) * crop.width / Double(w) - 0.5,

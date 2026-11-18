@@ -70,8 +70,8 @@ public actor FileWorksStore: WorksStore {
     private var inFlight: [String: (token: UUID, task: Task<WorkSaveResult, any Error>)] = [:]
     /// 旧口径作品在内存里补算出的新指纹（不写盘，避免每次列表都读 layout.json）。
     private var recomputedFingerprints: [WorkID: String] = [:]
-    /// 正在改写的作品（打开和导出前可能同时触发缺图处理）：同一作品串行。
-    private var updating: [WorkID: (token: UUID, task: Task<Work, any Error>)] = [:]
+    /// 正在改写的作品（打开、导出、改缺失数、删除、只改叠加强度）：同一作品串行。
+    private var updating: [WorkID: (token: UUID, task: Task<Void, Never>)] = [:]
 
     public init(directory: URL, images: any WorkImageEncoding, now: @escaping @Sendable () -> Date = { Date() }) {
         self.directory = directory
@@ -118,38 +118,113 @@ public actor FileWorksStore: WorksStore {
     // MARK: 保存
 
     public func save(_ draft: WorkDraft) async throws -> WorkSaveResult {
+        if draft.updateWorkID != nil {
+            return try await saveExplicit(draft)
+        }
         let fingerprint = WorkFingerprint.of(draft.layout)
-        // actor 在 await 处可重入：同一张正在写（新存或更新叠加）时，后来者先等它写完，再按磁盘上的最新状态决定
+        let digest = WorkContentDigest.of(draft.layout)
+        // 去重按内容摘要排队，不用旧指纹把不同 fc 收成同一次覆盖。
         var waited: UUID?
-        while let running = inFlight[fingerprint], running.token != waited {
+        while let running = inFlight[digest], running.token != waited {
             waited = running.token
             _ = try? await running.task.value
         }
         // 从这里到登记 inFlight 之间没有挂起点
-        let existing = WorkSummary.saveTarget(in: listNow(), fingerprint: fingerprint, preferred: draft.preferredWorkID)
-        let task: Task<WorkSaveResult, any Error>
-        if let existing {
+        if let existing = contentMatch(digest: digest, fingerprint: fingerprint) {
             if WorkFingerprint.sameOverlay(existing.meta.overlayAlpha, draft.overlayAlpha) {
                 return WorkSaveResult(summary: existing, outcome: .unchanged)
             }
-            task = Task { try await self.updateOverlay(existing, with: draft, fingerprint: fingerprint) }
-        } else {
-            let layoutData = try Self.encoder().encode(draft.layout)
-            task = Task {
-                WorkSaveResult(summary: try await self.write(draft, layoutData: layoutData, fingerprint: fingerprint),
-                               outcome: .inserted)
+            let task = Task {
+                try await self.serialized(existing.id) {
+                    try await self.updateOverlay(existing, with: draft, fingerprint: fingerprint)
+                }
             }
+            let token = UUID()
+            inFlight[digest] = (token, task)
+            defer { if inFlight[digest]?.token == token { inFlight[digest] = nil } }
+            return try await task.value
+        }
+        // 无更新目标：内容对不上就新存。带 fc 的新预览在 Apple 像素验收前拒绝，且不按旧指纹改掉已有作品。
+        try Self.rejectUnverifiedFilledPreview(draft.layout)
+        let layoutData = try Self.encoder().encode(draft.layout)
+        let task = Task {
+            WorkSaveResult(summary: try await self.write(draft, layoutData: layoutData, fingerprint: fingerprint),
+                           outcome: .inserted)
         }
         let token = UUID()
-        inFlight[fingerprint] = (token, task)
-        defer { if inFlight[fingerprint]?.token == token { inFlight[fingerprint] = nil } }
+        inFlight[digest] = (token, task)
+        defer { if inFlight[digest]?.token == token { inFlight[digest] = nil } }
         return try await task.value
     }
 
+    /// 显式更新 `updateWorkID`。照片分配（#17 指纹）变了就不改这张的格子，改走无目标的新存/去重。
+    private func saveExplicit(_ draft: WorkDraft) async throws -> WorkSaveResult {
+        guard let id = draft.updateWorkID else { return try await save(draft) }
+        let work = try await load(id)
+        let current = work.meta.revision ?? 0
+        if (draft.baselineRevision ?? 0) != current { throw WorksError.staleWorkRevision }
+        if WorkFingerprint.of(work.layout) != WorkFingerprint.of(draft.layout) {
+            var fresh = draft
+            fresh.updateWorkID = nil
+            fresh.baselineRevision = nil
+            return try await save(fresh)
+        }
+        let diskDigest = WorkContentDigest.of(work.layout)
+        let draftDigest = WorkContentDigest.of(draft.layout)
+        if diskDigest == draftDigest {
+            if WorkFingerprint.sameOverlay(work.meta.overlayAlpha, draft.overlayAlpha) {
+                return WorkSaveResult(summary: work.summary, outcome: .unchanged)
+            }
+            return try await serialized(id) {
+                try await self.updateOverlay(work.summary, with: draft, fingerprint: WorkFingerprint.of(draft.layout))
+            }
+        }
+        // fc 变了：不能 unchanged，也不能只拿磁盘旧布局改强度。像素验收前不提交这种预览。
+        try Self.rejectUnverifiedFilledPreview(draft.layout)
+        return try await serialized(id) {
+            try await self.commitContent(id, draft: draft)
+        }
+    }
+
+    /// 同一旧指纹下，只把内容摘要真的一致的作品当成同一张。摘要还没写过的，读布局现算，不算损坏，也不写盘。
+    private func contentMatch(digest: String, fingerprint: String) -> WorkSummary? {
+        let list = listNow()
+        var hits: [WorkSummary] = []
+        for summary in list {
+            // v1 / 还没写过摘要：以布局现算为准。磁盘上残留的摘要不能挡住「同格子、不同强度」的旧重复。
+            let legacy = summary.meta.formatVersion < WorkMeta.currentFormatVersion || summary.meta.contentDigest == nil
+            if !legacy, summary.meta.contentDigest == digest {
+                hits.append(summary)
+                continue
+            }
+            if legacy, summary.meta.fingerprint == fingerprint,
+               let layout = layoutNow(summary.id), WorkContentDigest.of(layout) == digest {
+                hits.append(summary)
+            }
+        }
+        var best: WorkSummary?
+        for summary in hits {
+            if let current = best, summary.lastSavedAt <= current.lastSavedAt { continue }
+            best = summary
+        }
+        return best
+    }
+
+    private func layoutNow(_ id: WorkID) -> MosaicLayout? {
+        guard let data = try? Data(contentsOf: workDirectory(id).appendingPathComponent(Self.layoutFileName)) else { return nil }
+        return try? Self.decoder().decode(MosaicLayout.self, from: data)
+    }
+
+    /// Apple 预览/导出还没做真实编译和像素验收时，保存路径不能提交带 fc 的新预览。
+    static func rejectUnverifiedFilledPreview(_ layout: MosaicLayout) throws {
+        if layout.cellAssignments.contains(where: { $0.fill != nil }) {
+            throw WorksError.unsupportedFilledCells
+        }
+    }
+
     private func write(_ draft: WorkDraft, layoutData: Data, fingerprint: String) async throws -> WorkSummary {
-        // 守护（架构师 11-17 B）：新存作品的预览按 `fallbacks: [:]` 画，带纯色格（`fc`）的布局会画成白格、和导出对不上。
-        // 长期改法（works-missing-fill）：预览渲染器和导出器都直接读 fc，然后去掉这个守护。
-        if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
+        // 生产守护：带 fc 的新存预览仍拒绝。applyRematch 的写回不经过这里。
+        try Self.rejectUnverifiedFilledPreview(draft.layout)
         let fm = FileManager.default
         let id = WorkID()
         let temp = directory.appendingPathComponent(Self.tempPrefix + id.directoryName, isDirectory: true)
@@ -172,6 +247,8 @@ public actor FileWorksStore: WorksStore {
                                 origin: draft.origin, previewFile: preview.fileName, previewPixelWidth: preview.pixelWidth,
                                 previewPixelHeight: preview.pixelHeight, targetFile: targetFile)
             meta.fallbackVersion = WorkMeta.currentFallbackVersion
+            meta.contentDigest = WorkContentDigest.of(draft.layout)
+            meta.revision = 1
             // meta.json 最后写：它在，其余文件一定都在
             try Self.encoder().encode(meta).write(to: temp.appendingPathComponent(Self.metaFileName), options: .atomic)
             try fm.moveItem(at: temp, to: final)
@@ -205,6 +282,10 @@ public actor FileWorksStore: WorksStore {
             throw WorksStoreError.corrupted
         }
         layout.params.overlayAlpha = draft.overlayAlpha
+        if WorkContentDigest.of(layout) != WorkContentDigest.of(draft.layout) {
+            // 排队期间补格已改过 fc：不能用「只改强度」把草稿或旧颜色盖上去。
+            throw WorksError.staleWorkRevision
+        }
         // 叠加要用目标图：优先用结果页手里的那份，没有就读作品里存的副本
         var target = draft.target
         if target == nil, let file = existing.meta.targetFile {
@@ -228,6 +309,8 @@ public actor FileWorksStore: WorksStore {
         meta.previewPixelWidth = preview.pixelWidth
         meta.previewPixelHeight = preview.pixelHeight
         meta.fingerprint = fingerprint
+        meta.contentDigest = WorkContentDigest.of(layout)
+        meta.revision = (meta.revision ?? 0) + 1
         meta.formatVersion = WorkMeta.currentFormatVersion
         meta.updatedAt = now()
         meta.pendingPreviewFile = pendingName
@@ -238,6 +321,59 @@ public actor FileWorksStore: WorksStore {
             throw error
         }
         // ③–⑤ 前滚（和被杀后下次读时走的是同一段代码）
+        meta = rollForwardIfNeeded(meta, in: dir, layout: layout)
+        return WorkSaveResult(summary: WorkSummary(meta: meta, previewURL: dir.appendingPathComponent(meta.previewFile)),
+                              outcome: .updatedOverlay)
+    }
+
+    /// 显式更新里照片分配没变、但内容摘要变了（去掉 fc）。带 fc 的草稿在调用前已被守护拒绝。
+    /// meta.json 仍是提交点。需要隐私迁移的作品不在这里重画，避免绕过 `fallbackVersion`。
+    private func commitContent(_ id: WorkID, draft: WorkDraft) async throws -> WorkSaveResult {
+        let fm = FileManager.default
+        let dir = workDirectory(id)
+        guard fm.fileExists(atPath: dir.appendingPathComponent(Self.metaFileName).path) else { throw WorksStoreError.notFound }
+        let work = try await load(id)
+        if work.meta.needsFallbackMigration { throw WorksError.staleWorkRevision }
+        if (work.meta.revision ?? 0) != (draft.baselineRevision ?? 0) { throw WorksError.staleWorkRevision }
+        try Self.rejectUnverifiedFilledPreview(draft.layout)
+        var layout = draft.layout
+        layout.params.overlayAlpha = draft.overlayAlpha
+        var target = draft.target
+        if target == nil, let file = work.meta.targetFile {
+            target = try? await images.readTarget(at: dir.appendingPathComponent(file))
+        }
+        let temp = directory.appendingPathComponent(Self.tempPrefix + UUID().uuidString, isDirectory: true)
+        defer { try? fm.removeItem(at: temp) }
+        try fm.createDirectory(at: temp, withIntermediateDirectories: true)
+        let tiles = MissingCellFill.colorTiles(layout)
+        let preview = try await images.writePreview(layout: layout, target: target, overlayAlpha: draft.overlayAlpha,
+                                                    maxLongEdge: WorkImageLimits.previewLongEdge, fallbacks: tiles, into: temp)
+        guard fm.fileExists(atPath: dir.appendingPathComponent(Self.metaFileName).path) else { throw WorksStoreError.notFound }
+        let ext = (preview.fileName as NSString).pathExtension
+        let pendingName = Self.pendingPreviewPrefix + UUID().uuidString + (ext.isEmpty ? "" : "." + ext)
+        let pendingURL = dir.appendingPathComponent(pendingName)
+        try Self.atomicReplace(temp.appendingPathComponent(preview.fileName), over: pendingURL)
+        var meta = try readSummary(id).meta
+        if (meta.revision ?? 0) != (draft.baselineRevision ?? 0) {
+            try? fm.removeItem(at: pendingURL)
+            throw WorksError.staleWorkRevision
+        }
+        meta.overlayAlpha = draft.overlayAlpha
+        meta.previewPixelWidth = preview.pixelWidth
+        meta.previewPixelHeight = preview.pixelHeight
+        meta.fingerprint = WorkFingerprint.of(layout)
+        meta.contentDigest = WorkContentDigest.of(layout)
+        meta.revision = (meta.revision ?? 0) + 1
+        meta.formatVersion = WorkMeta.currentFormatVersion
+        meta.updatedAt = now()
+        meta.pendingPreviewFile = pendingName
+        meta.photoCount = layout.uniqueAssetIDs.count
+        do {
+            try Self.encoder().encode(meta).write(to: dir.appendingPathComponent(Self.metaFileName), options: .atomic)
+        } catch {
+            try? fm.removeItem(at: pendingURL)
+            throw error
+        }
         meta = rollForwardIfNeeded(meta, in: dir, layout: layout)
         return WorkSaveResult(summary: WorkSummary(meta: meta, previewURL: dir.appendingPathComponent(meta.previewFile)),
                               outcome: .updatedOverlay)
@@ -314,6 +450,7 @@ public actor FileWorksStore: WorksStore {
     }
 
     public func delete(_ id: WorkID) async throws {
+        // 不进串行队列：更新预览可能正卡在编码上。删除要马上把目录挪走，写回提交前发现目录没了就放弃，不能等编码结束再删（否则会把已删作品写回来）。
         let fm = FileManager.default
         let dir = workDirectory(id)
         guard fm.fileExists(atPath: dir.path) else { throw WorksStoreError.notFound }
@@ -323,6 +460,10 @@ public actor FileWorksStore: WorksStore {
     }
 
     public func setMissingCount(_ count: Int, for id: WorkID) async throws {
+        try await serialized(id) { try await self.writeMissingCount(count, for: id) }
+    }
+
+    private func writeMissingCount(_ count: Int, for id: WorkID) throws {
         var meta = try readSummary(id).meta
         guard meta.missingCount != count else { return }
         meta.missingCount = count
@@ -356,15 +497,17 @@ public actor FileWorksStore: WorksStore {
         }
     }
 
-    private func serialized(_ id: WorkID, _ body: @escaping @Sendable () async throws -> Work) async throws -> Work {
+    /// 按作品串行。补格写回、叠加强度更新、缺失数、删除都走这里，同一个作品不会被两边同时改。
+    private func serialized<T: Sendable>(_ id: WorkID, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
         while let running = updating[id] {
-            _ = try? await running.task.value
+            await running.task.value
             // 已完成的任务由这里清掉（发起方可能还没轮到恢复），否则会对着一个已完成的任务空转
             if updating[id]?.token == running.token { updating[id] = nil }
         }
         let token = UUID()
         let task = Task { try await body() }
-        updating[id] = (token, task)
+        let gate = Task<Void, Never> { _ = try? await task.value }
+        updating[id] = (token, gate)
         defer { if updating[id]?.token == token { updating[id] = nil } }
         return try await task.value
     }
@@ -455,6 +598,8 @@ public actor FileWorksStore: WorksStore {
             meta.fallbackFile = fallbackName
             meta.fallbackVersion = WorkMeta.currentFallbackVersion
             meta.fingerprint = WorkFingerprint.of(layout)   // 当前口径（#17）；原来写的是 v1 口径
+            meta.contentDigest = WorkContentDigest.of(layout)
+            meta.revision = (meta.revision ?? 0) + 1
             meta.photoCount = layout.uniqueAssetIDs.count
             meta.droppedPhotoCount += result.droppedPhotos
             meta.replacedCellCount += result.replacedCells
