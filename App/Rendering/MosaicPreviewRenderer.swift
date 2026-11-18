@@ -32,7 +32,7 @@ enum MosaicPreviewRenderer {
         ctx.setFillColor(CGColor(colorSpace: cs, components: [1, 1, 1, 1])!)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         let grid = g.layout.grid
-        if let shape = product.shapePlacement, shape.mask.columns == g.layout.columns, shape.mask.rows == g.layout.rows {
+        if let shape = product.shapeFrame, shape.mask.columns == g.layout.columns, shape.mask.rows == g.layout.rows {
             let (r, gg, b) = shape.background.srgb8
             ctx.setFillColor(CGColor(colorSpace: cs, components: [CGFloat(r) / 255, CGFloat(gg) / 255, CGFloat(b) / 255, 1])!)
             for index in 0..<shape.mask.cellCount where !shape.mask.isActive(index) {
@@ -54,7 +54,7 @@ enum MosaicPreviewRenderer {
         } catch {
             return nil   // 被取消
         }
-        let alpha = product.shapePlacement == nil ? OverlayBlendLimits.clamp(overlayAlpha) : 0
+        let alpha = product.shapeFrame == nil ? OverlayBlendLimits.clamp(overlayAlpha) : 0
         if alpha > 0, let t = ImagePixels.cgImage(target) {
             let crop = g.layout.cropRect
             if let cropped = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height)) {

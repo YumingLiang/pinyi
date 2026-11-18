@@ -69,7 +69,7 @@ struct LiveMosaicExporter: MosaicExporting {
 
         let fallbacks = request.cellFallbacks
         let ids = request.layout.cellAssignments.map { $0.localIdentifier.isEmpty ? nil : $0.localIdentifier }
-        let steps = ShapeStripExport.steps(columns: columns, rows: plan.rows, cellPixels: cp, shape: request.layout.shape)
+        let steps = ShapeStripExport.steps(columns: columns, rows: plan.rows, cellPixels: cp, shape: request.layout.shapeFrame)
         let thumbs = thumbnails
         let hq: ThumbnailRequest = {
             var r = ThumbnailRequest(targetPixelSize: cp)
@@ -107,11 +107,11 @@ struct LiveMosaicExporter: MosaicExporting {
                             ctx.draw(img, in: CGRect(x: col * cp, y: h - (row + 1) * cp, width: cp, height: cp))
                             return true
                         }
-                        fills.add(drawn ? .blurryFallback : .blank)
+                        fills.record(step: step, fill: drawn ? .blurryFallback : .blank)
                         done += 1
                         continue
                     }
-                    guard let id = ids[i] else { fills.add(.blank); done += 1; continue }
+                    guard let id = ids[i] else { fills.record(step: step, fill: .blank); done += 1; continue }
                     group.addTask {
                         let hqResult = await thumbs.thumbnail(for: id, request: hq)
                         switch ExportFillStats.decision(afterHighQuality: hqResult) {
@@ -142,7 +142,7 @@ struct LiveMosaicExporter: MosaicExporting {
                         return true
                     }
                 }()
-                fills.add(drawn ? fill : .blank)
+                fills.record(step: ShapeStripExport.Step(index: i, background: nil), fill: drawn ? fill : .blank)
                 done += 1
                 if done % 64 == 0 { progress(0.9 * Double(done) / Double(total)) }
                 enqueue()

@@ -7,57 +7,10 @@ import MosaicCore
 /// - 导出入口只收 `MosaicLayout`（而不是现算的 `GenerationProduct`），作品页也能导出。
 /// - 不含任何像素数据；目标图（叠加层用）由调用方另给。
 /// - 复用 MosaicCore 已有的 `CropRect`（`Hashable, Sendable`）；它不是 `Codable`，这里手写编码，避免对外部类型做追溯一致性。
-/// 形状拼图留给预览 / 导出的接口（设计 §6；manifest 的 source / paletteStops 属 S5，这里不写）。
-/// 再导出只读掩码和背景，不重新排版。
-public struct ShapePlacement: Sendable, Equatable, Codable {
-    public var background: ShapeBackground
-    public var mask: CellMask
-
-    public init(background: ShapeBackground, mask: CellMask) {
-        self.background = background
-        self.mask = mask
-    }
-
-    private enum CodingKeys: String, CodingKey { case background, mask }
-    private enum MaskKeys: String, CodingKey { case columns, rows, encoding, data }
-
-    public func encode(to encoder: any Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(background, forKey: .background)
-        var maskC = c.nestedContainer(keyedBy: MaskKeys.self, forKey: .mask)
-        try maskC.encode(mask.columns, forKey: .columns)
-        try maskC.encode(mask.rows, forKey: .rows)
-        try maskC.encode("bits-v1", forKey: .encoding)
-        try maskC.encode(Data(mask.bitsV1Bytes).base64EncodedString(), forKey: .data)
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        background = try c.decode(ShapeBackground.self, forKey: .background)
-        let maskC = try c.nestedContainer(keyedBy: MaskKeys.self, forKey: .mask)
-        let columns = try maskC.decode(Int.self, forKey: .columns)
-        let rows = try maskC.decode(Int.self, forKey: .rows)
-        let encoding = try maskC.decode(String.self, forKey: .encoding)
-        guard encoding == "bits-v1" else {
-            throw DecodingError.dataCorruptedError(forKey: .encoding, in: maskC,
-                                                   debugDescription: "unknown mask encoding \(encoding)")
-        }
-        guard let bytes = Data(base64Encoded: try maskC.decode(String.self, forKey: .data)) else {
-            throw DecodingError.dataCorruptedError(forKey: .data, in: maskC, debugDescription: "mask data is not base64")
-        }
-        do {
-            mask = try CellMask(columns: columns, rows: rows, bitsV1: [UInt8](bytes))
-        } catch {
-            throw DecodingError.dataCorruptedError(forKey: .data, in: maskC, debugDescription: "bits-v1 mask rejected")
-        }
-    }
-}
-
 public struct MosaicLayout: Sendable, Codable, Equatable {
-    /// 普通拼图的格式版本。形状布局写成 `shapeFormatVersion`，照片布局保持 1，JSON 不带 `shape`。
+    /// 现在写盘的布局版本。设计里的 manifest v2（`source` / `color` / `background` / bits-v1 mask）由 S5 写入。
+    /// S3 不把缺 source 的形状记录写成 formatVersion 2。
     public static let currentFormatVersion = 1
-    /// 带形状掩码的布局版本（设计 §7 的 v2 里 S3 需要的那一部分：background + mask）。
-    public static let shapeFormatVersion = 2
 
     /// 一格的分配。
     public struct CellAssignment: Sendable, Codable, Equatable {
@@ -128,8 +81,8 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
     /// 网格在目标图里的区域（目标图像素；短边方向已居中裁掉余量）。
     public var targetCrop: CropRect
     public var params: Params
-    /// 形状掩码和背景。nil = 普通拼图（`activeCells == nil` 的旧结果）。
-    public var shape: ShapePlacement?
+    /// 预览 / 导出用的形状掩码和背景。不进 JSON。nil = 普通拼图。
+    public var shapeFrame: ShapeFrame?
 
     public struct Size: Sendable, Codable, Equatable {
         public var width: Int
@@ -138,15 +91,15 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
     }
 
     public init(cols: Int, rows: Int, cellAssignments: [CellAssignment], targetSize: Size, targetCrop: CropRect,
-                params: Params, shape: ShapePlacement? = nil, formatVersion: Int = MosaicLayout.currentFormatVersion) {
-        self.formatVersion = shape == nil ? formatVersion : max(formatVersion, Self.shapeFormatVersion)
+                params: Params, shapeFrame: ShapeFrame? = nil, formatVersion: Int = MosaicLayout.currentFormatVersion) {
+        self.formatVersion = formatVersion
         self.cols = cols
         self.rows = rows
         self.cellAssignments = cellAssignments
         self.targetSize = targetSize
         self.targetCrop = targetCrop
         self.params = params
-        self.shape = shape
+        self.shapeFrame = shapeFrame
     }
 
     public var cellCount: Int { cols * rows }
@@ -170,7 +123,7 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
     // MARK: 编码
 
     private enum CodingKeys: String, CodingKey {
-        case formatVersion, cols, rows, cells, targetSize, targetCrop, params, shape
+        case formatVersion, cols, rows, cells, targetSize, targetCrop, params
     }
 
     public init(from decoder: any Decoder) throws {
@@ -182,7 +135,7 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
         targetSize = try c.decode(Size.self, forKey: .targetSize)
         targetCrop = try Self.decodeRect(c.decode([Double].self, forKey: .targetCrop))
         params = try c.decode(Params.self, forKey: .params)
-        shape = try c.decodeIfPresent(ShapePlacement.self, forKey: .shape)
+        shapeFrame = nil
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -194,7 +147,6 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
         try c.encode(targetSize, forKey: .targetSize)
         try c.encode(Self.encodeRect(targetCrop), forKey: .targetCrop)
         try c.encode(params, forKey: .params)
-        if let shape { try c.encode(shape, forKey: .shape) }
     }
 
     static func encodeRect(_ r: CropRect) -> [Double] { [r.x, r.y, r.width, r.height] }
@@ -212,13 +164,13 @@ extension MosaicLayout {
     public init(product: GenerationProduct, overlayAlpha: Double) {
         let g = product.generation
         let ids = product.cellAssetIDs
-        let shape = product.shapePlacement
+        let shape = product.shapeFrame
         self.init(cols: g.layout.columns, rows: g.layout.rows,
                   cellAssignments: ids.map { CellAssignment(localIdentifier: $0 ?? "") },
                   targetSize: Size(width: g.layout.imageWidth, height: g.layout.imageHeight),
                   targetCrop: g.layout.cropRect,
                   params: Params(overlayAlpha: shape == nil ? overlayAlpha : 0, density: Self.name(g.density), seed: g.seed),
-                  shape: shape)
+                  shapeFrame: shape)
     }
 
     static func name(_ d: Density) -> String {

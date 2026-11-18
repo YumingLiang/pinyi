@@ -84,10 +84,10 @@ public struct GenerationProduct: Sendable {
         g.assignment.tiles.map { row in row >= 0 && row < snapshot.assetIDsByRow.count ? snapshot.assetIDsByRow[row] : nil }
     }
 
-    /// 预览 / 导出共用的形状掩码和背景。没有掩码时为 nil（普通拼图）。
-    public var shapePlacement: ShapePlacement? {
+    /// 预览 / 导出共用的形状掩码和背景。没有掩码时为 nil。这不是可写盘的 manifest。
+    public var shapeFrame: ShapeFrame? {
         guard let mask = generation.activeCells else { return nil }
-        return ShapePlacement(background: shapeBackground ?? .white, mask: mask)
+        return ShapeFrame(background: shapeBackground ?? .white, mask: mask)
     }
 
     /// 改背景色，不重新匹配。没有形状时忽略。

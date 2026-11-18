@@ -118,6 +118,8 @@ public actor FileWorksStore: WorksStore {
     // MARK: 保存
 
     public func save(_ draft: WorkDraft) async throws -> WorkSaveResult {
+        if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
+        if draft.layout.shapeFrame != nil { throw WorksError.unsupportedShapeSave }
         let fingerprint = WorkFingerprint.of(draft.layout)
         // actor 在 await 处可重入：同一张正在写（新存或更新叠加）时，后来者先等它写完，再按磁盘上的最新状态决定
         var waited: UUID?

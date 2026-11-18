@@ -70,7 +70,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ctx.setFillColor(CGColor(colorSpace: cs, components: [1, 1, 1, 1])!)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .medium
-        let steps = ShapeStripExport.steps(columns: layout.cols, rows: layout.rows, cellPixels: cp, shape: layout.shape)
+        let steps = ShapeStripExport.steps(columns: layout.cols, rows: layout.rows, cellPixels: cp, shape: layout.shapeFrame)
         for step in steps {
             guard let background = step.background else { continue }
             let (r, g, b) = background.srgb8
@@ -106,7 +106,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
                 ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
             }
         }
-        let alpha = layout.shape == nil ? OverlayBlendLimits.clamp(overlayAlpha) : 0
+        let alpha = layout.shapeFrame == nil ? OverlayBlendLimits.clamp(overlayAlpha) : 0
         if alpha > 0, let target, let t = ImagePixels.cgImage(target) {
             let crop = Self.scaledCrop(layout, toTargetWidth: target.width, height: target.height)
             if let part = t.cropping(to: crop.integral) {

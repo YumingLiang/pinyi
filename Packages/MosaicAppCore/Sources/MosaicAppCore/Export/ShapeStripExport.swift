@@ -23,7 +23,7 @@ public enum ShapeStripExport {
 
     /// - Parameters:
     ///   - shape: 无形状（nil）时全部走照片路径。掩码尺寸和网格不一致时也全部走照片路径，避免涂错格子。
-    public static func steps(columns: Int, rows: Int, cellPixels: Int, shape: ShapePlacement?) -> [Step] {
+    public static func steps(columns: Int, rows: Int, cellPixels: Int, shape: ShapeFrame?) -> [Step] {
         let columns = max(0, columns), rows = max(0, rows)
         guard columns > 0, rows > 0 else { return [] }
         let mask = shape.flatMap { placement -> CellMask? in
