@@ -65,7 +65,7 @@ final class WorksFallbackTests: XCTestCase {
         func value(_ key: String) -> String? {
             text.split(separator: "\n").first { $0.hasPrefix("\"\(key)\"") }.map(String.init)
         }
-        XCTAssertEqual(value("works.missing"), #""works.missing" = "有 %1$@ 格原来的照片现在用不了，这几格会稍模糊";"#)
+        XCTAssertEqual(value("works.missing"), #""works.missing" = "有 %1$@ 格原来的照片现在用不了，这几格先用相近的颜色填上";"#)
         XCTAssertEqual(value("works.replaced"), #""works.replaced" = "有 %1$@ 格原来的照片现在用不了，已换成相近的照片";"#)
         for key in ["works.missing", "works.replaced"] {
             let line = try XCTUnwrap(value(key))
@@ -73,7 +73,7 @@ final class WorksFallbackTests: XCTestCase {
             XCTAssertFalse(line.contains("隐藏"), key)
         }
         let md = try String(contentsOf: root.appendingPathComponent("App/Resources/copy_v1.1.md"), encoding: .utf8)
-        XCTAssertTrue(md.contains("| 有 {count} 格原来的照片现在用不了，这几格会稍模糊 |"))
+        XCTAssertTrue(md.contains("| 有 {count} 格原来的照片现在用不了，这几格先用相近的颜色填上 |"))
         XCTAssertTrue(md.contains("| 有 {count} 格原来的照片现在用不了，已换成相近的照片 |"))
         XCTAssertFalse(md.contains("works.replaced` | 查看页 / 导出前：原照片已删除或隐藏"), "占位说明已去掉")
     }

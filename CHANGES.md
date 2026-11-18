@@ -15,6 +15,7 @@
 - **D 孤儿文件**：提交点仍是 meta.json。a) `removeIncomplete()`（启动）和 `removeOrphans(for:)`（打开作品前）删掉作品目录里 meta 没登记的 `preview*` / `fallback*` / 临时预览；
   该作品正在写回时跳过，meta 读不出不删。b) meta 指纹 ≠ 实际布局指纹（`Work.isLayoutOutOfSync`）按待处理，下次打开重新走一遍写回，不读旧文件。
 - **Q3**：不改（放到 5e GoneLog，04:05）。**Q4**：加测试，取消隐藏 / 从「最近删除」恢复的照片补格时能重新被选中（没有黑名单）。
+- **copy v1.8**：`works.missing` 改为「有 {count} 格原来的照片现在用不了，这几格先用相近的颜色填上」（「稍模糊」作废）；计数和只提示一次不变；经 copy_v1.1.md → gen-localizable。
 - 打开后马上导出（没有新变化）：本次查看里还没消失的 `works.missing` / `works.replaced` 提示保留到自动消失，不提前清（QA Q1 门禁）。
 - 测试：新增 `WorksPrivacyRoundTests`（B、D-a、D-b/D-c 被杀窗口无哨兵、Q2 读预览 0 次 + 前台刷新、文案）、`WorksRematchNoBlacklistTests`（Q4）；
   `WorksFallbackTests` / `WorksFallbackMigrationTests` / `MissingCellFillTests` / `WorksControllerTests` / `WorksRematchTests` 按 Q1 改期望（删除格填色、没有兜底图、受限不迁移）。

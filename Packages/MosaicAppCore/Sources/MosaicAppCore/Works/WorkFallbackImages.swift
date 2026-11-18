@@ -1,7 +1,7 @@
 import Foundation
 import MosaicCore
 
-/// 预览兜底（hd-export-req-v0.2 F 节；`works.missing`「这几格会稍模糊」）：作品里原照片取不到、又找不到合格相近照片的格子，
+/// 预览兜底（hd-export-req-v0.2 F 节；`works.missing`；Q1 之后不再产生新兜底图，只剩旧作品迁移和纯函数）：作品里原照片取不到、又找不到合格相近照片的格子，
 /// 在重新生成预览**之前**从旧预览里裁出该格区域，存进作品目录（`WorkMeta.fallbackFile`），之后的预览重画和高清导出都用它
 /// 放大填充（App 侧 `.high` 插值，不用最近邻）。纯 Swift，Linux 有测试。
 ///
