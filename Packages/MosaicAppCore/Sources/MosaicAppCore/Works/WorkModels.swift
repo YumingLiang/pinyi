@@ -197,6 +197,12 @@ public enum WorkFingerprint {
             h.add([0])
             h.add(cell.crop)
         }
+        // 只在有形状时追加。普通拼图的字节与加形状字段之前相同。
+        if let shape = layout.shape {
+            h.add(Array("shape".utf8))
+            h.add(Array(shape.background.rawValue.utf8))
+            h.add(shape.mask.bitsV1Bytes)
+        }
         return prefix + h.hex
     }
 

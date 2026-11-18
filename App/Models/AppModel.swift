@@ -301,7 +301,7 @@ final class AppModel: ObservableObject {
         }
         // 先换成小色块占位，立刻丢掉上一张大预览图。
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
-        let alpha = state.flow.settings.overlayAlpha
+        let alpha = product.shapePlacement == nil ? state.flow.settings.overlayAlpha : 0
         // 清晰层：换作品（含换拼法）清空缓存；准备叠加用的目标图裁剪区（与底图同一 cropRect、同一 α）。
         detailLayer.configure(product: product)
         detailOverlay = nil

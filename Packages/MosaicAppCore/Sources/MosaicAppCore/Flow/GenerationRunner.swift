@@ -63,6 +63,8 @@ public struct GenerationProduct: Sendable {
     public var snapshot: IndexSnapshot
     /// 不够清楚而没用上的照片统计（来源页 `source.excluded_low_res` + 性能页）。
     public var lowRes: LowResReport = .disabled
+    /// 形状背景。只在 `generation.activeCells != nil` 时有意义；改背景不重新生成（设计 §6）。
+    public var shapeBackground: ShapeBackground?
     public var outcome: GenerationOutcome {
         var o = GenerationOutcome(generation)
         if lowRes.enabled { o.availableAfterFilter = snapshot.availableCount }
@@ -80,6 +82,18 @@ public struct GenerationProduct: Sendable {
 
     static func cellAssetIDs(_ g: MosaicGeneration, _ snapshot: IndexSnapshot) -> [String?] {
         g.assignment.tiles.map { row in row >= 0 && row < snapshot.assetIDsByRow.count ? snapshot.assetIDsByRow[row] : nil }
+    }
+
+    /// 预览 / 导出共用的形状掩码和背景。没有掩码时为 nil（普通拼图）。
+    public var shapePlacement: ShapePlacement? {
+        guard let mask = generation.activeCells else { return nil }
+        return ShapePlacement(background: shapeBackground ?? .white, mask: mask)
+    }
+
+    /// 改背景色，不重新匹配。没有形状时忽略。
+    public mutating func setShapeBackground(_ background: ShapeBackground) {
+        guard generation.activeCells != nil else { return }
+        shapeBackground = background
     }
 }
 
@@ -110,17 +124,28 @@ public struct GenerationRunner: Sendable {
 
     /// - Parameter progress: 整体完成比例 0…1（取样 5% / 匹配 60% / 分配 35%）。
     /// - Throws: `CancellationError`（Task 取消，正常路径）或引擎错误。
+    /// 协议入口。不传掩码，行为与加形状参数之前相同。
     public func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
                     progress: (@Sendable (Double) -> Void)? = nil) async throws -> GenerationProduct {
-        try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress, stage: nil)
+        try await run(target: target, snapshot: snapshot, settings: settings, seed: seed,
+                      activeCells: nil, shapeBackground: nil, progress: progress, stage: nil)
+    }
+
+    /// 形状生成。`activeCells == nil` 与协议入口相同。背景只在有掩码时记下，默认白。
+    public func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+                    activeCells: CellMask?, shapeBackground: ShapeBackground? = nil,
+                    progress: (@Sendable (Double) -> Void)? = nil) async throws -> GenerationProduct {
+        try await run(target: target, snapshot: snapshot, settings: settings, seed: seed,
+                      activeCells: activeCells, shapeBackground: shapeBackground, progress: progress, stage: nil)
     }
 
     /// 同上，另报告阶段（匹配 / 检查清晰度），进度页据此换文案。
     /// - Throws: 另外在剔除后一张可用的都不剩时抛 `NoSharpPhotosError`（→ `GenerationFailure.noMaterial`）。
     public func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
+                    activeCells: CellMask? = nil, shapeBackground: ShapeBackground? = nil,
                     progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
         try await run(target: target, snapshot: snapshot, settings: settings, seed: seed, carriedExcluded: [],
-                      progress: progress, stage: stage)
+                      activeCells: activeCells, shapeBackground: shapeBackground, progress: progress, stage: stage)
     }
 
     /// 「换一种拼法」：同一快照、同一参数，只换种子。
@@ -132,7 +157,8 @@ public struct GenerationRunner: Sendable {
     public func reshuffle(_ previous: GenerationProduct, target: PixelBuffer, settings: GenerationSettings, seed: UInt64,
                           progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
         try await run(target: target, snapshot: previous.snapshot, settings: settings, seed: seed,
-                      carriedExcluded: previous.lowRes.excludedAssetIDs, progress: progress, stage: stage)
+                      carriedExcluded: previous.lowRes.excludedAssetIDs, activeCells: previous.generation.activeCells,
+                      shapeBackground: previous.shapeBackground, progress: progress, stage: stage)
     }
 
     /// 相册变化：清掉「不合格」的缓存（照片可能刚下载回本机）。
@@ -141,13 +167,14 @@ public struct GenerationRunner: Sendable {
     // MARK: - 内部
 
     private func generateOnce(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
-                              noteSuffix: String, progress: (@Sendable (Double) -> Void)?) async throws -> MosaicGeneration {
+                              activeCells: CellMask?, noteSuffix: String,
+                              progress: (@Sendable (Double) -> Void)?) async throws -> MosaicGeneration {
         let timer = perf.map { GenerationPhaseTimer(clock: $0.clock) }
         let g = try await pipeline.generate(target: target, density: settings.density.density, snapshot: snapshot.library,
-                                            seed: seed) { p in
+                                            seed: seed, progress: { p in
             timer?.observe(MosaicProgressPhase(rawValue: p.phase.rawValue) ?? .assigning)
             progress?(p.overallFraction)
-        }
+        }, activeCells: activeCells)
         if let timer, let perf {
             let note = "\(settings.density.rawValue) \(g.layout.columns)×\(g.layout.rows) 素材 \(snapshot.availableCount)\(noteSuffix)"
             for s in timer.finish(cells: g.layout.cellCount, note: note) { perf.record(s) }
@@ -156,13 +183,14 @@ public struct GenerationRunner: Sendable {
     }
 
     private func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
-                     carriedExcluded: Set<String>, progress: (@Sendable (Double) -> Void)?,
+                     carriedExcluded: Set<String>, activeCells: CellMask?, shapeBackground: ShapeBackground?,
+                     progress: (@Sendable (Double) -> Void)?,
                      stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
         stage?(.matching)
         guard let checker = sharpness else {
             let g = try await generateOnce(target: target, snapshot: snapshot, settings: settings, seed: seed,
-                                           noteSuffix: "", progress: progress)
-            return GenerationProduct(generation: g, snapshot: snapshot)
+                                           activeCells: activeCells, noteSuffix: "", progress: progress)
+            return product(g, snapshot, background: shapeBackground)
         }
         // 进度分段：首轮生成 0–0.8、首轮探测 0.8–0.9，之后每轮重配（生成 + 探测）平分 0.9–1.0。
         let rounds = max(1, checker.maxRematchRounds)
@@ -192,6 +220,7 @@ public struct GenerationRunner: Sendable {
             let g: MosaicGeneration
             do {
                 g = try await generateOnce(target: target, snapshot: snap, settings: settings, seed: seed,
+                                           activeCells: activeCells,
                                            noteSuffix: round == 0 ? "" : " 重配第 \(round) 轮",
                                            progress: scaled(segment(round, probing: false)))
             } catch let e as MosaicError {
@@ -215,7 +244,11 @@ public struct GenerationRunner: Sendable {
             seenInRun.formUnion(distinct)
             let bad = pass.unusable
             // 没有 ID 的格子（理论上不会出现）也当作不合格处理：最终每格都必须是探测通过的照片。
-            let badCells = cellIDs.indices.filter { cellIDs[$0].map { bad.contains($0) } ?? true }
+            // 形状外 tile = -1，没有照片，不参与清晰度重配，也不占名额。
+            let badCells = cellIDs.indices.filter { i in
+                guard g.assignment.tiles[i] >= 0 else { return false }
+                return cellIDs[i].map { bad.contains($0) } ?? true
+            }
             if badCells.isEmpty {
                 return finish(g, snap, excluded, round)
             }
@@ -245,7 +278,16 @@ public struct GenerationRunner: Sendable {
             report.unresolvedCellCount = 0
             perf?.record(.sharpnessProbe, seconds: report.probeSeconds, items: report.probedCount, note: report.perfNote)
             progress?(1)
-            return GenerationProduct(generation: g, snapshot: snap, lowRes: report)
+            return product(g, snap, background: shapeBackground, lowRes: report)
         }
+    }
+
+    private func product(_ generation: MosaicGeneration, _ snapshot: IndexSnapshot, background: ShapeBackground?,
+                         lowRes: LowResReport = .disabled) -> GenerationProduct {
+        var product = GenerationProduct(generation: generation, snapshot: snapshot, lowRes: lowRes)
+        if generation.activeCells != nil {
+            product.shapeBackground = background ?? .white
+        }
+        return product
     }
 }

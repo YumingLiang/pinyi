@@ -69,6 +69,7 @@ struct LiveMosaicExporter: MosaicExporting {
 
         let fallbacks = request.cellFallbacks
         let ids = request.layout.cellAssignments.map { $0.localIdentifier.isEmpty ? nil : $0.localIdentifier }
+        let steps = ShapeStripExport.steps(columns: columns, rows: plan.rows, cellPixels: cp, shape: request.layout.shape)
         let thumbs = thumbnails
         let hq: ThumbnailRequest = {
             var r = ThumbnailRequest(targetPixelSize: cp)
@@ -82,12 +83,23 @@ struct LiveMosaicExporter: MosaicExporting {
         var next = 0
         var done = 0
         var fills = ExportFillStats()
-        let total = max(1, ids.count)
+        let total = max(1, steps.count)
         await withTaskGroup(of: (Int, PixelBuffer?, ExportFillStats.Fill).self) { group in
             func enqueue() {
-                while next < ids.count {
-                    let i = next
+                while next < steps.count {
+                    let step = steps[next]
+                    let i = step.index
                     next += 1
+                    if let background = step.background {
+                        let (r, g, b) = background.srgb8
+                        ctx.setFillColor(CGColor(colorSpace: cs, components: [
+                            CGFloat(r) / 255, CGFloat(g) / 255, CGFloat(b) / 255, 1,
+                        ])!)
+                        let col = i % columns, row = i / columns
+                        ctx.fill(CGRect(x: col * cp, y: h - (row + 1) * cp, width: cp, height: cp))
+                        done += 1
+                        continue
+                    }
                     if let tile = fallbacks[i] {
                         let drawn: Bool = autoreleasepool {
                             guard let img = ImagePixels.cgImage(tile) else { return false }

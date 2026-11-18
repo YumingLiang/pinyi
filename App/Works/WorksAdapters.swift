@@ -70,10 +70,21 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ctx.setFillColor(CGColor(colorSpace: cs, components: [1, 1, 1, 1])!)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .medium
+        let steps = ShapeStripExport.steps(columns: layout.cols, rows: layout.rows, cellPixels: cp, shape: layout.shape)
+        for step in steps {
+            guard let background = step.background else { continue }
+            let (r, g, b) = background.srgb8
+            ctx.setFillColor(CGColor(colorSpace: cs, components: [
+                CGFloat(r) / 255, CGFloat(g) / 255, CGFloat(b) / 255, 1,
+            ])!)
+            let cx = step.index % layout.cols, cy = step.index / layout.cols
+            ctx.fill(CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
+        }
 
-        // 兜底格：不取照片，旧预览裁出的小图放大填满（双线性 / .high，不用最近邻）
+        // 兜底格：不取照片，旧预览裁出的小图放大填满（双线性 / .high，不用最近邻）。形状外不画兜底图。
         ctx.interpolationQuality = .high
-        for (cell, tile) in fallbacks where cell < layout.cellCount {
+        let outside = Set(steps.compactMap { $0.background == nil ? nil : $0.index })
+        for (cell, tile) in fallbacks where cell < layout.cellCount && !outside.contains(cell) {
             guard let img = ImagePixels.cgImage(tile) else { continue }
             let cx = cell % layout.cols, cy = cell / layout.cols
             ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
@@ -81,7 +92,8 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ctx.interpolationQuality = .medium
 
         let ids: [String?] = layout.cellAssignments.enumerated().map { i, c in
-            c.localIdentifier.isEmpty || fallbacks[i] != nil ? nil : c.localIdentifier
+            if outside.contains(i) { return nil }
+            return c.localIdentifier.isEmpty || fallbacks[i] != nil ? nil : c.localIdentifier
         }
         let cols = layout.cols
         let thumbs = thumbnails
@@ -94,7 +106,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
                 ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
             }
         }
-        let alpha = OverlayBlendLimits.clamp(overlayAlpha)
+        let alpha = layout.shape == nil ? OverlayBlendLimits.clamp(overlayAlpha) : 0
         if alpha > 0, let target, let t = ImagePixels.cgImage(target) {
             let crop = Self.scaledCrop(layout, toTargetWidth: target.width, height: target.height)
             if let part = t.cropping(to: crop.integral) {

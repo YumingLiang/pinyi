@@ -148,7 +148,8 @@ public struct ExportRequest: Sendable {
                 cellFallbacks: [Int: PixelBuffer] = [:]) {
         self.layout = layout
         self.target = target
-        self.overlayAlpha = target == nil ? 0 : (overlayAlpha ?? layout.params.overlayAlpha)
+        // 形状模式叠加固定 0（设计 §6）。无形状时与原来一样：没有目标图为 0，否则用传入值或布局里的强度。
+        self.overlayAlpha = (target == nil || layout.shape != nil) ? 0 : (overlayAlpha ?? layout.params.overlayAlpha)
         self.tier = tier
         self.cellFallbacks = cellFallbacks
     }
