@@ -19,19 +19,24 @@ struct CoreTextOutline: TextOutlineProviding {
         return TextOutlineAssembler.assemble(lines: placements)
     }
 
-    /// 设计点名 `UIFont.systemFont(ofSize:weight:)`。字号查询留在主线程：新 SDK 上 UIFont 可能标了 MainActor，
-    /// 协议方法本身不能改成 async。已经在主线程就直接取，避免 `main.sync` 把自己卡死。
+    /// 设计点名 `UIFont.systemFont(ofSize:weight:)`。取字体留在主线程。
+    /// `MainActor.assumeIsolated` 的返回值必须是 Sendable，而 Xcode 26.6 的 `CTFont` 不是，
+    /// 所以不能把 `CTFont` 当这个闭包的返回值（PR #26，run 44218303801）。
     private static func systemHeavyFont(size: CGFloat) -> CTFont {
+        final class Holder: @unchecked Sendable {
+            var font: CTFont?
+        }
+        let holder = Holder()
+        let fill = {
+            holder.font = UIFont.systemFont(ofSize: size, weight: .heavy) as CTFont
+        }
         if Thread.isMainThread {
-            return MainActor.assumeIsolated {
-                UIFont.systemFont(ofSize: size, weight: .heavy) as CTFont
-            }
+            MainActor.assumeIsolated(fill)
+        } else {
+            DispatchQueue.main.sync { MainActor.assumeIsolated(fill) }
         }
-        return DispatchQueue.main.sync {
-            MainActor.assumeIsolated {
-                UIFont.systemFont(ofSize: size, weight: .heavy) as CTFont
-            }
-        }
+        guard let font = holder.font else { preconditionFailure("system heavy font") }
+        return font
     }
 
     private static func line(for text: String, font: CTFont) -> CTLine {
@@ -89,8 +94,11 @@ struct CoreTextOutline: TextOutlineProviding {
     }
 
     private static func font(of run: CTRun) -> CTFont? {
-        let attributes = CTRunGetAttributes(run) as NSDictionary
-        return attributes[kCTFontAttributeName] as? CTFont
+        let attributes = CTRunGetAttributes(run)
+        let key = Unmanaged.passUnretained(kCTFontAttributeName).toOpaque()
+        guard let raw = CFDictionaryGetValue(attributes, key) else { return nil }
+        guard CFGetTypeID(raw) == CTFontGetTypeID() else { return nil }
+        return Unmanaged<CTFont>.fromOpaque(raw).takeUnretainedValue()
     }
 
     private static func shapeElements(of path: CGPath) -> [ShapePath.Element] {
