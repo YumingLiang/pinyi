@@ -24,6 +24,8 @@ final class ShapeResultIdentityTests: XCTestCase {
             return (h, saver)
         }
         XCTAssertNotNil(c.product?.shapeFrame)
+        XCTAssertNil(c.target, "用形状拼不经过选目标图")
+        XCTAssertTrue(c.canExport, "没有用户目标图时形状结果也要能导出")
         XCTAssertFalse(c.allowsWorkSave)
         return (h, saver)
     }

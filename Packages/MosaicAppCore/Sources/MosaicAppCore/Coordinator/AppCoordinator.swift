@@ -639,8 +639,10 @@ public final class AppCoordinator {
     // MARK: - 导出 / 保存 / 分享（T8）
 
     /// 能否开始导出：有结果、没有在生成、没有在导出。
+    /// 照片拼图还要有用户选的目标图。形状拼图的目标图是生成时合成的，不经过 `setTarget`，没有用户目标图也要能导出。
     public var canExport: Bool {
-        guard product != nil, target != nil, !state.isGenerating, !state.export.isBusy else { return false }
+        guard let product, !state.isGenerating, !state.export.isBusy else { return false }
+        if product.shapeFrame == nil, target == nil { return false }
         if case .result = state.flow.generation.phase { return true }
         return false
     }

@@ -12,7 +12,7 @@ final class AppModel: ObservableObject {
     let buildFlags: BuildFlags
     let perf: PerfRecorder
     let lifecycle: AppLifecycle
-    private let thumbnails: PhotoKitThumbnails
+    private let thumbnails: any ThumbnailProviding
     /// 「我的作品」（逻辑在 MosaicAppCore 的 `WorksController`）。
     let works: WorksModel
     /// 结果页预览清晰层（放大后按可见格子取 256 / 512 / 1024 px 方图，盖在底图上）。
@@ -38,19 +38,25 @@ final class AppModel: ObservableObject {
     private var changeObserver: LibraryChangeObserver?
 
     init(buildFlags: BuildFlags) {
-        self.buildFlags = buildFlags
         let perf = PerfRecorder()
         let lifecycle = AppLifecycle()
         let thumbnails = PhotoKitThumbnails()
-        self.perf = perf
-        self.lifecycle = lifecycle
-        self.thumbnails = thumbnails
-        self.detailLayer = PreviewDetailLayer(thumbnails: thumbnails, perf: perf)
-        // 导出成功 → 中继 → WorksController（只刷新「存到我的作品」按钮，导出不再自动存，需求 B10-1；
-        // AppDependencies 先于协调器创建，所以经中继转）
         let relay = ExportSuccessRelay()
-        let coordinator = AppCoordinator(dependencies: .live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
-                                                             onExportSucceeded: relay.handler))
+        let dependencies = AppDependencies.live(lifecycle: lifecycle, thumbnails: thumbnails, perf: perf,
+                                                 onExportSucceeded: relay.handler)
+        self.init(buildFlags: buildFlags, dependencies: dependencies, detailThumbnails: thumbnails,
+                  worksDirectory: WorksLocation.directory, lifecycle: lifecycle, relay: relay)
+    }
+
+    /// 与上面的生产构造同一套接线。测试传入合成依赖和临时作品目录，不读私人照片。
+    init(buildFlags: BuildFlags, dependencies: AppDependencies, detailThumbnails: PhotoKitThumbnails,
+         worksDirectory: URL, lifecycle: AppLifecycle, relay: ExportSuccessRelay) {
+        self.buildFlags = buildFlags
+        self.perf = dependencies.perf
+        self.lifecycle = lifecycle
+        self.thumbnails = dependencies.thumbnails
+        self.detailLayer = PreviewDetailLayer(thumbnails: detailThumbnails, perf: dependencies.perf)
+        let coordinator = AppCoordinator(dependencies: dependencies)
         self.coordinator = coordinator
         // 4b 补格：索引快照 + 生成用的同一套匹配器（一次匹配，不做逐张清晰度探测；架构师 11-17），零网络
         let runner = coordinator.dependencies.generator as? GenerationRunner
@@ -62,10 +68,10 @@ final class AppModel: ObservableObject {
             },
             existence: existence,
             pipeline: runner?.pipeline ?? MosaicPipeline(assigner: GreedyAssigner(kernel: KernelProvider.make())))
-        let worksController = WorksController(store: FileWorksStore(directory: WorksLocation.directory,
-                                                                    images: ImageIOWorkImages(thumbnails: thumbnails)),
+        let worksController = WorksController(store: FileWorksStore(directory: worksDirectory,
+                                                                    images: ImageIOWorkImages(thumbnails: dependencies.thumbnails)),
                                               existence: existence,
-                                              images: ImageIOWorkImages(thumbnails: thumbnails),
+                                              images: ImageIOWorkImages(thumbnails: dependencies.thumbnails),
                                               rematcher: rematcher)
         worksController.attach(resultContext: { [weak coordinator] in
             guard let c = coordinator else {
@@ -300,17 +306,23 @@ final class AppModel: ObservableObject {
         previewTask?.cancel()
         previewTask = nil
         resultZoom.reset()
-        guard let product = coordinator.product, let target = coordinator.target else {
+        guard let product = coordinator.product else {
+            resultImage = nil
+            return
+        }
+        // 照片拼图必须有用户选的目标图。形状从「用形状拼」进来，不经过 setTarget。
+        if product.shapeFrame == nil, coordinator.target == nil {
             resultImage = nil
             return
         }
         // 先换成小色块占位，立刻丢掉上一张大预览图。
         resultImage = MosaicPreviewRenderer.colorBlocks(product)
         let alpha = product.shapeFrame == nil ? state.flow.settings.overlayAlpha : 0
+        let target = coordinator.target
         // 清晰层：换作品（含换拼法）清空缓存；准备叠加用的目标图裁剪区（与底图同一 cropRect、同一 α）。
         detailLayer.configure(product: product)
         detailOverlay = nil
-        if OverlayBlendLimits.clamp(alpha) > 0, let t = ImagePixels.cgImage(target) {
+        if OverlayBlendLimits.clamp(alpha) > 0, let target, let t = ImagePixels.cgImage(target) {
             let crop = product.generation.layout.cropRect
             // 长边 > 2048 先缩到 2048 再持有：放大后这一层本来就是糊的，和导出一致，避免结果页一直攥着一份 4096 目标图。
             var overlay = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height))

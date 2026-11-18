@@ -20,8 +20,9 @@ enum MosaicPreviewRenderer {
     }
 
     /// 缩略图预览。在调用方的隔离域（MainActor）上画，取图在后台有界并发。
+    /// 形状结果没有用户目标图：`target == nil`，并且形状本来就不叠加目标图。
     @MainActor
-    static func thumbnails(_ product: GenerationProduct, target: PixelBuffer, overlayAlpha: Double,
+    static func thumbnails(_ product: GenerationProduct, target: PixelBuffer?, overlayAlpha: Double,
                            thumbnails: any ThumbnailProviding) async -> CGImage? {
         let g = product.generation
         let cp = cellPixels(for: g)
@@ -55,7 +56,7 @@ enum MosaicPreviewRenderer {
             return nil   // 被取消
         }
         let alpha = product.shapeFrame == nil ? OverlayBlendLimits.clamp(overlayAlpha) : 0
-        if alpha > 0, let t = ImagePixels.cgImage(target) {
+        if alpha > 0, let target, let t = ImagePixels.cgImage(target) {
             let crop = g.layout.cropRect
             if let cropped = t.cropping(to: CGRect(x: crop.x, y: crop.y, width: crop.width, height: crop.height)) {
                 ctx.setAlpha(alpha)
