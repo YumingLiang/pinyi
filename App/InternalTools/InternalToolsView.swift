@@ -119,37 +119,84 @@ struct TestAlbumView: View {
     }
 }
 
-/// 预览文件读取计数。只显示次数。正对照写临时合成图，再走作品列表同一个 `loadImage`。
+/// 预览文件读取计数。屏幕上的数字只在按下按钮时抄一次，进入页面不抄。
+/// 正对照直接调用 `loadImage`，不经过作品列表。测的时候不要清零。
 struct PreviewReadProbeView: View {
-    @State private var count = PreviewReadProbe.fileReadCount
-    @State private var controlOK: Bool?
+    @State private var session: PreviewReadSession?
+    @State private var controlNote: String?
 
     var body: some View {
         List {
             Section {
                 Text(verbatim: "作品列表和查看页读预览文件时，次数加 1。日志类别 preview-read，只有次数。")
                     .font(.footnote)
-                Text(verbatim: "读取次数 \(count)").font(.body.monospacedDigit())
-                Button { count = PreviewReadProbe.fileReadCount } label: { Text(verbatim: "刷新次数") }
-                Button {
-                    PreviewReadProbe.reset()
-                    count = 0
-                    controlOK = nil
-                } label: { Text(verbatim: "清零") }
+                Text(verbatim: "进入本页不抄次数。没有按「刷新次数」之前，屏幕上没有测量值。当时看到的 0 不能当成没读过。")
+                    .font(.footnote)
+                Text(verbatim: "顺序：记下起点，去做操作，操作结束后再刷新。测的时候不要清零。起点之后马上刷新得到的 0，不能当成操作期间没读。")
+                    .font(.footnote)
+                Text(verbatim: "正对照只直接调用 loadImage，不经过作品列表。它的增量不能代替列表或查看页。")
+                    .font(.footnote)
             }
             Section {
                 Button {
-                    controlOK = PreviewReadProbe.positiveControl()
-                    count = PreviewReadProbe.fileReadCount
-                } label: { Text(verbatim: "正对照：读一张合成图") }
-                if let controlOK {
-                    Text(verbatim: controlOK ? "正对照成功，次数应增加 1" : "正对照失败")
+                    session = PreviewReadSession(baselineCount: PreviewReadProbe.fileReadCount, at: Date())
+                    controlNote = nil
+                } label: { Text(verbatim: "记下当前次数作为本段起点") }
+                if let session {
+                    Text(verbatim: "本段起点 \(session.baseline.count) 次，\(Self.stamp(session.baseline.at))")
+                        .font(.body.monospacedDigit())
+                    if let refreshed = session.refreshed, let delta = session.deltaSinceBaseline {
+                        Text(verbatim: "上次刷新 \(refreshed.count) 次，相对起点 +\(delta)。时间范围 \(Self.stamp(session.baseline.at))–\(Self.stamp(refreshed.at))")
+                            .font(.body.monospacedDigit())
+                        Text(verbatim: "这个差只覆盖起点到这次刷新。刷新前的数字不是结论。")
+                            .font(.footnote)
+                    } else {
+                        Text(verbatim: "本段还没有刷新。现在不能下结论。")
+                            .font(.footnote)
+                    }
+                } else {
+                    Text(verbatim: "还没有本段起点。")
                         .font(.footnote)
                 }
+                Button {
+                    guard var session else { return }
+                    session.noteRefresh(count: PreviewReadProbe.fileReadCount, at: Date())
+                    self.session = session
+                } label: { Text(verbatim: "刷新次数") }
+                .disabled(session == nil)
+            }
+            Section {
+                Button {
+                    let before = PreviewReadProbe.fileReadCount
+                    let ok = PreviewReadProbe.positiveControl()
+                    let delta = PreviewReadProbe.fileReadCount - before
+                    if var session {
+                        session.noteControl(delta: delta)
+                        self.session = session
+                    }
+                    controlNote = ok && delta == 1
+                        ? "正对照增量 \(delta)。这只说明 loadImage 被调用了一次，不是作品列表。"
+                        : "正对照增量 \(delta)，调用\(ok ? "成功" : "失败")。不能当成列表已验证。"
+                } label: { Text(verbatim: "正对照：读一张合成图") }
+                if let controlNote {
+                    Text(verbatim: controlNote).font(.footnote)
+                }
+            }
+            Section {
+                Text(verbatim: "清零会丢掉本段起点。清零后的 0 不是保护结果。")
+                    .font(.footnote)
+                Button {
+                    PreviewReadProbe.reset()
+                    session = nil
+                    controlNote = "已清零并放弃本段。清零后的 0 不是测量结果。"
+                } label: { Text(verbatim: "放弃本段并清零") }
             }
         }
         .navigationTitle(Text(verbatim: "预览读取"))
-        .onAppear { count = PreviewReadProbe.fileReadCount }
+    }
+
+    private static func stamp(_ date: Date) -> String {
+        date.formatted(.dateTime.hour().minute().second())
     }
 }
 #endif

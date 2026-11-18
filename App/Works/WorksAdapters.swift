@@ -200,30 +200,31 @@ import os
 
 /// 内测计数：列表和查看页读预览文件的真实入口是 `ImageIOWorkImages.loadImage` / `readImage`。
 /// 日志只有次数。不记路径、作品 ID、相册名或错误内容。不改变谁可以读。
+///
+/// `loadImage` 是非隔离同步函数，查看页从 `WorksModel`（MainActor）调用，正对照和测试会在别的线程调用。
+/// `readImage` 是非隔离 async。次数因此不能放在 MainActor 上，也不能是非隔离的全局 `var`。
+/// 可变的 `Int` 放进 `LockedState`（全仓库的锁原语）；这里只留一个不可变的 `let`。
 enum PreviewReadProbe {
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "pinyi", category: "preview-read")
-    private static let lock = NSLock()
-    private static var fileReads = 0
+    private static let fileReads = LockedState(0)
 
-    static var fileReadCount: Int { withLock { fileReads } }
+    static var fileReadCount: Int { fileReads.get() }
 
     static func reset() {
-        let n = withLock { () -> Int in
-            fileReads = 0
-            return 0
-        }
-        log.info("previewFileReads \(n, privacy: .public)")
+        fileReads.set(0)
+        log.info("previewFileReads \(0, privacy: .public)")
     }
 
     static func recordFileRead() {
-        let n = withLock { () -> Int in
-            fileReads += 1
-            return fileReads
+        let n = fileReads.withLock { value -> Int in
+            value += 1
+            return value
         }
         log.info("previewFileReads \(n, privacy: .public)")
     }
 
-    /// 在临时目录写一张合成图，再走和作品列表相同的 `loadImage`。成功时读取次数加 1。
+    /// 在临时目录写一张合成图，再直接调用 `ImageIOWorkImages.loadImage`。成功时读取次数加 1。
+    /// 不经过作品列表，也不经过 `WorksState.decodePreview`。
     static func positiveControl() -> Bool {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pinyi-probe-\(UUID().uuidString).jpg")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -247,11 +248,41 @@ enum PreviewReadProbe {
         CGImageDestinationAddImage(dest, image, nil)
         return CGImageDestinationFinalize(dest)
     }
+}
 
-    private static func withLock<T>(_ body: () -> T) -> T {
-        lock.lock()
-        defer { lock.unlock() }
-        return body()
+/// 一次抄下来的次数和时间。页面上的数字只来自这种抄录，不会自动跟着读文件变。
+struct PreviewReadSample: Equatable, Sendable {
+    var count: Int
+    var at: Date
+}
+
+/// 一段取证。起点、正对照增量、操作后的手动刷新分开记。
+/// 本类型不调用 `reset`。没刷新过时 `canUseAsMeasurement` 为 false，不能把 0 当成没读过。
+struct PreviewReadSession: Equatable, Sendable {
+    var baseline: PreviewReadSample
+    /// 操作结束后手动刷新抄到的次数。nil 表示这段还没有刷新。
+    var refreshed: PreviewReadSample?
+    /// 正对照调用前后的差。只覆盖 `loadImage`，不覆盖作品列表。
+    var controlDelta: Int?
+
+    init(baselineCount: Int, at: Date) {
+        baseline = PreviewReadSample(count: baselineCount, at: at)
+    }
+
+    var deltaSinceBaseline: Int? {
+        guard let refreshed else { return nil }
+        return refreshed.count - baseline.count
+    }
+
+    /// 只有操作之后手动刷新过，这段次数才是测量值。
+    var canUseAsMeasurement: Bool { refreshed != nil }
+
+    mutating func noteRefresh(count: Int, at: Date) {
+        refreshed = PreviewReadSample(count: count, at: at)
+    }
+
+    mutating func noteControl(delta: Int) {
+        controlDelta = delta
     }
 }
 #endif
