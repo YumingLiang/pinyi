@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import MosaicAppCore
 
 /// 两行文字。焦点和组合标记留在这里，正文仍交给外面的模型。
 struct ShapeTextLinesEditor: View {

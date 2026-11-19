@@ -202,7 +202,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `shape.text.second_kept` | 第一行换行粘贴会盖掉第二行已有正文，整次不改 | 第二行已经有文字，没有改掉它。 |
 | `shape.text.empty` | 空正文不能开始拼图 | 先输入文字，才能开始拼图。 |
 | `shape.text.unreadable` | 合法文字排不开或不达 24 格 | 这组文字没法按当前大小排开，请换一组文字。 |
-| `shape.text.summary` | 确认页和预览页的文字摘要 | 文字：{正文} · {palette} · {background} |
+| `shape.text.summary` | 确认页和预览页的文字摘要 | 文字：{text} · {palette} · {background} |
 | `shape.preset.heart` | 爱心 | 爱心 |
 | `shape.preset.star` | 星星 | 星星 |
 | `shape.preset.circle` | 圆形 | 圆形 |
