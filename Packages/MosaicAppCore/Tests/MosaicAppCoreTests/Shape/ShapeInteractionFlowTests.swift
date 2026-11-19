@@ -112,6 +112,71 @@ final class ShapeInteractionFlowTests: XCTestCase {
         c.stop()
     }
 
+    /// 生成进度页盖住设置，按钮点不到；但 `setShapePalette` 没有生成中保护，完成回调在 MainActor 的 await 之后仍会跑。
+    /// 进度页只有取消。取消后回到配置，晚到的完成回调不能把后选配色盖回去，也不能把旧结果重新变成可导出。
+    func testPaletteChangedDuringGenerationStaysAndBlocksExportOfOldResult() async throws {
+        let gate = GatePoint()
+        let gen = GatedGenerator(gate: gate)
+        let h = CoordinatorHarness(assets: 300, generator: gen)
+        let c = h.coordinator
+        c.start()
+        await c.settle()
+        c.beginShape()
+        c.setDensity(.coarse)
+        c.flowSend(.next)
+        let started = Task { await c.generateTapped() }
+        await gate.reached.wait()
+        XCTAssertTrue(c.state.isGenerating)
+        c.setShapePalette(.blue)
+        XCTAssertEqual(c.state.flow.shape?.palette, .blue)
+        await gate.release.open()
+        await started.value
+        await c.settle()
+        guard case .result = c.state.flow.generation.phase else {
+            return XCTFail("生成没有完成 \(c.state.flow.generation.phase)")
+        }
+        XCTAssertEqual(c.state.flow.shape?.palette, .blue, "完成后不能把用户后选的配色盖回开跑时的自动配色")
+        XCTAssertNotNil(c.product?.shapeFrame, "开跑时的结果可以留下")
+        XCTAssertFalse(c.canExport, "旧结果不能按新配色导出")
+        XCTAssertTrue(c.shapeEditsNeedRegeneration)
+        XCTAssertFalse(c.allowsWorkSave)
+
+        c.startNewMosaicTapped()
+        c.flowSend(.back)
+        XCTAssertEqual(c.state.flow.step, .result)
+        XCTAssertEqual(c.state.flow.shape?.palette, .auto, "还没开始新生成就返回，恢复这次结果自己的配色")
+        XCTAssertTrue(c.canExport)
+        c.stop()
+    }
+
+    func testCancelThenLaterCompletionDoesNotRestoreOldPaletteOrExport() async throws {
+        let gate = GatePoint()
+        let gen = GatedGenerator(gate: gate)
+        let h = CoordinatorHarness(assets: 300, generator: gen)
+        let c = h.coordinator
+        c.start()
+        await c.settle()
+        c.beginShape()
+        c.flowSend(.next)
+        let source = c.state.flow.source.selection
+        let started = Task { await c.generateTapped() }
+        await gate.reached.wait()
+        c.send(.cancelTapped)
+        c.send(.cancelConfirmed)
+        XCTAssertFalse(c.state.isGenerating)
+        XCTAssertEqual(c.state.flow.step, .settings)
+        c.setShapePalette(.blue)
+        await gate.release.open()
+        await started.value
+        await c.settle()
+        XCTAssertEqual(c.state.flow.shape?.palette, .blue)
+        XCTAssertEqual(c.state.flow.source.selection, source)
+        XCTAssertNotEqual(c.state.flow.step, .result)
+        XCTAssertFalse(c.canExport)
+        XCTAssertNil(c.state.unsavedPrompt)
+        c.stop()
+    }
+
     func testPhotoAgainStillAsksToSave() async throws {
         let h = CoordinatorHarness(assets: 300)
         let c = h.coordinator

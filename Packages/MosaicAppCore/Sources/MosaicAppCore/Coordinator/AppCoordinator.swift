@@ -531,7 +531,9 @@ public final class AppCoordinator {
         }
         state.flow.syncWithGeneration()
         if state.flow.step == .result, case .result = state.flow.generation.phase {
-            realignShapeChoiceWithResult()
+            // 完成回调只补回被清掉的形状标记。生成途中用户已经改过的形状、配色或背景留在界面上，
+            // 不把开跑时的选择盖回去，否则旧结果会重新变成可导出。
+            realignShapeChoiceWithResultIfUnchanged()
         }
         for eff in effects {
             switch eff {

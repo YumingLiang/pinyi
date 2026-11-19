@@ -228,6 +228,14 @@ extension AppCoordinator {
         state.flow.shape = shapeIdentity
     }
 
+    /// 生成刚完成时调用。用户没改选择，或选择已被清掉，才对齐到这次结果。
+    /// 已经改成别的形状、配色或背景时保留后选值；结果仍记着开跑时的选择，所以还不能导出。
+    func realignShapeChoiceWithResultIfUnchanged() {
+        guard product?.shapeFrame != nil, let shapeIdentity else { return }
+        if let current = state.flow.shape, current != shapeIdentity { return }
+        state.flow.shape = shapeIdentity
+    }
+
     /// 开始生成新图（由 `send` 在 `.run` 之前调用）：丢弃旧结果，换上新目标图。
     func commitQuickAgain() {
         if let t = pendingTarget { target = t; targetGeneration += 1 }
