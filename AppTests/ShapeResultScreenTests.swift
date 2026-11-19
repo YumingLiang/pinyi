@@ -1,5 +1,6 @@
 import CoreGraphics
 import ImageIO
+import UIKit
 import UniformTypeIdentifiers
 import XCTest
 import MosaicCore
@@ -179,7 +180,9 @@ final class ShapeResultScreenTests: XCTestCase {
             TextComposition.lines(from: "生日快乐\n宝贝"),
         ]
         XCTAssertEqual(groups[3], ["生日快乐", "宝贝"])
+        var problems: [String] = []
         for lines in groups {
+            let label = lines.joined(separator: "/")
             let harness = try await makeHarness()
             defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
             let model = harness.model
@@ -187,11 +190,17 @@ final class ShapeResultScreenTests: XCTestCase {
                 model.coordinator.state.indexStatus.hasCompletedInitialScan && model.coordinator.state.indexStatus.available > 0
             }
             XCTAssertTrue(ready, "合成素材没有扫进索引")
-            try await model.generateText(lines: lines, palette: .warmRed, background: .white)
+            do {
+                try await model.generateText(lines: lines, palette: .warmRed, background: .white)
+            } catch {
+                problems.append("\(label) \(error)")
+                continue
+            }
             await passShortagePrompt(model)
             await model.coordinator.settle()
             guard case .result = model.flow.generation.phase else {
-                return XCTFail("\(lines) 没有进入结果页 \(model.flow.generation.phase)")
+                problems.append("\(label) 没有进入结果页 \(model.flow.generation.phase)")
+                continue
             }
             let product = try XCTUnwrap(model.coordinator.product)
             let mask = try XCTUnwrap(product.shapeFrame).mask
@@ -206,6 +215,8 @@ final class ShapeResultScreenTests: XCTestCase {
             let image = try XCTUnwrap(model.resultImage)
             XCTAssertEqual(image.width, mask.columns * previewCell, "\(lines)")
             XCTAssertEqual(image.height, mask.rows * previewCell, "\(lines)")
+            attachRaster(image, name: "preview-\(label)")
+            attachMask(mask, name: label)
             let inside = try XCTUnwrap((0..<mask.cellCount).first { mask.isActive($0) })
             let previewPixel = pixelFromTop(try bitmap(image), width: image.width, columns: mask.columns,
                                             cellPixels: previewCell, index: inside)
@@ -218,7 +229,33 @@ final class ShapeResultScreenTests: XCTestCase {
             let exportPixel = pixelFromTop(try bitmap(jpeg), width: jpeg.width, columns: mask.columns,
                                            cellPixels: exportCell, index: inside)
             assertNear(exportPixel, tile, tolerance: 36, label: "\(lines) 导出内格")
+            attachRaster(jpeg, name: "jpeg-\(label)")
         }
+        XCTAssertTrue(problems.isEmpty, problems.joined(separator: "\n"))
+    }
+
+    /// 测试里光栅出的图，不是界面截图，也不证明肉眼可读。
+    private func attachRaster(_ image: CGImage, name: String) {
+        let attachment = XCTAttachment(image: UIImage(cgImage: image))
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func attachMask(_ mask: CellMask, name: String) {
+        let w = mask.columns, h = mask.rows
+        guard w > 0, h > 0,
+              let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return }
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+        for index in 0..<mask.cellCount where mask.isActive(index) {
+            ctx.fill(CGRect(x: index % w, y: h - 1 - index / w, width: 1, height: 1))
+        }
+        guard let image = ctx.makeImage() else { return }
+        attachRaster(image, name: "mask-\(name)")
     }
 
     private struct Harness {
