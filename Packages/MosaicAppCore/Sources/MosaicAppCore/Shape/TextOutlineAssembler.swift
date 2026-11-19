@@ -1,6 +1,7 @@
 import Foundation
 
-/// 一个字形已经换成「点、y 向上」的轮廓，原点在该字形的原点（`CTFontCreatePathForGlyph` 再乘上字号 / unitsPerEm）。
+/// 一个字形已经换成「点、y 向上」的轮廓，原点在该字形的原点。
+/// `CTFontCreatePathForGlyph` 自己会按字号把字体单位变成点；不要再乘字号 / unitsPerEm。
 public struct TextGlyphPlacement: Sendable, Equatable {
     /// 路径元素。y 向上，相对于 `originX` / `originY`。
     public var elements: [ShapePath.Element]
@@ -9,10 +10,14 @@ public struct TextGlyphPlacement: Sendable, Equatable {
     /// 字形原点的 y（点，相对于这一行基线，向上为正）。
     public var originY: Double
 
-    public init(elements: [ShapePath.Element], originX: Double, originY: Double) {
+    /// 这个字形对应的原文。一个汉字或一个英文数字。取不到时为空。
+    public var text: String
+
+    public init(elements: [ShapePath.Element], originX: Double, originY: Double, text: String = "") {
         self.elements = elements
         self.originX = originX
         self.originY = originY
+        self.text = text
     }
 }
 
@@ -49,20 +54,35 @@ public enum TextOutlineAssembler {
         let advances = lines.map { $0.advance.isFinite ? $0.advance : 0 }
         let maxAdvance = advances.max() ?? 0
         var raw: [ShapePath.Element] = []
+        var placed: [(text: String, elements: [ShapePath.Element])] = []
         for (i, line) in lines.enumerated() {
             let dx = (maxAdvance - advances[i]) / 2
             let baseline = Double(i) * lineSpacingEm * fontSize
             for glyph in line.glyphs {
                 let ox = glyph.originX.isFinite ? glyph.originX : 0
                 let oy = glyph.originY.isFinite ? glyph.originY : 0
-                raw.append(contentsOf: transformed(glyph.elements) { p in
+                let elements = transformed(glyph.elements) { p in
                     // y 向上的点，翻成 y 向下：这一行的基线在 baseline，点在基线之上则 y 更小。
                     ShapePoint(dx + ox + p.x, baseline - (oy + p.y))
-                })
+                }
+                raw.append(contentsOf: elements)
+                placed.append((glyph.text, elements))
             }
         }
-        guard let box = ShapePath.normalizedReportingBounds(raw) else { return nil }
-        return TextOutline(path: box.path, widthEm: box.width / fontSize, heightEm: box.height / fontSize)
+        guard let box = ShapePath.normalizedReportingBounds(raw),
+              let bounds = ShapePath.curveBounds(raw) else { return nil }
+        let spanW = bounds.maxX - bounds.minX
+        let spanH = bounds.maxY - bounds.minY
+        let glyphs = placed.compactMap { item -> TextGlyphBox? in
+            guard let b = ShapePath.curveBounds(item.elements), spanW > 0, spanH > 0 else { return nil }
+            return TextGlyphBox(text: item.text,
+                                x: (b.minX - bounds.minX) / spanW,
+                                y: (b.minY - bounds.minY) / spanH,
+                                width: (b.maxX - b.minX) / spanW,
+                                height: (b.maxY - b.minY) / spanH)
+        }
+        return TextOutline(path: box.path, widthEm: box.width / fontSize, heightEm: box.height / fontSize,
+                           glyphs: glyphs)
     }
 
     private static func transformed(_ elements: [ShapePath.Element],

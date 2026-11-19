@@ -88,6 +88,8 @@ public struct GenerationMachine: Sendable, Hashable {
         /// 「再调一调」回来后只改了叠加强度：不重新生成，直接回到上一次的结果（布局不变，作品 id 不丢）。
         /// 由协调器判断「除叠加强度外输入都没变」后发出；没有上一次结果时忽略。
         case restoreLastResult
+        /// 这次文字运行已经不是当前选择。结束运行，不进入结果页。
+        case staleRunDiscarded(runID: Int)
     }
 
     public enum Effect: Sendable, Hashable {
@@ -208,6 +210,11 @@ public struct GenerationMachine: Sendable, Hashable {
         case (.result, .backToSettings), (.failed, .backToSettings):
             phase = .idle
             return []
+        case (.running(let id, _, _), .staleRunDiscarded(let rid)) where id == rid,
+             (.confirmingCancel(let id, _, _), .staleRunDiscarded(let rid)) where id == rid:
+            phase = .idle
+            fraction = 0
+            return [.setGenerationActive(false)]
 
         default:
             return []

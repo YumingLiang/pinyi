@@ -1,4 +1,6 @@
+import UIKit
 import XCTest
+import MosaicCore
 import MosaicAppCore
 @testable import PhotoMosaic
 
@@ -70,7 +72,60 @@ final class CoreTextOutlineTests: XCTestCase {
         assertBorderUncovered(huiGrid, "回")
     }
 
-    /// 「宝贝」比「生日快乐」短，第二行应在中间，而不是贴左。
+    /// 需求 1c 的正式四组。第四组是真实换行，不是斜杠，也不是两个字符「\」「n」。
+    /// design/shape-mosaic-v0.1.md:39、:56–57 与 qa/shape-mosaic-test-checklist.md:27：
+    /// 硬门是光栅 `cellsPerEm` ≥ 24，四字一行约 27–28。逐字曲线只打印，不用墨水宽高拒绝。
+    /// 一组失败不截断后面的日志。`cellsPerEm` 通过也不等于肉眼可读。
+    func testOfficialFourGroupsUseRealGlyphBoundsOnFineGrid() throws {
+        let groups: [(name: String, lines: [String])] = [
+            ("520", TextComposition.lines(from: "520")),
+            ("满月快乐", TextComposition.lines(from: "满月快乐")),
+            ("LOVE", TextComposition.lines(from: "LOVE")),
+            ("生日快乐/宝贝", TextComposition.lines(from: "生日快乐\n宝贝")),
+        ]
+        XCTAssertEqual(groups[3].lines, ["生日快乐", "宝贝"])
+        XCTAssertFalse("生日快乐\n宝贝".contains("\\"))
+        for group in groups {
+            do {
+                let outline = try XCTUnwrap(provider.outline(lines: group.lines), group.name)
+                let grid = try ShapeLayoutRules.text(outline)
+                let byWidth = grid.raster.fitWidth / outline.widthEm
+                let byHeight = grid.raster.fitHeight / outline.heightEm
+                let perEm = try ShapeLayoutRules.cellsPerEm(outline)
+                let boxes = try ShapeLayoutRules.glyphCellBoxes(outline)
+                let hanzi = boxes.filter { ShapeTextRules.units($0.text) >= 1 }
+                let glyphLog = boxes.map { String(format: "%@:x=%.4f,y=%.4f,w=%.4f,h=%.4f", $0.text, $0.x, $0.y, $0.width, $0.height) }.joined(separator: ",")
+                print(String(format: "TEXT-GROUP %@ cellsPerEm=%.6f byW=%.6f byH=%.6f widthEm=%.6f heightEm=%.6f grid=%dx%d glyphs=%@",
+                             group.name, perEm, byWidth, byHeight, outline.widthEm, outline.heightEm, grid.layout.columns, grid.layout.rows, glyphLog))
+                XCTAssertEqual(grid.density, .fine, group.name)
+                XCTAssertEqual(max(grid.layout.columns, grid.layout.rows), 120, group.name)
+                XCTAssertEqual(boxes.map(\.text).joined(), group.lines.joined(), group.name)
+                XCTAssertEqual(perEm, min(byWidth, byHeight), accuracy: 1e-6, group.name)
+                XCTAssertGreaterThanOrEqual(perEm, 24, group.name)
+                if group.lines.contains(where: { ShapeTextRules.units($0) >= 4 }) {
+                    XCTAssertGreaterThanOrEqual(perEm, 27, "\(group.name) 四字一行应在约 27–28 格")
+                    XCTAssertLessThanOrEqual(perEm, 28, "\(group.name) 四字一行应在约 27–28 格")
+                }
+                if group.name == "520" || group.name == "LOVE" {
+                    XCTAssertTrue(hanzi.isEmpty, group.name)
+                    XCTAssertEqual(boxes.count, group.lines[0].count, group.name)
+                    XCTAssertGreaterThan(outline.widthEm, 0, group.name)
+                }
+                try TextComposition.requireReadableHanzi(outline)
+                attachMask(grid.mask, name: group.name)
+            } catch {
+                XCTFail("\(group.name) \(error)")
+            }
+        }
+        let short = try XCTUnwrap(provider.outline(lines: ["宝"]))
+        let shortPerEm = try ShapeLayoutRules.cellsPerEm(short)
+        print(String(format: "TEXT-GROUP-SCALE 单字宝 cellsPerEm=%.6f 不是正式四组，固定比例 %.6f，不放大铺满 120",
+                     shortPerEm, ShapeLayoutRules.nominalTextCellsPerEm))
+        XCTAssertEqual(shortPerEm, ShapeLayoutRules.nominalTextCellsPerEm, accuracy: 1e-4)
+        XCTAssertLessThan(shortPerEm, 40, "单字若被放大到铺满长边，每 em 会远大于 30")
+    }
+
+    /// 第二行墨水中心相对整张掩码中线，容差 8 格。这只看下三分之一的墨水块，不是逐字居中。
     func testShorterSecondLineIsCentered() throws {
         let outline = try XCTUnwrap(provider.outline(lines: ["生日快乐", "宝贝"]))
         let mask = try ShapeLayoutRules.text(outline).mask
@@ -86,6 +141,28 @@ final class CoreTextOutlineTests: XCTestCase {
         let mid = Double(minC + maxC) / 2
         // 居中按行宽（advance），不是按墨水外接框。侧向留白会让墨水中心偏出大约一两个字宽的零头，允许约 0.25 em。
         XCTAssertEqual(mid, Double(mask.columns - 1) / 2, accuracy: 8, "第二行居中")
+    }
+
+    /// 测试光栅出的掩码，不是界面截图，也不证明肉眼可读。
+    private func attachMask(_ mask: CellMask, name: String) {
+        let w = mask.columns, h = mask.rows
+        guard w > 0, h > 0,
+              let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return }
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+        for index in 0..<mask.cellCount where mask.isActive(index) {
+            let column = index % w
+            let row = index / w
+            ctx.fill(CGRect(x: column, y: h - 1 - row, width: 1, height: 1))
+        }
+        guard let image = ctx.makeImage() else { return }
+        let attachment = XCTAttachment(image: UIImage(cgImage: image))
+        attachment.name = "coretext-mask-\(name)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func assertBorderUncovered(_ grid: ShapeLayoutRules.ShapeGrid, _ name: String,

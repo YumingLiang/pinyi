@@ -47,6 +47,8 @@ public final class AppCoordinator {
     var targetGeneration = 0
     /// 当前形状结果是用哪个选择生成的。选新目标图或退回目标页会清掉 `flow.shape`，结果还在时用它恢复，并继续禁止保存。
     var shapeIdentity: ShapeChoice?
+    /// 已排好的文字。没有文字界面时由测试或后续入口放进来。生成时固定细档，不用密度参数。
+    var preparedText: PreparedTextMosaic?
     /// `product` 是用哪组输入生成的（不含叠加强度）。设置页点「开始拼图」时若和当前输入一样，
     /// 说明「再调一调」只改了叠加强度：直接回到上一次结果，不重新生成（B10 第 3/13 条）。
     private var productInputs: ProductInputs?
@@ -57,6 +59,10 @@ public final class AppCoordinator {
         /// nil = 照片拼图。背景不在这里：只改背景不重新匹配。
         var shapePreset: ShapePresetID?
         var shapePalette: ShapePalette?
+        /// 文字正文。没有文字时为 nil。换正文后旧结果不能再导出。
+        var textLines: [String]?
+        var textPalette: ShapePalette?
+        var textBackground: ShapeBackground?
     }
     /// 来源被静默去掉相簿（不是用户改的）：当前结果记下的来源同样换掉，`settingsPrimaryAction` 不因此变「开始拼图」。
     func notePrunedSelectionForProduct(old: SourceSelection, new: SourceSelection) {
@@ -65,7 +71,9 @@ public final class AppCoordinator {
     private var currentInputs: ProductInputs {
         ProductInputs(targetGeneration: targetGeneration, selection: state.flow.source.selection,
                       density: state.flow.settings.density,
-                      shapePreset: state.flow.shape?.preset, shapePalette: state.flow.shape?.palette)
+                      shapePreset: state.flow.shape?.preset, shapePalette: state.flow.shape?.palette,
+                      textLines: preparedText?.lines, textPalette: preparedText?.palette,
+                      textBackground: preparedText?.background)
     }
     /// 平台层执行系统动作（打开设置、受限选择器）。
     public var systemActionHandler: (@MainActor (SystemAction) -> Void)?
@@ -361,6 +369,7 @@ public final class AppCoordinator {
 
     /// 目标图解码结果（平台层解码 + 降采样后交进来；nil = 读不出来）。
     public func setTarget(_ pixels: PixelBuffer?) {
+        preparedText = nil
         if state.flow.isQuickAgain {
             pendingTarget = pixels   // 上一张结果还在，它的目标图不能动；开始生成新图时才换进来（commitQuickAgain，代次 +1）
         } else {
@@ -386,7 +395,19 @@ public final class AppCoordinator {
     public func setOverlayAlpha(_ a: Double) { state.flow.settings.overlayAlpha = OverlayBlendLimits.clamp(a) }
 
     /// 首页「用形状拼」。
-    public func beginShape() { flowSend(.beginShape) }
+    public func beginShape() {
+        preparedText = nil
+        flowSend(.beginShape)
+    }
+
+    /// 用已经取到的文字轮廓生成。不提供密度参数，固定细档，叠加强度为 0。
+    /// 调用前须先通过 `TextComposition`；这里不再改字、不截断。
+    public func prepareText(lines: [String], outline: TextOutline, palette: ShapePalette, background: ShapeBackground) {
+        preparedText = PreparedTextMosaic(lines: lines, outline: outline, palette: palette, background: background)
+        state.flow.shape = nil
+        state.flow.settings.density = .fine
+        state.flow.settings.overlayAlpha = 0
+    }
 
     public func setShapePreset(_ id: ShapePresetID) {
         guard id.isKnown, var shape = state.flow.shape else { return }
@@ -418,7 +439,9 @@ public final class AppCoordinator {
     public var currentResultIsShape: Bool { product?.shapeFrame != nil }
 
     /// 形状结果这一阶段不能存作品。正在选形状、或当前结果本身是形状，都不能存。
-    public var allowsWorkSave: Bool { state.flow.shape == nil && !currentResultIsShape }
+    public var allowsWorkSave: Bool {
+        preparedText == nil && state.flow.shape == nil && !currentResultIsShape
+    }
     public func setShowScanSheet(_ on: Bool) { state.showScanSheet = on }
     public func setPresentedEmptyState(_ e: LibraryEmptyState?) { state.presentedEmptyState = e }
     public func setExportTier(_ t: ExportTier) {
@@ -555,9 +578,24 @@ public final class AppCoordinator {
         }
     }
 
+    /// 这次运行抓到的文字已经不是当前选择。照片和形状运行（没有文字）不走这里。
+    private func textSelectionMovedOn(from captured: PreparedTextMosaic?) -> Bool {
+        guard let captured else { return false }
+        guard let current = preparedText else { return true }
+        return current.lines != captured.lines
+            || current.palette != captured.palette
+            || current.background != captured.background
+    }
+
     private func run(id: Int, seed: UInt64) {
+        if preparedText != nil {
+            state.flow.settings.density = .fine
+            state.flow.settings.overlayAlpha = 0
+            state.flow.shape = nil
+        }
         let shapeChoice = state.flow.shape
-        if shapeChoice == nil, target == nil { send(.finishedWithError(runID: id, failure: .other)); return }
+        let textMosaic = preparedText
+        if textMosaic == nil, shapeChoice == nil, target == nil { send(.finishedWithError(runID: id, failure: .other)); return }
         let settings = state.flow.settings
         let selection = state.flow.source.selection
         let inputs = currentInputs
@@ -584,7 +622,18 @@ public final class AppCoordinator {
             defer { continuation.finish(); stageContinuation.finish() }
             do {
                 let p: GenerationProduct
-                if let previous, previous.generation.activeCells != nil, let shapeChoice {
+                if let textMosaic {
+                    let snap = try await index.snapshot(for: selection)
+                    let grid = try ShapeLayoutRules.text(textMosaic.outline)
+                    let colors = ShapePaletteBuilder.photoColors(snapshot: snap.library)
+                    let pixels = try ShapeTarget.render(mask: grid.mask,
+                                                        gradient: ShapePaletteBuilder.gradient(for: textMosaic.palette,
+                                                                                               photoColors: colors),
+                                                        background: textMosaic.background)
+                    p = try await generator.run(target: pixels, snapshot: snap, settings: settings, seed: seed,
+                                                activeCells: grid.mask, shapeBackground: textMosaic.background,
+                                                progress: progress, stage: stage)
+                } else if let previous, previous.generation.activeCells != nil, let shapeChoice {
                     let snap = try await index.snapshot(for: selection)
                     let grid = try ShapeGenerationPlan.grid(shapeChoice, density: settings.density.density)
                     let colors = ShapePaletteBuilder.photoColors(snapshot: snap.library)
@@ -614,7 +663,9 @@ public final class AppCoordinator {
                 await consumer.value
                 await stageConsumer.value
                 guard let self else { return }
-                if self.state.flow.generation.currentRunID == id {
+                let stillThisRun = self.state.flow.generation.currentRunID == id
+                let textMoved = stillThisRun && self.textSelectionMovedOn(from: textMosaic)
+                if stillThisRun, !textMoved {
                     self.product = p
                     self.shapeIdentity = p.shapeFrame == nil ? nil : shapeChoice
                     self.productInputs = inputs
@@ -626,7 +677,11 @@ public final class AppCoordinator {
                     let promptedBefore = self.gateAvailable.map { MaterialSupply.evaluate(availableCount: $0).needsWarning } ?? false
                     self.state.postFilterShortageNotice = p.outcome.isBelowThresholdAfterFilter && !promptedBefore
                 }
-                self.send(.succeeded(runID: id, p.outcome))
+                if textMoved {
+                    self.send(.staleRunDiscarded(runID: id))
+                } else {
+                    self.send(.succeeded(runID: id, p.outcome))
+                }
             } catch {
                 continuation.finish()
                 stageContinuation.finish()

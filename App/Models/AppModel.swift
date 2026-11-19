@@ -190,6 +190,22 @@ final class AppModel: ObservableObject {
     func closeAlbumList() { coordinator.closeAlbumList() }
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func beginShape() { coordinator.beginShape() }
+
+    /// 文字参数直接生成。没有文字界面。失败在开跑前抛出，不改字、不截断。
+    func generateText(lines: [String], palette: ShapePalette = .auto,
+                      background: ShapeBackground = .white) async throws {
+        let prepared = try TextComposition.prepare(lines)
+        guard let outline = CoreTextOutline().outline(lines: prepared) else { throw TextComposeFailure.noOutline }
+        do {
+            try TextComposition.requireReadableHanzi(outline)
+        } catch let failure as TextComposeFailure {
+            throw failure
+        } catch {
+            throw TextComposeFailure.doesNotFit
+        }
+        coordinator.prepareText(lines: prepared, outline: outline, palette: palette, background: background)
+        await coordinator.generateTapped()
+    }
     func setShapePreset(_ id: ShapePresetID) { coordinator.setShapePreset(id) }
     func setShapePalette(_ palette: ShapePalette) { coordinator.setShapePalette(palette) }
     func setShapeBackground(_ background: ShapeBackground) { coordinator.setShapeBackground(background) }

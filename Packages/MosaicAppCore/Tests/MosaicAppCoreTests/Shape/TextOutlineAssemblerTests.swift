@@ -19,6 +19,21 @@ final class TextOutlineAssemblerTests: XCTestCase {
         XCTAssertNil(TextOutlineAssembler.assemble(lines: [line(square(0, 0, em), advance: em)], lineSpacingEm: 0))
     }
 
+    func testGlyphBoxesKeepEachSquareInsteadOfSplittingTheLine() throws {
+        let wide = TextGlyphPlacement(elements: square(0, 0, em, em).elements, originX: 0, originY: 0, text: "大")
+        let narrow = TextGlyphPlacement(elements: square(1.2 * em, 0, 0.4 * em, em).elements, originX: 0, originY: 0, text: "小")
+        let outline = try XCTUnwrap(TextOutlineAssembler.assemble(lines: [
+            TextLinePlacement(glyphs: [wide, narrow], advance: 1.6 * em),
+        ]))
+        XCTAssertEqual(outline.glyphs.map(\.text), ["大", "小"])
+        let boxes = try ShapeLayoutRules.glyphCellBoxes(outline)
+        XCTAssertEqual(boxes.count, 2)
+        XCTAssertGreaterThan(boxes[0].width, boxes[1].width * 1.5, "宽字和窄字不能被整行均分")
+        XCTAssertGreaterThanOrEqual(boxes[0].width, 24)
+        XCTAssertGreaterThanOrEqual(boxes[0].height, 24)
+        XCTAssertLessThan(boxes[1].width, boxes[0].width)
+    }
+
     /// 归一化外接框和 path.aspect 是同一套数；一个 em 见方的字，细档每 em 就是内框格数。
     func testSingleEmSquareReportsMatchingBounds() throws {
         let outline = try XCTUnwrap(TextOutlineAssembler.assemble(lines: [line(square(0, 0, em), advance: em)]))
@@ -29,7 +44,7 @@ final class TextOutlineAssemblerTests: XCTestCase {
         XCTAssertEqual(grid.density, .fine)
         XCTAssertEqual(grid.layout.columns, 120)
         XCTAssertEqual(grid.layout.rows, 120)
-        XCTAssertEqual(try ShapeLayoutRules.cellsPerEm(outline), 118, accuracy: 1e-6)
+        XCTAssertEqual(try ShapeLayoutRules.cellsPerEm(outline), ShapeLayoutRules.nominalTextCellsPerEm, accuracy: 1e-6)
         XCTAssertTrue(try ShapeLayoutRules.meetsMinimumCellsPerEm(outline))
         assertBorderClear(grid)
         assertPolygonsInsideUnitBox(outline.path)
@@ -83,15 +98,23 @@ final class TextOutlineAssemblerTests: XCTestCase {
         ], originX: 0, originY: 0)
         let outline = try XCTUnwrap(TextOutlineAssembler.assemble(lines: [line(apex, advance: em)]))
         let mask = try ShapeLayoutRules.text(outline).mask
-        func active(in rows: Range<Int>) -> Int {
+        var inkRows: [Int] = []
+        for row in 0..<mask.rows {
+            if (0..<mask.columns).contains(where: { mask.isActive(column: $0, row: row) }) { inkRows.append(row) }
+        }
+        let span = inkRows.count
+        XCTAssertGreaterThan(span, 8, "短字仍有可读高度，但不再铺满 120 行")
+        XCTAssertLessThan(span, mask.rows / 2)
+        func active(in rows: ArraySlice<Int>) -> Int {
             var n = 0
             for r in rows {
                 for c in 0..<mask.columns where mask.isActive(column: c, row: r) { n += 1 }
             }
             return n
         }
-        let top = active(in: 2..<(mask.rows / 5))
-        let bottom = active(in: (mask.rows * 4 / 5)..<(mask.rows - 2))
+        let third = max(1, span / 3)
+        let top = active(in: inkRows.prefix(third))
+        let bottom = active(in: inkRows.suffix(third))
         XCTAssertGreaterThan(bottom, top * 2, "尖角在上，底下更宽")
     }
 

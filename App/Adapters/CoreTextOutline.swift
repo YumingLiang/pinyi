@@ -15,7 +15,7 @@ struct CoreTextOutline: TextOutlineProviding {
     func outline(lines: [String]) -> TextOutline? {
         let size = CGFloat(TextOutlineAssembler.fontSizePoints)
         let font = Self.systemHeavyFont(size: size)
-        let placements = lines.map { Self.placement(of: Self.line(for: $0, font: font)) }
+        let placements = lines.map { Self.placement(of: Self.line(for: $0, font: font), text: $0) }
         return TextOutlineAssembler.assemble(lines: placements)
     }
 
@@ -48,7 +48,7 @@ struct CoreTextOutline: TextOutlineProviding {
         return CTLineCreateWithAttributedString(mutable)
     }
 
-    private static func placement(of line: CTLine) -> TextLinePlacement {
+    private static func placement(of line: CTLine, text: String) -> TextLinePlacement {
         var ascent: CGFloat = 0
         var descent: CGFloat = 0
         var leading: CGFloat = 0
@@ -60,25 +60,37 @@ struct CoreTextOutline: TextOutlineProviding {
             guard count > 0 else { continue }
             var glyphIDs = [CGGlyph](repeating: 0, count: count)
             var positions = [CGPoint](repeating: .zero, count: count)
+            var stringIndices = [CFIndex](repeating: 0, count: count)
             glyphIDs.withUnsafeMutableBufferPointer { ids in
                 positions.withUnsafeMutableBufferPointer { points in
-                    CTRunGetGlyphs(run, CFRange(location: 0, length: 0), ids.baseAddress!)
-                    CTRunGetPositions(run, CFRange(location: 0, length: 0), points.baseAddress!)
+                    stringIndices.withUnsafeMutableBufferPointer { indices in
+                        CTRunGetGlyphs(run, CFRange(location: 0, length: 0), ids.baseAddress!)
+                        CTRunGetPositions(run, CFRange(location: 0, length: 0), points.baseAddress!)
+                        CTRunGetStringIndices(run, CFRange(location: 0, length: 0), indices.baseAddress!)
+                    }
                 }
             }
-            let units = CGFloat(CTFontGetUnitsPerEm(runFont))
-            let scale = units > 0 ? CTFontGetSize(runFont) / units : 1
             for index in 0..<count {
-                var transform = CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
-                                                  tx: positions[index].x, ty: positions[index].y)
+                // 路径已经按字号从字体单位变成点，再乘 size/unitsPerEm 会把曲线缩到约 1/10。
+                // 3805a68 上满月快乐因此只有约 2 格，而 cellsPerEm 仍是名义值 27.44。这里只平移到字形原点。
+                var transform = CGAffineTransform(translationX: positions[index].x, y: positions[index].y)
                 guard let path = CTFontCreatePathForGlyph(runFont, glyphIDs[index], &transform) else { continue }
                 let elements = shapeElements(of: path)
                 guard !elements.isEmpty else { continue }
                 // 位置已经乘进路径，原点保持在这一行的排版原点。
-                glyphs.append(TextGlyphPlacement(elements: elements, originX: 0, originY: 0))
+                glyphs.append(TextGlyphPlacement(elements: elements, originX: 0, originY: 0,
+                                                  text: label(in: text, utf16Index: stringIndices[index])))
             }
         }
         return TextLinePlacement(glyphs: glyphs, advance: Double(advance))
+    }
+
+    private static func label(in text: String, utf16Index: CFIndex) -> String {
+        let ns = text as NSString
+        guard utf16Index >= 0, utf16Index < ns.length else { return "" }
+        let range = ns.rangeOfComposedCharacterSequence(at: utf16Index)
+        guard range.location != NSNotFound, range.length > 0 else { return "" }
+        return ns.substring(with: range)
     }
 
     private static func runs(of line: CTLine) -> [CTRun] {
