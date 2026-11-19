@@ -163,19 +163,19 @@ public enum TextComposition {
         }
     }
 
-    /// 汉字字形自己的外接框两边都要到 24 格。没有字形边界时不拿整行宽度冒充。
+    /// 光栅后的 `cellsPerEm` 必须 ≥ 24（design/shape-mosaic-v0.1.md:39、:56–57；
+    /// qa/shape-mosaic-test-checklist.md:27）。逐字墨水宽高只供诊断，窄字如「月」不因此拒绝。
+    /// 汉字声明了却没有曲线边界，或 `cellsPerEm` 真的不足，仍然明确失败。
     public static func requireReadableHanzi(_ outline: TextOutline) throws {
-        let boxes = try ShapeLayoutRules.glyphCellBoxes(outline)
-        let hanzi = boxes.filter { ShapeTextRules.units($0.text) >= 1 }
-        if hanzi.isEmpty, outline.glyphs.contains(where: { ShapeTextRules.units($0.text) >= 1 }) {
-            throw TextComposeFailure.noOutline
+        if outline.glyphs.contains(where: { ShapeTextRules.units($0.text) >= 1 }) {
+            let boxes = try ShapeLayoutRules.glyphCellBoxes(outline)
+            if !boxes.contains(where: { ShapeTextRules.units($0.text) >= 1 }) {
+                throw TextComposeFailure.noOutline
+            }
         }
-        for box in hanzi where box.width < ShapeLayoutRules.minimumCellsPerEm
-            || box.height < ShapeLayoutRules.minimumCellsPerEm {
-            throw TextComposeFailure.glyphTooSmall(text: box.text, width: box.width, height: box.height)
-        }
-        if try !ShapeLayoutRules.meetsMinimumCellsPerEm(outline) {
-            throw TextComposeFailure.glyphTooSmall(text: "", width: try ShapeLayoutRules.cellsPerEm(outline), height: 0)
+        let perEm = try ShapeLayoutRules.cellsPerEm(outline)
+        if perEm < ShapeLayoutRules.minimumCellsPerEm {
+            throw TextComposeFailure.glyphTooSmall(text: "", width: perEm, height: perEm)
         }
     }
 }

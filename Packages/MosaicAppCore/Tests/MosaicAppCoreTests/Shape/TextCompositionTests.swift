@@ -43,17 +43,38 @@ final class TextCompositionTests: XCTestCase {
         XCTAssertEqual(try TextComposition.prepare(["ABCDEFGH"]), ["ABCDEFGH"])
     }
 
-    func testTinyHanziBoxFailsInsteadOfShrinkingTheGrid() throws {
+    /// design/shape-mosaic-v0.1.md:39 与 qa/shape-mosaic-test-checklist.md:27。
+    /// 门是光栅 `cellsPerEm`，不是单字墨水宽高。窄墨水不能把「月」拒掉。
+    func testNarrowInkDoesNotRejectWhenRasterCellsPerEmMeets24() throws {
         let outline = TextOutline(path: ShapePath(elements: [
             .move(ShapePoint(0, 0)), .line(ShapePoint(1, 0)), .line(ShapePoint(1, 1)), .line(ShapePoint(0, 1)), .close,
         ], aspect: 4), widthEm: 4, heightEm: 1, glyphs: [
-            TextGlyphBox(text: "小", x: 0, y: 0, width: 0.02, height: 0.02),
+            TextGlyphBox(text: "月", x: 0.2, y: 0.05, width: 0.19, height: 0.9),
         ])
-        XCTAssertThrowsError(try TextComposition.requireReadableHanzi(outline)) { error in
-            guard case .glyphTooSmall(let text, _, _) = error as? TextComposeFailure else {
-                return XCTFail("\(error)")
-            }
-            XCTAssertEqual(text, "小")
-        }
+        let grid = try ShapeLayoutRules.text(outline)
+        let byWidth = grid.raster.fitWidth / outline.widthEm
+        let byHeight = grid.raster.fitHeight / outline.heightEm
+        let perEm = try ShapeLayoutRules.cellsPerEm(outline)
+        XCTAssertEqual(perEm, min(byWidth, byHeight), accuracy: 1e-9)
+        XCTAssertGreaterThanOrEqual(perEm, 24)
+        let ink = try ShapeLayoutRules.glyphCellBoxes(outline)
+        XCTAssertLessThan(ink[0].width, 24, "月的墨水宽可以小于 24 格")
+        XCTAssertNoThrow(try TextComposition.requireReadableHanzi(outline))
+    }
+
+    func testCellsPerEmUsesTheSmallerRasterAxisNotNominalWidth() {
+        let value = ShapeLayoutRules.cellsPerEm(fitWidth: 118, widthEm: 4.3, fitHeight: 40, heightEm: 2)
+        XCTAssertEqual(value, 20, accuracy: 1e-9, "高度更紧时必须用 fitH/heightEm")
+        XCTAssertGreaterThan(118 / 4.3, 27, "只取宽度会得到约 27.4，不能拿来代替 min")
+        XCTAssertLessThan(value, ShapeLayoutRules.minimumCellsPerEm)
+    }
+
+    func testOutlineThatCannotHoldTheFixedEmScaleFailsInsteadOfShrinking() {
+        let outline = TextOutline(path: ShapePath(elements: [
+            .move(ShapePoint(0, 0)), .line(ShapePoint(1, 0)), .line(ShapePoint(1, 1)), .line(ShapePoint(0, 1)), .close,
+        ], aspect: 6), widthEm: 6, heightEm: 1, glyphs: [
+            TextGlyphBox(text: "宽", x: 0, y: 0, width: 1, height: 1),
+        ])
+        XCTAssertThrowsError(try TextComposition.requireReadableHanzi(outline))
     }
 }

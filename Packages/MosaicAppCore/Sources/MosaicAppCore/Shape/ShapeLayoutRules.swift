@@ -106,15 +106,24 @@ public enum ShapeLayoutRules {
         return ShapeGrid(layout: layout, mask: raster.mask, density: textDensity, raster: raster)
     }
 
-    /// 文字轮廓在固定细档下每 em 实际占多少格（按光栅化时的等比缩放算）。
-    public static func cellsPerEm(_ outline: TextOutline) throws -> Double {
-        let g = try text(outline)
-        let byWidth = outline.widthEm > 0 ? g.raster.fitWidth / outline.widthEm : .infinity
-        let byHeight = outline.heightEm > 0 ? g.raster.fitHeight / outline.heightEm : .infinity
+    /// 实际光栅缩放，单位是格 / em。
+    /// design/shape-mosaic-v0.1.md:39：`min(fitW / widthEm, fitH / heightEm)`，边距已含在 fit 里。
+    /// 不能只取 `fitWidth / widthEm`：高度更紧时那条名义值会偏大。
+    public static func cellsPerEm(fitWidth: Double, widthEm: Double, fitHeight: Double, heightEm: Double) -> Double {
+        let byWidth = widthEm > 0 ? fitWidth / widthEm : .infinity
+        let byHeight = heightEm > 0 ? fitHeight / heightEm : .infinity
         return min(byWidth, byHeight)
     }
 
-    /// 是否达到「每字 ≥ 24 格」的验收线（不达时 UI 提示 `shape.text.too_long`，设计 §3）。
+    /// 文字轮廓在固定细档下每 em 实际占多少格。读光栅结果的宽和高，再取 min。
+    public static func cellsPerEm(_ outline: TextOutline) throws -> Double {
+        let g = try text(outline)
+        return cellsPerEm(fitWidth: g.raster.fitWidth, widthEm: outline.widthEm,
+                          fitHeight: g.raster.fitHeight, heightEm: outline.heightEm)
+    }
+
+    /// design/shape-mosaic-v0.1.md:56–57 与 qa/shape-mosaic-test-checklist.md:27：
+    /// 验收是这个 `cellsPerEm` ≥ 24。不是每个汉字墨水曲线的宽或高 ≥ 24。
     public static func meetsMinimumCellsPerEm(_ outline: TextOutline) throws -> Bool {
         try cellsPerEm(outline) >= minimumCellsPerEm
     }
