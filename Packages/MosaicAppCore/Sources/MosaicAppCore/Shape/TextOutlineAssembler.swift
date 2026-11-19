@@ -1,6 +1,7 @@
 import Foundation
 
-/// 一个字形已经换成「点、y 向上」的轮廓，原点在该字形的原点（`CTFontCreatePathForGlyph` 再乘上字号 / unitsPerEm）。
+/// 一个字形已经换成「点、y 向上」的轮廓，原点在该字形的原点。
+/// `CTFontCreatePathForGlyph` 自己会按字号把字体单位变成点；不要再乘字号 / unitsPerEm。
 public struct TextGlyphPlacement: Sendable, Equatable {
     /// 路径元素。y 向上，相对于 `originX` / `originY`。
     public var elements: [ShapePath.Element]
