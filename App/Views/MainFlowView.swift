@@ -273,6 +273,7 @@ struct AlbumMultiSelectView: View {
 
 struct SettingsStepView: View {
     @EnvironmentObject var model: AppModel
+    @State private var shapeTextFocus: Int?
 
     var body: some View {
         Form {
@@ -299,8 +300,8 @@ struct SettingsStepView: View {
                     .accessibilityIdentifier("shape-kind")
                     if shape.usesText {
                         let lines = shape.textLines
-                        shapeTextField(model, index: 0, title: .shapeTextLine1, text: lines.indices.contains(0) ? lines[0] : "")
-                        shapeTextField(model, index: 1, title: .shapeTextLine2, text: lines.count > 1 ? lines[1] : "")
+                        shapeTextRow(0, title: .shapeTextLine1, text: lines.indices.contains(0) ? lines[0] : "")
+                        shapeTextRow(1, title: .shapeTextLine2, text: lines.count > 1 ? lines[1] : "")
                         if let notice = model.shapeTextNotice {
                             Text(notice.key).font(.footnote).foregroundStyle(.red)
                                 .accessibilityIdentifier("shape-text-notice")
@@ -397,17 +398,14 @@ struct SettingsStepView: View {
             Button(role: .cancel) { model.send(.backToSettings) } label: { Text(L10nKey.generateFailedBack) }
         } message: { Text(L10nKey.generateFailedBody) }
     }
-}
 
-private func shapeTextField(_ model: AppModel, index: Int, title: L10nKey, text: String) -> some View {
-    TextField(text: Binding(get: { text }, set: { model.setShapeTextLine(index, $0) }), prompt: Text(title)) {
-        Text(title)
+    private func shapeTextRow(_ index: Int, title: L10nKey, text: String) -> some View {
+        ShapeTextLineField(title: title.localized, text: text, identifier: "shape-text-\(index)",
+                           isFocused: shapeTextFocus == index,
+                           onCommit: { model.setShapeTextLine(index, $0) },
+                           onBegin: { shapeTextFocus = index },
+                           onReturn: { shapeTextFocus = index == 0 ? 1 : nil })
     }
-    .textInputAutocapitalization(.never)
-    .autocorrectionDisabled()
-    .lineLimit(1)
-    .id("shape-text-\(index)-\(model.shapeTextRevision)")
-    .accessibilityIdentifier("shape-text-\(index)")
 }
 
 extension GenerationMachine.Phase {

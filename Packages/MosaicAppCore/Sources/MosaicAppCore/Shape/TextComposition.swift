@@ -89,6 +89,39 @@ public enum TextDraftEditor {
     }
 }
 
+/// 输入控件和正文之间的边界。组合态不写入、也不当成错误拒绝。
+public enum TextInputBridge {
+    public struct Outcome: Equatable, Sendable {
+        public var lines: [String]
+        public var notice: TextInputNotice?
+        /// 输入法还在组合。调用方应保持现有正文和提示，不要按 `fieldText` 更新。
+        public var composing: Bool
+    }
+
+    public static func receive(lines: [String], index: Int, fieldText: String, hasMarkedText: Bool) -> Outcome {
+        let current = TextDraftEditor.normalized(lines)
+        if hasMarkedText {
+            return Outcome(lines: current, notice: nil, composing: true)
+        }
+        let applied = TextDraftEditor.apply(lines: current, index: index, proposed: fieldText)
+        return Outcome(lines: applied.lines, notice: applied.notice, composing: false)
+    }
+
+    /// 没有组合态时，换行不交给单行控件插入，由正文规则整次接收。
+    public static func shouldInsert(replacement: String, hasMarkedText: Bool) -> Bool {
+        if hasMarkedText { return true }
+        return !(replacement.contains("\n") || replacement.contains("\r"))
+    }
+
+    /// 用 UTF-16 范围拼接。系统输入框的 `range` 是这个单位。
+    public static func replacing(_ current: String, utf16Range: NSRange, with replacement: String) -> String {
+        let ns = current as NSString
+        guard utf16Range.location != NSNotFound, utf16Range.location >= 0,
+              NSMaxRange(utf16Range) <= ns.length else { return current }
+        return ns.replacingCharacters(in: utf16Range, with: replacement)
+    }
+}
+
 /// 把调用方给出的行整理成可以排版的文字。合法换行保留成两行。
 public enum TextComposition {
     /// 正式四组里的两行用真实换行拆开，不把反斜杠和 n 当成换行。

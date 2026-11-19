@@ -40,6 +40,30 @@ final class TextDraftEditorTests: XCTestCase {
         XCTAssertEqual(fromSecond.lines, ["生日快乐", "宝贝"])
         XCTAssertEqual(fromSecond.notice, .tooManyLines)
     }
+
+    /// 组合态只是标记，不把当时的字符串当成最终正文。这里没有输入法，也没有可见点击。
+    func testMarkedTextIsNotCommittedOrRejected() {
+        let marked = TextInputBridge.receive(lines: ["生日快乐", ""], index: 0,
+                                             fieldText: "生日快乐呀😀", hasMarkedText: true)
+        XCTAssertTrue(marked.composing)
+        XCTAssertEqual(marked.lines, ["生日快乐", ""])
+        XCTAssertNil(marked.notice)
+
+        let pair = TextInputBridge.receive(lines: ["", ""], index: 0,
+                                           fieldText: "生日快乐\n宝贝", hasMarkedText: false)
+        XCTAssertFalse(pair.composing)
+        XCTAssertNil(pair.notice)
+        XCTAssertEqual(pair.lines, ["生日快乐", "宝贝"])
+
+        let third = TextInputBridge.receive(lines: pair.lines, index: 0,
+                                            fieldText: "生日快乐\n宝贝\n呀", hasMarkedText: false)
+        XCTAssertEqual(third.lines, ["生日快乐", "宝贝"])
+        XCTAssertEqual(third.notice, .tooManyLines)
+        XCTAssertFalse(TextInputBridge.shouldInsert(replacement: "生日快乐\n宝贝", hasMarkedText: false))
+        XCTAssertTrue(TextInputBridge.shouldInsert(replacement: "\n", hasMarkedText: true))
+        XCTAssertEqual(TextInputBridge.replacing("生日", utf16Range: NSRange(location: 2, length: 0), with: "快乐\n宝贝"),
+                       "生日快乐\n宝贝")
+    }
 }
 
 /// 图形配置里的文字会话。协调器 API，不是 SwiftUI 点击，也不是 XCUITest。
@@ -81,7 +105,16 @@ final class TextSessionTests: XCTestCase {
         XCTAssertEqual(c.state.shapeTextNotice, .unsupported)
         await c.generateTapped()
         await c.settle()
-        XCTAssertNil(c.product)
+        XCTAssertNil(c.product, "超限和不受支持的字符不能进入生成")
+
+        c.setShapeTextLine(0, proposed: "生日快乐")
+        c.setShapeTextLine(0, proposed: "生日快乐呀😀", hasMarkedText: true)
+        XCTAssertEqual(c.state.flow.shape?.textLines, ["生日快乐", ""], "组合态不能改掉已提交的正文")
+        XCTAssertNil(c.state.shapeTextNotice, "组合态不能当成最终正文拒绝")
+        c.setShapeTextLine(0, proposed: "生日快乐\n宝贝")
+        XCTAssertEqual(TextDraftEditor.committedLines(c.state.flow.shape?.textLines ?? []), ["生日快乐", "宝贝"])
+        XCTAssertNil(c.state.shapeTextNotice)
+        XCTAssertEqual(c.state.flow.shape?.preset, .heart)
         c.stop()
     }
 

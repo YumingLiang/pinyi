@@ -192,10 +192,11 @@ final class AppModel: ObservableObject {
     func beginShape() { coordinator.beginShape() }
 
     func setShapeUsesText(_ usesText: Bool) { coordinator.setShapeUsesText(usesText) }
-    func setShapeTextLine(_ index: Int, _ proposed: String) { coordinator.setShapeTextLine(index, proposed: proposed) }
+    func setShapeTextLine(_ index: Int, _ proposed: String, hasMarkedText: Bool = false) {
+        coordinator.setShapeTextLine(index, proposed: proposed, hasMarkedText: hasMarkedText)
+    }
     var shapeTextCanGenerate: Bool { coordinator.shapeTextCanGenerate }
     var shapeTextNotice: TextInputNotice? { state.shapeTextNotice }
-    var shapeTextRevision: Int { state.shapeTextRevision }
 
     /// 确认页「开始拼图」。文字走 `generateText`；预设和照片仍走原来的生成。
     func startFromSettings() async {

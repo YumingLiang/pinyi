@@ -191,9 +191,15 @@ final class ShapeResultScreenTests: XCTestCase {
         await model.startFromSettings()
         XCTAssertNil(model.coordinator.product, "超限和 emoji 不能进入生成")
 
-        model.setShapeTextLine(0, "满月快乐")
+        model.setShapeTextLine(0, "生日快乐\n宝贝")
+        XCTAssertEqual(TextDraftEditor.committedLines(model.flow.shape?.textLines ?? []), ["生日快乐", "宝贝"])
+        XCTAssertNil(model.shapeTextNotice)
+        model.setShapeTextLine(0, "生日快乐\n宝贝\n呀")
+        XCTAssertEqual(TextDraftEditor.committedLines(model.flow.shape?.textLines ?? []), ["生日快乐", "宝贝"])
+        XCTAssertEqual(model.shapeTextNotice, .tooManyLines)
         XCTAssertTrue(model.shapeTextCanGenerate)
         XCTAssertEqual(model.flow.settings.density, .fine)
+        XCTAssertEqual(model.flow.shape?.background, .white)
         model.flowSend(.next)
         await model.startFromSettings()
         await passShortagePrompt(model)
@@ -202,18 +208,40 @@ final class ShapeResultScreenTests: XCTestCase {
             return XCTFail("配置正文没有进入结果页 \(model.flow.generation.phase)")
         }
         XCTAssertEqual(model.flow.shape?.usesText, true)
-        XCTAssertEqual(TextDraftEditor.committedLines(model.flow.shape?.textLines ?? []), ["满月快乐"])
+        XCTAssertEqual(TextDraftEditor.committedLines(model.flow.shape?.textLines ?? []), ["生日快乐", "宝贝"])
         XCTAssertFalse(model.allowsWorkSave)
         XCTAssertNil(model.coordinator.target)
-        let shown = await waitUntil { model.resultImage != nil }
-        XCTAssertTrue(shown, "文字结果没有预览")
+        let product = try XCTUnwrap(model.coordinator.product)
+        let mask = try XCTUnwrap(product.shapeFrame).mask
+        XCTAssertEqual(max(mask.columns, mask.rows), 120)
+        XCTAssertEqual(model.coordinator.state.flow.settings.density, .fine)
+        let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
+        let shown = await waitUntil { model.resultImage?.width == mask.columns * previewCell }
+        XCTAssertTrue(shown, "文字结果没有按网格尺寸显示预览")
+        XCTAssertTrue(model.showsFinishedPreviewHint)
         let image = try XCTUnwrap(model.resultImage)
-        XCTAssertGreaterThan(image.width, 8)
+        XCTAssertEqual(image.width, mask.columns * previewCell)
+        XCTAssertEqual(image.height, mask.rows * previewCell)
+        let inside = try XCTUnwrap((0..<mask.cellCount).first { mask.isActive($0) })
+        let outside = try XCTUnwrap((0..<mask.cellCount).first { !mask.isActive($0) })
+        let previewBytes = try bitmap(image)
+        assertNear(pixelFromTop(previewBytes, width: image.width, columns: mask.columns, cellPixels: previewCell, index: inside),
+                   tile, tolerance: 24, label: "配置正文预览内格")
+        assertNear(pixelFromTop(previewBytes, width: image.width, columns: mask.columns, cellPixels: previewCell, index: outside),
+                   (r: 255, g: 255, b: 255), tolerance: 8, label: "配置正文预览掩码外")
         model.saveTapped()
         let saved = await waitUntil { if case .saved = model.exportPhase { return true }; return false }
         XCTAssertTrue(saved, "saveTapped 后不是已写入相册：\(model.exportPhase)")
         let jpeg = try XCTUnwrap(decodeJPEG(try XCTUnwrap(harness.library.lastJPEG)))
-        XCTAssertGreaterThan(jpeg.width, 8)
+        let exportCell = jpeg.width / mask.columns
+        XCTAssertGreaterThan(exportCell, 0)
+        XCTAssertEqual(jpeg.width, mask.columns * exportCell)
+        XCTAssertEqual(jpeg.height, mask.rows * exportCell)
+        let exportBytes = try bitmap(jpeg)
+        assertNear(pixelFromTop(exportBytes, width: jpeg.width, columns: mask.columns, cellPixels: exportCell, index: inside),
+                   tile, tolerance: 36, label: "配置正文导出内格")
+        assertNear(pixelFromTop(exportBytes, width: jpeg.width, columns: mask.columns, cellPixels: exportCell, index: outside),
+                   (r: 255, g: 255, b: 255), tolerance: 8, label: "配置正文导出掩码外")
     }
 
     func testOfficialTextGroupsReachPreviewPixelsAndJPEG() async throws {

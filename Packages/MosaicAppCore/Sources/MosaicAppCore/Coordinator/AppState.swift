@@ -107,8 +107,6 @@ public struct AppState: Sendable, Hashable {
     public var postFilterShortageNotice = false
     /// 图形配置里文字输入被拒绝或排不开时的提示。空正文不放这里，生成按钮另行禁用。
     public var shapeTextNotice: TextInputNotice?
-    /// 拒绝一次输入时 +1，让输入框回到没被写进去的正文。
-    public var shapeTextRevision = 0
     /// 有没有结果（`AppCoordinator.product != nil`）。变成 false 时平台层释放预览位图（约 48 MB）。
     public var hasResult = false
     /// 未保存提示（`quick.unsaved.*`）是因为哪种离开方式弹的；nil = 没弹。当前结果没存进作品就弹（导出过不算存过，

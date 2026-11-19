@@ -445,16 +445,16 @@ public final class AppCoordinator {
         preparedText = nil
     }
 
-    /// 写一行文字。超限或不受支持的字符不写入，并留下提示。
-    public func setShapeTextLine(_ index: Int, proposed: String) {
+    /// 写一行文字。组合态直接留下，不改正文、不报错。超限或不受支持的最终文本整次不写入。
+    public func setShapeTextLine(_ index: Int, proposed: String, hasMarkedText: Bool = false) {
         guard var shape = state.flow.shape, shape.usesText else { return }
-        let result = TextDraftEditor.apply(lines: shape.textLines, index: index, proposed: proposed)
-        let changed = result.lines != shape.textLines
-        shape.textLines = result.lines
+        let outcome = TextInputBridge.receive(lines: shape.textLines, index: index,
+                                              fieldText: proposed, hasMarkedText: hasMarkedText)
+        if outcome.composing { return }
+        shape.textLines = outcome.lines
         state.flow.shape = shape
-        state.shapeTextNotice = result.notice
-        if result.notice != nil, !changed { state.shapeTextRevision += 1 }
-        if preparedText?.lines != TextDraftEditor.committedLines(result.lines) { preparedText = nil }
+        state.shapeTextNotice = outcome.notice
+        if preparedText?.lines != TextDraftEditor.committedLines(outcome.lines) { preparedText = nil }
     }
 
     /// 文字还是空的、超限或含不受支持的字符时，不能开始生成。预设和照片不受这一条限制。
