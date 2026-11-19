@@ -23,6 +23,8 @@ public struct MainFlow: Sendable, Hashable {
     /// 从作品查看页点「再拼一张」、而主流程当时没有停在结果页（quick-start v1.0 §2a）：同样「选一张 → 确认页（素材沿用）→
     /// 开始拼图」，只是没有可返回的预览页。开始生成时结束（`endFreshQuickStart`）。
     public private(set) var isFreshQuickStart = false
+    /// 形状结果的「再拼一张」从作品页或再调一调进来：停在形状配置，不打开选目标照片。
+    public private(set) var isFreshShapeConfig = false
     /// 进入 fresh quick start 前停在哪页 / 有没有目标图（选图提示「取消」回发起页时恢复，例如「再调一调」设置页）。
     private var stepBeforeFreshQuickStart: Step = .target
     private var hasTargetBeforeFreshQuickStart = false
@@ -46,8 +48,12 @@ public struct MainFlow: Sendable, Hashable {
         case changeSource
         /// 作品查看页「再拼一张」、主流程没有停在结果页：去选目标图，选好直接进确认页。
         case freshQuickStartStarted
-        /// 首页「用形状拼」：跳过目标图，去现有的素材页。默认爱心、按相册取色、白底。
+        /// 首页「拼成一个图形」：跳过目标照片，去现有的素材页。默认爱心、按相册取色、白底。
         case beginShape
+        /// 形状结果的「再拼一张」：回到形状配置，默认上次形状、配色和背景。不打开选目标照片。
+        case shapeQuickAgainStarted
+        /// 形状结果在再调一调或作品页发起的「再拼一张」：同样回到形状配置，原结果先留着。
+        case freshShapeConfigStarted
     }
 
     public mutating func send(_ e: Event) {
@@ -81,7 +87,8 @@ public struct MainFlow: Sendable, Hashable {
             }
             if isFreshQuickStart {
                 switch step {
-                case .settings: step = .target
+                case .settings:
+                    if isFreshShapeConfig { cancelFreshQuickStart() } else { step = .target }
                 case .source: step = .settings
                 case .target, .result: break
                 }
@@ -102,16 +109,32 @@ public struct MainFlow: Sendable, Hashable {
             hasTarget = false
             targetNotice = nil
             step = .target
+        case .shapeQuickAgainStarted:
+            guard step == .result, case .result = generation.phase, shape != nil else { return }
+            hasTargetBeforeQuickAgain = hasTarget
+            isQuickAgain = true
+            targetNotice = nil
+            step = .settings
         case .changeSource:
             if step == .settings { step = .source }
         case .beginShape:
             guard step == .target, !isQuickAgain, !isFreshQuickStart else { return }
             shape = ShapeChoice()
             step = .source
+        case .freshShapeConfigStarted:
+            guard !isQuickAgain, shape != nil else { return }
+            if case .result = generation.phase { return }
+            isFreshQuickStart = true
+            isFreshShapeConfig = true
+            stepBeforeFreshQuickStart = step
+            hasTargetBeforeFreshQuickStart = hasTarget
+            targetNotice = nil
+            step = .settings
         case .freshQuickStartStarted:
             guard !isQuickAgain else { return }
             if case .result = generation.phase { return }   // 停在结果页时走 quickAgainStarted
             isFreshQuickStart = true
+            isFreshShapeConfig = false
             stepBeforeFreshQuickStart = step
             hasTargetBeforeFreshQuickStart = hasTarget
             hasTarget = false
@@ -138,6 +161,7 @@ public struct MainFlow: Sendable, Hashable {
     public mutating func cancelFreshQuickStart() {
         guard isFreshQuickStart else { return }
         isFreshQuickStart = false
+        isFreshShapeConfig = false
         hasTarget = hasTargetBeforeFreshQuickStart
         targetNotice = nil
         step = stepBeforeFreshQuickStart == .result ? .settings : stepBeforeFreshQuickStart
@@ -146,12 +170,14 @@ public struct MainFlow: Sendable, Hashable {
     /// 作品页进来的「再拼一张」开始生成了（之后和普通流程一样）。
     public mutating func endFreshQuickStart() {
         isFreshQuickStart = false
+        isFreshShapeConfig = false
     }
 
     /// 离开结果页、回到首页（选目标图）：旧结果已由协调器丢弃。
     public mutating func returnToStart() {
         isQuickAgain = false
         isFreshQuickStart = false
+        isFreshShapeConfig = false
         hasTarget = false
         targetNotice = nil
         shape = nil

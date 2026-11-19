@@ -373,8 +373,13 @@ public final class AppCoordinator {
     public func flowSend(_ e: MainFlow.Event) {
         guard !state.export.isBusy else { return }
         let wasQuickAgain = state.flow.isQuickAgain
+        let wasFreshShape = state.flow.isFreshShapeConfig
         state.flow.send(e)
         if wasQuickAgain, !state.flow.isQuickAgain, state.flow.step == .result { quickAgainCancelled() }
+        if wasFreshShape, !state.flow.isFreshShapeConfig {
+            restoreUncommittedShapeEdits()
+            quickStartOrigin = nil
+        }
     }
     public func selectSource(_ s: SourceSelection) { state.flow.source.select(s) }
     public func setDensity(_ d: DensityChoice) { state.flow.settings.density = d }
@@ -400,6 +405,8 @@ public final class AppCoordinator {
         guard var shape = state.flow.shape else { return }
         shape.background = background
         state.flow.shape = shape
+        // 再拼还没开始新生成时，背景只记在配置上。返回原预览要看到原来的结果。
+        if state.flow.isQuickAgain || state.flow.isFreshShapeConfig { return }
         if product != nil, productInputs == currentInputs {
             product?.setShapeBackground(background)
             if shapeIdentity != nil { shapeIdentity?.background = background }
@@ -520,10 +527,13 @@ public final class AppCoordinator {
         }
         if state.flow.isFreshQuickStart, starts {
             state.flow.endFreshQuickStart(); quickStartOrigin = nil; targetBeforeFreshQuickStart = nil
+            settingsBeforeQuickAgain = nil
         }
         state.flow.syncWithGeneration()
         if state.flow.step == .result, case .result = state.flow.generation.phase {
-            realignShapeChoiceWithResult()
+            // 完成回调只补回被清掉的形状标记。生成途中用户已经改过的形状、配色或背景留在界面上，
+            // 不把开跑时的选择盖回去，否则旧结果会重新变成可导出。
+            realignShapeChoiceWithResultIfUnchanged()
         }
         for eff in effects {
             switch eff {
@@ -643,8 +653,25 @@ public final class AppCoordinator {
     public var canExport: Bool {
         guard let product, !state.isGenerating, !state.export.isBusy else { return false }
         if product.shapeFrame == nil, target == nil { return false }
-        if case .result = state.flow.generation.phase { return true }
-        return false
+        guard case .result = state.flow.generation.phase else { return false }
+        return resultMatchesCurrentParameters
+    }
+
+    /// 当前界面上的形状、配色、密度、素材是不是这张结果生成时用的。
+    /// 只改了背景会直接写进结果，仍然算同一张。改了配色或密度还没重新生成时，旧图不能再导出。
+    public var resultMatchesCurrentParameters: Bool {
+        guard product != nil, let inputs = productInputs else { return false }
+        if inputs != currentInputs { return false }
+        if let choice = state.flow.shape, let background = product?.shapeFrame?.background, choice.background != background {
+            return false
+        }
+        return true
+    }
+
+    /// 形状结果还在，但形状、配色或密度已经改了，新的生成还没完成。
+    public var shapeEditsNeedRegeneration: Bool {
+        guard state.flow.shape != nil, product?.shapeFrame != nil else { return false }
+        return !resultMatchesCurrentParameters
     }
 
     /// 当前结果固化成的布局（导出、「存到我的作品」都用它）。

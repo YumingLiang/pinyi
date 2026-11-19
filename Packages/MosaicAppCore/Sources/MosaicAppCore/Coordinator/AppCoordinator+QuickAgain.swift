@@ -96,7 +96,13 @@ extension AppCoordinator {
         // 选图页 / 确认页里选过的照片会直接写 `target`（没有旧结果要保护的普通流程就是这样）；
         // 「取消」回发起页时要把进来前的目标图和代次原样放回（P1-2：「再调一调」回去仍是原目标图、主按钮仍是「完成」）。
         targetBeforeFreshQuickStart = (target, targetGeneration)
-        state.flow.send(.freshQuickStartStarted)
+        if currentResultIsShape {
+            realignShapeChoiceWithResult()
+            settingsBeforeQuickAgain = (state.flow.settings, state.flow.source.selection)
+            state.flow.send(.freshShapeConfigStarted)
+        } else {
+            state.flow.send(.freshQuickStartStarted)
+        }
         quickStartOrigin = nextQuickStartOrigin
     }
 
@@ -185,30 +191,48 @@ extension AppCoordinator {
         }
     }
 
-    /// 去选目标图。结果、预览、「已存」状态都不动（选图页返回还能回来）。
+    /// 照片去选目标照片；形状回到形状配置。结果、预览、「已存」状态都不动。
     private func beginQuickAgain() {
         pendingTarget = nil
         settingsBeforeQuickAgain = (state.flow.settings, state.flow.source.selection)
-        state.flow.send(.quickAgainStarted)
+        if currentResultIsShape {
+            realignShapeChoiceWithResult()
+            state.flow.send(.shapeQuickAgainStarted)
+        } else {
+            state.flow.send(.quickAgainStarted)
+        }
         quickStartOrigin = nextQuickStartOrigin
     }
 
     /// 「再拼一张」途中返回到原预览页（选图页返回；用系统 PhotosPicker 时确认页返回也直接回来，P2-c）：
     /// 释放新选的目标图（P3），确认页上改的强度 / 密度 / 素材来源恢复成原结果的（P2-b），不弹未保存提示。
     func quickAgainCancelled() {
+        restoreUncommittedShapeEdits()
+        quickStartOrigin = nil
+    }
+
+    /// 再拼还没开始新生成就返回：密度、素材和形状选择回到这张结果生成时的值。
+    func restoreUncommittedShapeEdits() {
         pendingTarget = nil
         if let s = settingsBeforeQuickAgain {
             state.flow.settings = s.settings
             state.flow.source.select(s.selection)
         }
         settingsBeforeQuickAgain = nil
-        quickStartOrigin = nil
         realignShapeChoiceWithResult()
     }
 
     /// 回到仍在的形状结果时，把导航上的形状选择放回去。选新图或退回目标页可以暂时清掉它，但不能把这张结果变成可保存的照片。
     func realignShapeChoiceWithResult() {
         guard product?.shapeFrame != nil, let shapeIdentity else { return }
+        state.flow.shape = shapeIdentity
+    }
+
+    /// 生成刚完成时调用。用户没改选择，或选择已被清掉，才对齐到这次结果。
+    /// 已经改成别的形状、配色或背景时保留后选值；结果仍记着开跑时的选择，所以还不能导出。
+    func realignShapeChoiceWithResultIfUnchanged() {
+        guard product?.shapeFrame != nil, let shapeIdentity else { return }
+        if let current = state.flow.shape, current != shapeIdentity { return }
         state.flow.shape = shapeIdentity
     }
 

@@ -28,6 +28,7 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertFalse(harness.model.canExport)
 
         harness.model.generateTapped()
+        await passShortagePrompt(harness.model)
         let failed = await waitUntil {
             if case .failed = harness.model.flow.generation.phase { return true }
             return false
@@ -60,6 +61,7 @@ final class ShapeResultScreenTests: XCTestCase {
         model.flowSend(.next)
         XCTAssertEqual(model.flow.step, .settings)
         await model.coordinator.generateTapped()
+        await passShortagePrompt(model)
         await model.coordinator.settle()
 
         guard case .result = model.flow.generation.phase else {
@@ -116,6 +118,59 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertEqual(library.attemptCount, 2, "权限被拒时不应再调用相册写入")
     }
 
+    func testShapePreviewHintAndStaleParametersDoNotExportOldResult() async throws {
+        let harness = try await makeHarness()
+        defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+        let model = harness.model
+        let ready = await waitUntil {
+            model.coordinator.state.indexStatus.hasCompletedInitialScan && model.coordinator.state.indexStatus.available > 0
+        }
+        XCTAssertTrue(ready, "合成素材没有扫进索引")
+        XCTAssertFalse(model.showsFinishedPreviewHint)
+        model.beginShape()
+        let source = model.flow.source.selection
+        model.setDensity(.coarse)
+        model.flowSend(.next)
+        await model.coordinator.generateTapped()
+        await passShortagePrompt(model)
+        await model.coordinator.settle()
+        guard case .result = model.flow.generation.phase else {
+            return XCTFail("没有进入结果页 \(model.flow.generation.phase)")
+        }
+        let shown = await waitUntil { model.resultImage != nil }
+        XCTAssertTrue(shown)
+        XCTAssertTrue(model.showsFinishedPreviewHint, "有效成品才显示双指放大提示")
+        XCTAssertTrue(model.canExport)
+        XCTAssertFalse(model.allowsWorkSave)
+
+        model.setShapePalette(.blue)
+        XCTAssertTrue(model.shapeEditsNeedRegeneration)
+        XCTAssertFalse(model.canExport, "新配色还没生成，不能把旧图导出成新结果")
+        XCTAssertFalse(model.showsFinishedPreviewHint)
+        model.saveTapped()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await model.coordinator.settle()
+        XCTAssertEqual(harness.library.attemptCount, 0)
+
+        model.setShapePalette(.auto)
+        XCTAssertFalse(model.shapeEditsNeedRegeneration)
+        XCTAssertTrue(model.canExport)
+        let seed = model.coordinator.product?.generation.seed
+        model.startNewMosaicTapped()
+        XCTAssertNil(model.unsavedPrompt)
+        XCTAssertEqual(model.flow.step, .settings)
+        XCTAssertEqual(model.flow.shape?.preset, .heart)
+        XCTAssertEqual(model.flow.source.selection, source)
+        model.setShapePalette(.blue)
+        model.flowSend(.back)
+        XCTAssertEqual(model.flow.step, .result)
+        XCTAssertEqual(model.flow.shape?.palette, .auto)
+        XCTAssertEqual(model.flow.source.selection, source)
+        XCTAssertEqual(model.coordinator.product?.generation.seed, seed)
+        XCTAssertTrue(model.canExport)
+        XCTAssertTrue(model.showsFinishedPreviewHint)
+    }
+
     private struct Harness {
         var root: URL
         var library: MemoryAlbum
@@ -155,6 +210,16 @@ final class ShapeResultScreenTests: XCTestCase {
         model.coordinator.start()
         await model.coordinator.settle()
         return Harness(root: root, library: library, model: model)
+    }
+
+    /// 合成库只有 24 张，低于 200 张门槛。界面会先问「照片比较少」，点继续才真正开始。
+    private func passShortagePrompt(_ model: AppModel) async {
+        if model.flow.generation.shortagePrompt {
+            model.send(.shortageContinue)
+            return
+        }
+        _ = await waitUntil(seconds: 5) { model.flow.generation.shortagePrompt }
+        if model.flow.generation.shortagePrompt { model.send(.shortageContinue) }
     }
 
     private func waitUntil(seconds: Double = 90, _ condition: @escaping () -> Bool) async -> Bool {

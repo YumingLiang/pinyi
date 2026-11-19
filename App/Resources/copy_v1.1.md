@@ -123,10 +123,12 @@ App 内为主：主按钮调用 `presentLimitedLibraryPicker`；文字链接跳�
 
 | key | 用途 | 文案 |
 |---|---|---|
-| `target.nav_title` | 导航标题 | 选择目标图 |
-| `target.prompt` | 引导语 | 想把哪张照片拼出来？ |
-| `target.choose` | 按钮 | 从相册选择 |
-| `target.replace` | 已选后的操作 | 更换照片 |
+| `home.nav_title` | 首页两个入口的导航标题 | 开始拼图 |
+| `home.photo_entry` | 首页，拼成一张照片 | 拼成一张照片 |
+| `target.nav_title` | 导航标题，只在照片模式 | 目标照片 |
+| `target.prompt` | 引导语，只在照片模式 | 想把哪张目标照片拼出来？ |
+| `target.choose` | 按钮，只在照片模式 | 选择目标照片 |
+| `target.replace` | 已选后的操作，只在照片模式 | 更换目标照片 |
 | `target.next` | 下一步 | 下一步 |
 | `target.unreadable` | 无法读取 | 这张照片打不开，请换一张再试。 |
 
@@ -136,7 +138,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 
 | key | 用途 | 文案 |
 |---|---|---|
-| `source.nav_title` | 导航标题 | 用哪些照片来拼 |
+| `source.nav_title` | 导航标题 | 用哪些素材照片来拼 |
 | `source.list.all` | 完全访问时的来源标题 | 全部照片 |
 | `source.list.allowed` | 受限访问时的来源标题 | 已允许访问的照片 |
 | `source.list.count` | 张数（跟在标题后面；扫描完成后显示可用张数） | {count} 张 |
@@ -176,7 +178,10 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 
 | key | 用途 | 文案 |
 |---|---|---|
-| `shape.entry` | 目标图页入口 | 用形状拼 |
+| `shape.entry` | 首页，拼成一个图形。不提未开放的文字 | 拼成一个图形 |
+| `shape.summary` | 确认页和预览页的图形摘要 | 图形：{preset} · {palette} · {background} |
+| `shape.stale_result` | 改了形状、配色或密度但还没重新生成 | 这仍是按上次参数生成的结果。改了形状、配色或密度后，要重新生成才能导出。 |
+| `shape.export_note` | 图形预览，导出和存作品不是一件事 | 导出会写进系统相册，不会存到我的作品。 |
 | `shape.section` | 确认页形状 | 形状 |
 | `shape.palette.section` | 配色 | 颜色 |
 | `shape.palette.auto` | 按相册 | 按相册 |
@@ -407,8 +412,8 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `source.album.done` | 底部主按钮 | 完成 |
 | `albums.limited_note` | 相簿列表顶部，只在受限访问时显示（00:15） | 只显示你允许拼忆访问的照片 |
 | `source.counting` | 素材标签里的张数位置，相簿列表加载完之前（00:35） | 正在统计… |
-| `quick.source.summary_two` | 确认页，2 个相簿 | 素材：{name1}、{name2} · {count} 张 |
-| `quick.source.summary_many` | 确认页，3 个及以上 | 素材：{name1} 等 {n} 个相簿 · {count} 张 |
+| `quick.source.summary_two` | 确认页，2 个相簿 | 素材照片：{name1}、{name2} · {count} 张 |
+| `quick.source.summary_many` | 确认页，3 个及以上 | 素材照片：{name1} 等 {n} 个相簿 · {count} 张 |
 
 ### 5.7 「再拼一张」（v1.4，21:20 定稿；quick-start-req-v1.0.md 22:58 定稿沿用，同步自产品文案表）
 
@@ -417,8 +422,8 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | key | 用途 | 文案 |
 |---|---|---|
 | `quick.again` | 预览页、作品查看页的文字按钮 | 再拼一张 |
-| `quick.source.summary` | 确认页，1 个相簿或全部照片 | 素材：{name} · {count} 张 |
-| `quick.source.change` | 确认页 | 换素材 |
+| `quick.source.summary` | 确认页，1 个相簿或全部照片 | 素材照片：{name} · {count} 张 |
+| `quick.source.change` | 确认页 | 换素材照片 |
 | `quick.unsaved.title` | 未保存确认弹窗 | 这张还没保存，要先存到我的作品吗？ |
 | `quick.unsaved.save` | 弹窗按钮 | 保存 |
 | `quick.unsaved.discard` | 弹窗按钮 | 不保存 |
