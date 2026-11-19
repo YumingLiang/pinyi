@@ -28,6 +28,7 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertFalse(harness.model.canExport)
 
         harness.model.generateTapped()
+        await passShortagePrompt(harness.model)
         let failed = await waitUntil {
             if case .failed = harness.model.flow.generation.phase { return true }
             return false
@@ -60,6 +61,7 @@ final class ShapeResultScreenTests: XCTestCase {
         model.flowSend(.next)
         XCTAssertEqual(model.flow.step, .settings)
         await model.coordinator.generateTapped()
+        await passShortagePrompt(model)
         await model.coordinator.settle()
 
         guard case .result = model.flow.generation.phase else {
@@ -130,6 +132,7 @@ final class ShapeResultScreenTests: XCTestCase {
         model.setDensity(.coarse)
         model.flowSend(.next)
         await model.coordinator.generateTapped()
+        await passShortagePrompt(model)
         await model.coordinator.settle()
         guard case .result = model.flow.generation.phase else {
             return XCTFail("没有进入结果页 \(model.flow.generation.phase)")
@@ -207,6 +210,16 @@ final class ShapeResultScreenTests: XCTestCase {
         model.coordinator.start()
         await model.coordinator.settle()
         return Harness(root: root, library: library, model: model)
+    }
+
+    /// 合成库只有 24 张，低于 200 张门槛。界面会先问「照片比较少」，点继续才真正开始。
+    private func passShortagePrompt(_ model: AppModel) async {
+        if model.flow.generation.shortagePrompt {
+            model.send(.shortageContinue)
+            return
+        }
+        _ = await waitUntil(seconds: 5) { model.flow.generation.shortagePrompt }
+        if model.flow.generation.shortagePrompt { model.send(.shortageContinue) }
     }
 
     private func waitUntil(seconds: Double = 90, _ condition: @escaping () -> Bool) async -> Bool {
