@@ -57,7 +57,8 @@ public struct ShapePath: Codable, Sendable, Equatable {
 
     /// `normalized` 的同一结果，并带回归一化前的曲线外接框宽高。
     /// 文字轮廓用它把外接框换成 em（`TextOutlineAssembler`），宽高比与 `path.aspect` 是同一套细分。
-    public static func normalizedReportingBounds(_ raw: [Element]) -> NormalizedShapePath? {
+    /// 曲线细分后的外接框。控制点不计入，避免把字号估大。
+    public static func curveBounds(_ raw: [Element]) -> (minX: Double, minY: Double, maxX: Double, maxY: Double)? {
         let polys = flatten(raw, transform: { $0 }, tolerance: 1e-4 * max(1, rawExtent(raw)))
         var minX = Double.infinity, minY = Double.infinity, maxX = -Double.infinity, maxY = -Double.infinity
         for poly in polys {
@@ -66,6 +67,13 @@ public struct ShapePath: Codable, Sendable, Equatable {
                 minY = min(minY, p.y); maxY = max(maxY, p.y)
             }
         }
+        guard minX.isFinite, maxX > minX, maxY > minY else { return nil }
+        return (minX, minY, maxX, maxY)
+    }
+
+    public static func normalizedReportingBounds(_ raw: [Element]) -> NormalizedShapePath? {
+        guard let b = curveBounds(raw) else { return nil }
+        let minX = b.minX, minY = b.minY, maxX = b.maxX, maxY = b.maxY
         let w = maxX - minX, h = maxY - minY
         guard w.isFinite, h.isFinite, w > 0, h > 0 else { return nil }
         func n(_ p: ShapePoint) -> ShapePoint { ShapePoint((p.x - minX) / w, (p.y - minY) / h) }

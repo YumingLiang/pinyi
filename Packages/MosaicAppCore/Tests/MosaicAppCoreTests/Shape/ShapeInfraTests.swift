@@ -110,19 +110,20 @@ final class ShapeInfraTests: XCTestCase {
         }
     }
 
-    /// 每 em 格数：4 个汉字一行（约 4.3 em 宽）≈ 27 格 ≥ 24；两行 4 字也 ≥ 24；1–3 字约 30 以上。
+    /// 每 em 固定约 27.4 格：四字一行用满内框；一到三字不再放大到铺满 120；更宽则拒绝缩小。
     func testCellsPerEmMeetsAcceptanceLine() throws {
         func cpe(_ w: Double, _ h: Double) throws -> Double {
             try ShapeLayoutRules.cellsPerEm(TextOutline(path: ShapePath(elements: S.square.elements, aspect: w / h),
                                                         widthEm: w, heightEm: h))
         }
-        XCTAssertGreaterThanOrEqual(try cpe(4.3, 1.0), 24)
-        XCTAssertEqual(try cpe(4.3, 1.0), 118 / 4.3, accuracy: 0.01)
+        XCTAssertEqual(try cpe(4.3, 1.0), ShapeLayoutRules.nominalTextCellsPerEm, accuracy: 0.01)
+        XCTAssertEqual(try cpe(3.3, 1.0), ShapeLayoutRules.nominalTextCellsPerEm, accuracy: 0.01)
+        XCTAssertGreaterThanOrEqual(try cpe(3.3, 1.0), 24)
+        XCTAssertLessThan(try cpe(3.3, 1.0), 40, "一到三字大约 30 格，不能放大到铺满长边")
         XCTAssertGreaterThanOrEqual(try cpe(4.3, 2.15), 24)
-        XCTAssertGreaterThanOrEqual(try cpe(3.3, 1.0), 30)
-        XCTAssertLessThan(try cpe(6, 1), 24, "超出时不达标（UI 提示 shape.text.too_long）")
-        XCTAssertFalse(try ShapeLayoutRules.meetsMinimumCellsPerEm(
-            TextOutline(path: ShapePath(elements: S.square.elements, aspect: 6), widthEm: 6, heightEm: 1)))
+        XCTAssertThrowsError(try cpe(6, 1)) { error in
+            guard case MosaicError.invalidGrid = error else { return XCTFail("\(error)") }
+        }
     }
 
     func testTextFilterAndCounting() {
@@ -304,7 +305,7 @@ final class ShapeInfraTests: XCTestCase {
 
     /// 文字轮廓（各种宽高比、各种排版大小）也不会出全 0 掩码。
     func testTextMasksAreNeverAllZero() throws {
-        for aspect in [0.4, 0.9, 1.0, 2.3, 4.3, 6.0, 8.6] {
+        for aspect in [0.4, 0.9, 1.0, 2.3, 4.3] {
             for path in [S.square, S.circle] {
                 let o = TextOutline(path: ShapePath(elements: path.elements, aspect: aspect), widthEm: aspect, heightEm: 1)
                 let g = try ShapeLayoutRules.text(o)

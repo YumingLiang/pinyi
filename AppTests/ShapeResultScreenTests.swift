@@ -171,6 +171,54 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertTrue(model.showsFinishedPreviewHint)
     }
 
+    func testOfficialTextGroupsReachPreviewPixelsAndJPEG() async throws {
+        let groups: [[String]] = [
+            TextComposition.lines(from: "520"),
+            TextComposition.lines(from: "满月快乐"),
+            TextComposition.lines(from: "LOVE"),
+            TextComposition.lines(from: "生日快乐\n宝贝"),
+        ]
+        XCTAssertEqual(groups[3], ["生日快乐", "宝贝"])
+        for lines in groups {
+            let harness = try await makeHarness()
+            defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+            let model = harness.model
+            let ready = await waitUntil {
+                model.coordinator.state.indexStatus.hasCompletedInitialScan && model.coordinator.state.indexStatus.available > 0
+            }
+            XCTAssertTrue(ready, "合成素材没有扫进索引")
+            try await model.generateText(lines: lines, palette: .warmRed, background: .white)
+            await passShortagePrompt(model)
+            await model.coordinator.settle()
+            guard case .result = model.flow.generation.phase else {
+                return XCTFail("\(lines) 没有进入结果页 \(model.flow.generation.phase)")
+            }
+            let product = try XCTUnwrap(model.coordinator.product)
+            let mask = try XCTUnwrap(product.shapeFrame).mask
+            XCTAssertEqual(max(mask.columns, mask.rows), 120, "\(lines)")
+            XCTAssertEqual(model.coordinator.state.flow.settings.density, .fine, "\(lines)")
+            XCTAssertNil(model.coordinator.target)
+            XCTAssertFalse(model.allowsWorkSave, "\(lines)")
+            let shown = await waitUntil { model.resultImage != nil }
+            XCTAssertTrue(shown, "\(lines) 没有预览")
+            XCTAssertTrue(model.showsFinishedPreviewHint, "\(lines)")
+            let image = try XCTUnwrap(model.resultImage)
+            let inside = try XCTUnwrap((0..<mask.cellCount).first { mask.isActive($0) })
+            let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
+            let previewPixel = pixelFromTop(try bitmap(image), width: image.width, columns: mask.columns,
+                                            cellPixels: previewCell, index: inside)
+            assertNear(previewPixel, tile, tolerance: 24, label: "\(lines) 预览内格")
+            model.saveTapped()
+            let saved = await waitUntil { if case .saved = model.exportPhase { return true }; return false }
+            XCTAssertTrue(saved, "\(lines) 导出 \(model.exportPhase)")
+            let jpeg = try XCTUnwrap(decodeJPEG(try XCTUnwrap(harness.library.lastJPEG)))
+            let exportCell = jpeg.width / mask.columns
+            let exportPixel = pixelFromTop(try bitmap(jpeg), width: jpeg.width, columns: mask.columns,
+                                           cellPixels: exportCell, index: inside)
+            assertNear(exportPixel, tile, tolerance: 36, label: "\(lines) 导出内格")
+        }
+    }
+
     private struct Harness {
         var root: URL
         var library: MemoryAlbum

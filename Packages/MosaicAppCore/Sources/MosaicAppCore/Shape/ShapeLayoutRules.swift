@@ -7,10 +7,31 @@ public struct TextOutline: Sendable, Equatable {
     public var widthEm: Double
     public var heightEm: Double
 
-    public init(path: ShapePath, widthEm: Double, heightEm: Double) {
+    /// 单个字形在归一化轮廓里的位置（0…1，和 `path` 同一套外接框）。
+    public var glyphs: [TextGlyphBox]
+
+    public init(path: ShapePath, widthEm: Double, heightEm: Double, glyphs: [TextGlyphBox] = []) {
         self.path = path
         self.widthEm = widthEm
         self.heightEm = heightEm
+        self.glyphs = glyphs
+    }
+}
+
+/// 一个字形的真实外接框，不是整行均分。
+public struct TextGlyphBox: Sendable, Equatable {
+    public var text: String
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(text: String, x: Double, y: Double, width: Double, height: Double) {
+        self.text = text
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
     }
 }
 
@@ -37,6 +58,12 @@ public enum ShapeLayoutRules {
     public static let targetPixelsPerCell = 16
     /// 文字每 em 的格数验收线（需求 1c：每字 ≥ 24 格）。
     public static let minimumCellsPerEm = 24.0
+    /// 一行大约 4.3 em 时刚好用满细档内框。短行也用这个比例，不再放大到铺满 120 格。
+    public static let textReferenceWidthEm = 4.3
+    /// 118 / 4.3 ≈ 27.4。四字一行大约 27–28 格，一到三字也停在这个量级，不是大约 30 的另一种放大。
+    public static var nominalTextCellsPerEm: Double {
+        (Double(textDensity.columns) - 2 * textMarginCells) / textReferenceWidthEm
+    }
 
     /// 网格 + 掩码。
     public struct ShapeGrid: Sendable, Equatable {
@@ -70,7 +97,13 @@ public enum ShapeLayoutRules {
 
     /// 文字轮廓的网格与掩码：固定细档 120、1 格边距。**没有密度参数**。
     public static func text(_ outline: TextOutline) throws -> ShapeGrid {
-        try shapeGrid(path: outline.path, density: textDensity, margin: textMarginCells)
+        let layout = try grid(aspect: outline.path.aspect, density: textDensity, margin: textMarginCells)
+        let cells = nominalTextCellsPerEm
+        let fitW = outline.widthEm * cells
+        let fitH = outline.heightEm * cells
+        let raster = try PathRasterizer.rasterize(outline.path, columns: layout.columns, rows: layout.rows,
+                                                  marginCells: textMarginCells, fitWidth: fitW, fitHeight: fitH)
+        return ShapeGrid(layout: layout, mask: raster.mask, density: textDensity, raster: raster)
     }
 
     /// 文字轮廓在固定细档下每 em 实际占多少格（按光栅化时的等比缩放算）。
@@ -84,6 +117,26 @@ public enum ShapeLayoutRules {
     /// 是否达到「每字 ≥ 24 格」的验收线（不达时 UI 提示 `shape.text.too_long`，设计 §3）。
     public static func meetsMinimumCellsPerEm(_ outline: TextOutline) throws -> Bool {
         try cellsPerEm(outline) >= minimumCellsPerEm
+    }
+
+    /// 每个字形在固定细档网格里的外接框，单位是格。用字形自己的曲线边界，不用整行宽度除以字数。
+    public static func glyphCellBoxes(_ outline: TextOutline) throws -> [GlyphCellBox] {
+        let grid = try text(outline)
+        return outline.glyphs.map { glyph in
+            GlyphCellBox(text: glyph.text,
+                         x: grid.raster.fitX + glyph.x * grid.raster.fitWidth,
+                         y: grid.raster.fitY + glyph.y * grid.raster.fitHeight,
+                         width: glyph.width * grid.raster.fitWidth,
+                         height: glyph.height * grid.raster.fitHeight)
+        }
+    }
+
+    public struct GlyphCellBox: Sendable, Equatable {
+        public var text: String
+        public var x: Double
+        public var y: Double
+        public var width: Double
+        public var height: Double
     }
 
     // MARK: - 网格

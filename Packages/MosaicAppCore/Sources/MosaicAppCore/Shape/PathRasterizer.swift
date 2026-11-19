@@ -32,16 +32,27 @@ public enum PathRasterizer {
 
     /// 光栅化。
     /// - Throws: `MosaicError.invalidGrid`（列 / 行 ≤ 0、边距放不下）。
-    public static func rasterize(_ path: ShapePath, columns: Int, rows: Int, marginCells: Double) throws -> Result {
+    public static func rasterize(_ path: ShapePath, columns: Int, rows: Int, marginCells: Double,
+                                 fitWidth: Double? = nil, fitHeight: Double? = nil) throws -> Result {
         guard columns > 0, rows > 0 else { throw MosaicError.invalidGrid("shape grid must be positive") }
         let innerW = Double(columns) - 2 * marginCells
         let innerH = Double(rows) - 2 * marginCells
         guard innerW > 0, innerH > 0, path.aspect > 0, path.aspect.isFinite else {
             throw MosaicError.invalidGrid("margin leaves no room for the shape")
         }
-        // 等比放进内框：高 = min(innerH, innerW / aspect)。
-        let h = min(innerH, innerW / path.aspect)
-        let w = h * path.aspect
+        // 默认等比铺满内框。文字传入固定的 fit，短字不再被放大到铺满长边。
+        let w: Double
+        let h: Double
+        if let fitWidth, let fitHeight {
+            guard fitWidth > 0, fitHeight > 0, fitWidth <= innerW + 1e-6, fitHeight <= innerH + 1e-6 else {
+                throw MosaicError.invalidGrid("text fit \(fitWidth)x\(fitHeight) exceeds \(innerW)x\(innerH)")
+            }
+            w = fitWidth
+            h = fitHeight
+        } else {
+            h = min(innerH, innerW / path.aspect)
+            w = h * path.aspect
+        }
         let x0 = (Double(columns) - w) / 2
         let y0 = (Double(rows) - h) / 2
         let polys = path.polygons(transform: { ShapePoint(x0 + $0.x * w, y0 + $0.y * h) }, tolerance: flattenTolerance)

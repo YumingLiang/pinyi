@@ -15,7 +15,7 @@ struct CoreTextOutline: TextOutlineProviding {
     func outline(lines: [String]) -> TextOutline? {
         let size = CGFloat(TextOutlineAssembler.fontSizePoints)
         let font = Self.systemHeavyFont(size: size)
-        let placements = lines.map { Self.placement(of: Self.line(for: $0, font: font)) }
+        let placements = lines.map { Self.placement(of: Self.line(for: $0, font: font), text: $0) }
         return TextOutlineAssembler.assemble(lines: placements)
     }
 
@@ -48,7 +48,7 @@ struct CoreTextOutline: TextOutlineProviding {
         return CTLineCreateWithAttributedString(mutable)
     }
 
-    private static func placement(of line: CTLine) -> TextLinePlacement {
+    private static func placement(of line: CTLine, text: String) -> TextLinePlacement {
         var ascent: CGFloat = 0
         var descent: CGFloat = 0
         var leading: CGFloat = 0
@@ -60,10 +60,14 @@ struct CoreTextOutline: TextOutlineProviding {
             guard count > 0 else { continue }
             var glyphIDs = [CGGlyph](repeating: 0, count: count)
             var positions = [CGPoint](repeating: .zero, count: count)
+            var stringIndices = [CFIndex](repeating: 0, count: count)
             glyphIDs.withUnsafeMutableBufferPointer { ids in
                 positions.withUnsafeMutableBufferPointer { points in
-                    CTRunGetGlyphs(run, CFRange(location: 0, length: 0), ids.baseAddress!)
-                    CTRunGetPositions(run, CFRange(location: 0, length: 0), points.baseAddress!)
+                    stringIndices.withUnsafeMutableBufferPointer { indices in
+                        CTRunGetGlyphs(run, CFRange(location: 0, length: 0), ids.baseAddress!)
+                        CTRunGetPositions(run, CFRange(location: 0, length: 0), points.baseAddress!)
+                        CTRunGetStringIndices(run, CFRange(location: 0, length: 0), indices.baseAddress!)
+                    }
                 }
             }
             let units = CGFloat(CTFontGetUnitsPerEm(runFont))
@@ -75,10 +79,19 @@ struct CoreTextOutline: TextOutlineProviding {
                 let elements = shapeElements(of: path)
                 guard !elements.isEmpty else { continue }
                 // 位置已经乘进路径，原点保持在这一行的排版原点。
-                glyphs.append(TextGlyphPlacement(elements: elements, originX: 0, originY: 0))
+                glyphs.append(TextGlyphPlacement(elements: elements, originX: 0, originY: 0,
+                                                  text: label(in: text, utf16Index: stringIndices[index])))
             }
         }
         return TextLinePlacement(glyphs: glyphs, advance: Double(advance))
+    }
+
+    private static func label(in text: String, utf16Index: CFIndex) -> String {
+        let ns = text as NSString
+        guard utf16Index >= 0, utf16Index < ns.length else { return "" }
+        let range = ns.rangeOfComposedCharacterSequence(at: utf16Index)
+        guard range.location != NSNotFound, range.length > 0 else { return "" }
+        return ns.substring(with: range)
     }
 
     private static func runs(of line: CTLine) -> [CTRun] {

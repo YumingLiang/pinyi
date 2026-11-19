@@ -70,6 +70,49 @@ final class CoreTextOutlineTests: XCTestCase {
         assertBorderUncovered(huiGrid, "回")
     }
 
+    /// 需求 1c 的正式四组。第四组是真实换行，不是斜杠，也不是两个字符「\」「n」。
+    func testOfficialFourGroupsUseRealGlyphBoundsOnFineGrid() throws {
+        let groups: [(name: String, lines: [String])] = [
+            ("520", TextComposition.lines(from: "520")),
+            ("满月快乐", TextComposition.lines(from: "满月快乐")),
+            ("LOVE", TextComposition.lines(from: "LOVE")),
+            ("生日快乐/宝贝", TextComposition.lines(from: "生日快乐\n宝贝")),
+        ]
+        XCTAssertEqual(groups[3].lines, ["生日快乐", "宝贝"])
+        XCTAssertFalse("生日快乐\n宝贝".contains("\\"))
+        for group in groups {
+            let outline = try XCTUnwrap(provider.outline(lines: group.lines), group.name)
+            let grid = try ShapeLayoutRules.text(outline)
+            let perEm = try ShapeLayoutRules.cellsPerEm(outline)
+            let boxes = try ShapeLayoutRules.glyphCellBoxes(outline)
+            let hanzi = boxes.filter { ShapeTextRules.units($0.text) >= 1 }
+            print("TEXT-GROUP \(group.name) cellsPerEm=\(perEm) widthEm=\(outline.widthEm) heightEm=\(outline.heightEm) grid=\(grid.layout.columns)x\(grid.layout.rows) glyphs=\(boxes.map { "\($0.text):\($0.width)x\($0.height)" }.joined(separator: ","))")
+            XCTAssertEqual(grid.density, .fine, group.name)
+            XCTAssertEqual(max(grid.layout.columns, grid.layout.rows), 120, group.name)
+            XCTAssertEqual(boxes.map(\.text).joined(), group.lines.joined(), group.name)
+            XCTAssertGreaterThanOrEqual(perEm, 24, group.name)
+            if group.lines.contains(where: { ShapeTextRules.units($0) >= 4 }) {
+                XCTAssertGreaterThanOrEqual(perEm, 26, "\(group.name) 四字一行大约 27–28 格")
+                XCTAssertLessThanOrEqual(perEm, 32, "\(group.name) 四字一行大约 27–28 格")
+            }
+            for box in hanzi {
+                XCTAssertGreaterThanOrEqual(box.width, 24, "\(group.name) \(box.text) 宽")
+                XCTAssertGreaterThanOrEqual(box.height, 24, "\(group.name) \(box.text) 高")
+            }
+            if group.name == "520" || group.name == "LOVE" {
+                XCTAssertTrue(hanzi.isEmpty, group.name)
+                XCTAssertEqual(boxes.count, group.lines[0].count, group.name)
+                XCTAssertGreaterThan(outline.widthEm, 0, group.name)
+            }
+            try TextComposition.requireReadableHanzi(outline)
+        }
+        let short = try XCTUnwrap(provider.outline(lines: ["宝"]))
+        let shortPerEm = try ShapeLayoutRules.cellsPerEm(short)
+        print("TEXT-GROUP-SCALE 单字宝 cellsPerEm=\(shortPerEm) 不是正式四组，只核对 1–3 字不会被放大到铺满 120")
+        XCTAssertGreaterThanOrEqual(shortPerEm, 26)
+        XCTAssertLessThan(shortPerEm, 40, "单字若被放大到铺满长边，每 em 会远大于 30")
+    }
+
     /// 「宝贝」比「生日快乐」短，第二行应在中间，而不是贴左。
     func testShorterSecondLineIsCentered() throws {
         let outline = try XCTUnwrap(provider.outline(lines: ["生日快乐", "宝贝"]))
