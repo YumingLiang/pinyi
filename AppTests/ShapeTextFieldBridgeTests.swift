@@ -4,59 +4,70 @@ import XCTest
 import MosaicAppCore
 @testable import PhotoMosaic
 
-/// 把生产用的两行输入放进测试宿主，驱动 `UITextField`。不是 XCUITest，也没有可见键盘点击。
-/// 组合结束留下的 `commits` 不能清掉。本文件在没有 Apple SDK 的环境不会执行。
+/// 把生产用的两行输入放进测试宿主，驱动 `UITextField`。不是 XCUITest，也没有可见键盘。
+/// `unmarkText` 若没有自己发出 `editingChanged`，测试会手工 `sendActions(.editingChanged)`。
+/// 那条提交的断言仍要求确定全文；手工事件不能写成自然结束或键盘已验证。
+/// 本文件在没有 Apple SDK 的环境不会执行。
 @MainActor
 final class ShapeTextFieldBridgeTests: XCTestCase {
     func testUnmarkKeepsTheEndedCommitAndCancelRestoresTheLine() {
-        let rig = mount(lines: ["生日快乐", ""])
+        let legal = "生日"
+        let rig = mount(lines: ["", ""])
         let field = rig.line(0)
         let same = field
         XCTAssertTrue(field.becomeFirstResponder())
         field.delegate?.textFieldDidBeginEditing?(field)
         placeCaretAtEnd(field)
-        field.setMarkedText("生", selectedRange: NSRange(location: 0, length: 1))
+        field.setMarkedText(legal, selectedRange: NSRange(location: (legal as NSString).length, length: 0))
         field.sendActions(for: .editingChanged)
         XCTAssertNotNil(field.markedTextRange, "系统输入框没有进入组合态")
         XCTAssertTrue(rig.store.commits.isEmpty, "组合期间不能提交")
 
         let before = rig.store.commits.count
         field.unmarkText()
-        if rig.store.commits.count == before {
+        XCTAssertNil(field.markedTextRange, "unmarkText 后不应仍有组合区间")
+        XCTAssertEqual(field.text, legal, "unmarkText 后控件全文必须是确定的「生日」")
+        let naturalUnmarkCommit = rig.store.commits.count == before + 1
+        if !naturalUnmarkCommit {
+            XCTAssertEqual(rig.store.commits.count, before, "unmarkText 没有自然提交时，不应已有别的提交")
+            // 边界：这条 editingChanged 是测试手工发出的，不是 unmarkText 的自然通知，也不是键盘。
             field.sendActions(for: .editingChanged)
         }
-        XCTAssertGreaterThan(rig.store.commits.count, before, "组合结束必须留下提交")
-        let ended = rig.store.commits[rig.store.commits.count - 1]
-        XCTAssertEqual(ended.index, 0)
-        XCTAssertFalse(ended.text.isEmpty)
-        XCTAssertNil(field.markedTextRange)
+        let driver = naturalUnmarkCommit
+            ? "unmarkText 自己发出了 editingChanged。这不是键盘。"
+            : "unmarkText 没有发出 editingChanged。提交由测试 sendActions(.editingChanged) 驱动，不是自然结束，也不是键盘。"
+        XCTAssertEqual(rig.store.commits.count, before + 1, driver)
+        XCTAssertEqual(rig.store.commits.last?.index, 0, driver)
+        XCTAssertEqual(rig.store.commits.last?.text, legal, driver)
         pump()
-        if rig.store.notice != nil {
-            XCTAssertEqual(rig.store.lines, ["生日快乐", ""])
-            XCTAssertEqual(field.text, "生日快乐")
-        } else {
-            XCTAssertEqual(field.text, ended.text)
-            XCTAssertEqual(rig.store.lines[0], ended.text)
-        }
-        XCTAssertEqual(rig.store.commits.last?.text, ended.text, "不能清掉组合结束的提交")
-        XCTAssertTrue(field === same, "回滚不能换掉控件")
+        XCTAssertNil(rig.store.notice, "合法的「生日」不能被拒绝。\(driver)")
+        XCTAssertEqual(rig.store.lines, [legal, ""], driver)
+        XCTAssertEqual(field.text, legal, driver)
+        XCTAssertTrue(field === same)
 
-        let restored = field.text ?? ""
         placeCaretAtEnd(field)
-        field.setMarkedText("呀", selectedRange: NSRange(location: 0, length: 1))
+        field.setMarkedText("呀", selectedRange: NSRange(location: 1, length: 0))
         field.sendActions(for: .editingChanged)
         XCTAssertNotNil(field.markedTextRange)
+        XCTAssertEqual(rig.store.commits.count, before + 1, "取消前的组合不能提交")
         guard let marked = field.markedTextRange else { return XCTFail("取消前没有组合区间") }
+        let beforeCancel = rig.store.commits.count
         field.replace(marked, withText: "")
-        if field.markedTextRange != nil {
-            field.sendActions(for: .editingChanged)
-        } else if rig.store.commits.last?.text != restored {
+        XCTAssertNil(field.markedTextRange, "取消后不应仍有组合区间")
+        XCTAssertEqual(field.text, legal, "取消后控件应仍是「生日」")
+        let naturalCancelCommit = rig.store.commits.count == beforeCancel + 1
+        if !naturalCancelCommit {
+            XCTAssertEqual(rig.store.commits.count, beforeCancel)
+            // 边界：同样只是测试手工 editingChanged，不是 replace 的自然通知，也不是键盘。
             field.sendActions(for: .editingChanged)
         }
-        pump()
-        XCTAssertNil(field.markedTextRange)
-        XCTAssertEqual(field.text, restored, "取消组合后控件应回到取消前的正文")
-        XCTAssertEqual(rig.store.lines[0], restored)
+        let cancelDriver = naturalCancelCommit
+            ? "replace 空文本自己发出了 editingChanged。这不是键盘。"
+            : "replace 没有发出 editingChanged。提交由测试 sendActions(.editingChanged) 驱动，不是自然结束，也不是键盘。"
+        XCTAssertEqual(rig.store.commits.last?.text, legal, cancelDriver)
+        XCTAssertEqual(field.text, legal, cancelDriver)
+        XCTAssertEqual(rig.store.lines, [legal, ""], cancelDriver)
+        XCTAssertNil(rig.store.notice, cancelDriver)
         XCTAssertTrue(field === same)
     }
 
@@ -155,6 +166,49 @@ final class ShapeTextFieldBridgeTests: XCTestCase {
         XCTAssertEqual(second.text, markedText)
         XCTAssertEqual(rig.store.lines[1], "宝贝")
         XCTAssertEqual(first.text, "生日")
+
+        // 第二行已经是同一段「宝贝」：允许粘贴。第二行字符串不变，第一行更新。这是幂等，不是拒绝。
+        let same = mount(lines: ["生日", "宝贝"])
+        let sameField = same.line(0)
+        let sameLength = (sameField.text as NSString?)?.length ?? 0
+        let samePaste = (sameField.delegate as? ShapeTextFieldAdapter)?.textField(
+            sameField, shouldChangeCharactersIn: NSRange(location: 0, length: sameLength),
+            replacementString: "生日快乐\n宝贝")
+        XCTAssertEqual(samePaste, false)
+        pump()
+        XCTAssertEqual(same.store.commits.last?.text, "生日快乐\n宝贝")
+        XCTAssertNil(same.store.notice)
+        XCTAssertEqual(same.store.lines, ["生日快乐", "宝贝"])
+        XCTAssertEqual(same.line(0).text, "生日快乐")
+        XCTAssertEqual(same.line(1).text, "宝贝")
+
+        // 本行仍在组合时，换行不在这一刻提交。结束标记后的整段校验是另一次手工 editingChanged。
+        let pending = mount(lines: ["", ""])
+        let pendingField = pending.line(0)
+        XCTAssertTrue(pendingField.becomeFirstResponder())
+        placeCaretAtEnd(pendingField)
+        pendingField.setMarkedText("日", selectedRange: NSRange(location: 1, length: 0))
+        pendingField.sendActions(for: .editingChanged)
+        XCTAssertNotNil(pendingField.markedTextRange)
+        let during = pending.store.commits.count
+        let held = (pendingField.delegate as? ShapeTextFieldAdapter)?.textField(
+            pendingField, shouldChangeCharactersIn: NSRange(location: 0, length: 0),
+            replacementString: "生日快乐\n宝贝")
+        XCTAssertEqual(held, true, "组合中的换行应留给结束时整段校验，而不是现在提交")
+        XCTAssertEqual(pending.store.commits.count, during, "组合中的换行不能产生提交")
+        pendingField.unmarkText()
+        XCTAssertNil(pendingField.markedTextRange)
+        let beforeWhole = pending.store.commits.count
+        pendingField.text = "生日快乐\n宝贝"
+        // 边界：全文是测试写入控件后再 sendActions(.editingChanged)。不是 unmarkText 插入的换行，也不是键盘。
+        pendingField.sendActions(for: .editingChanged)
+        XCTAssertEqual(pending.store.commits.count, beforeWhole + 1)
+        XCTAssertEqual(pending.store.commits.last?.text, "生日快乐\n宝贝")
+        pump()
+        XCTAssertNil(pending.store.notice, "结束后的合法两行不能被拒绝")
+        XCTAssertEqual(pending.store.lines, ["生日快乐", "宝贝"])
+        XCTAssertEqual(pending.line(0).text, "生日快乐")
+        XCTAssertEqual(pending.line(1).text, "宝贝")
     }
 
     private func mount(lines: [String]) -> Rig {

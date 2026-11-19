@@ -66,6 +66,10 @@ final class TextDraftEditorTests: XCTestCase {
         let kept = TextDraftEditor.apply(lines: ["生日", "宝贝"], index: 0, proposed: "生日快乐\n其他")
         XCTAssertEqual(kept.lines, ["生日", "宝贝"])
         XCTAssertEqual(kept.notice, .secondLineKept)
+        // 第二行已经是「宝贝」时，粘贴换行后仍是「宝贝」：第二行幂等，第一行可以更新。不是拒绝。
+        let sameSecond = TextDraftEditor.apply(lines: ["生日", "宝贝"], index: 0, proposed: "生日快乐\n宝贝")
+        XCTAssertNil(sameSecond.notice)
+        XCTAssertEqual(sameSecond.lines, ["生日快乐", "宝贝"])
         let composing = TextDraftEditor.apply(lines: ["生日", ""], index: 0, proposed: "生日快乐\n宝贝",
                                              secondLineIsComposing: true)
         XCTAssertEqual(composing.lines, ["生日", ""])

@@ -62,8 +62,9 @@ public enum TextDraftEditor {
         lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    /// 改一行。第一行的真实换行只在第二行还空、或和第二行相同、且第二行不在组合时，才写入第二行。
-    /// 第二行已有不同正文或正在组合时，整次不改，避免盖掉用户正在编辑的字。
+    /// 改一行。第一行的真实换行：
+    /// 第二行还空时写入两行。第二行已经等于换行后面那段时允许：第二行字符串不变（幂等），第一行可以换成换行前那段。
+    /// 第二行是别的正文，或正在组合时，整次不改。
     public static func apply(lines: [String], index: Int, proposed: String,
                              secondLineIsComposing: Bool = false) -> (lines: [String], notice: TextInputNotice?) {
         let current = normalized(lines)
