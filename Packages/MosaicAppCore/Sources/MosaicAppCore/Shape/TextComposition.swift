@@ -2,11 +2,13 @@ import Foundation
 
 /// 一次文字生成要用的轮廓。密度不在这里，生成时固定细档。
 public struct PreparedTextMosaic: Sendable, Equatable {
+    public var lines: [String]
     public var outline: TextOutline
     public var palette: ShapePalette
     public var background: ShapeBackground
 
-    public init(outline: TextOutline, palette: ShapePalette, background: ShapeBackground) {
+    public init(lines: [String], outline: TextOutline, palette: ShapePalette, background: ShapeBackground) {
+        self.lines = lines
         self.outline = outline
         self.palette = palette
         self.background = background

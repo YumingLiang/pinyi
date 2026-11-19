@@ -86,14 +86,16 @@ final class CoreTextOutlineTests: XCTestCase {
             let perEm = try ShapeLayoutRules.cellsPerEm(outline)
             let boxes = try ShapeLayoutRules.glyphCellBoxes(outline)
             let hanzi = boxes.filter { ShapeTextRules.units($0.text) >= 1 }
-            print("TEXT-GROUP \(group.name) cellsPerEm=\(perEm) widthEm=\(outline.widthEm) heightEm=\(outline.heightEm) grid=\(grid.layout.columns)x\(grid.layout.rows) glyphs=\(boxes.map { "\($0.text):\($0.width)x\($0.height)" }.joined(separator: ","))")
+            let glyphLog = boxes.map { String(format: "%@:x=%.4f,y=%.4f,w=%.4f,h=%.4f", $0.text, $0.x, $0.y, $0.width, $0.height) }.joined(separator: ",")
+            print(String(format: "TEXT-GROUP %@ cellsPerEm=%.6f widthEm=%.6f heightEm=%.6f grid=%dx%d glyphs=%@",
+                         group.name, perEm, outline.widthEm, outline.heightEm, grid.layout.columns, grid.layout.rows, glyphLog))
             XCTAssertEqual(grid.density, .fine, group.name)
             XCTAssertEqual(max(grid.layout.columns, grid.layout.rows), 120, group.name)
             XCTAssertEqual(boxes.map(\.text).joined(), group.lines.joined(), group.name)
-            XCTAssertGreaterThanOrEqual(perEm, 24, group.name)
+            XCTAssertEqual(perEm, ShapeLayoutRules.nominalTextCellsPerEm, accuracy: 1e-4, group.name)
             if group.lines.contains(where: { ShapeTextRules.units($0) >= 4 }) {
-                XCTAssertGreaterThanOrEqual(perEm, 26, "\(group.name) 四字一行大约 27–28 格")
-                XCTAssertLessThanOrEqual(perEm, 32, "\(group.name) 四字一行大约 27–28 格")
+                XCTAssertGreaterThanOrEqual(perEm, 27, "\(group.name) 四字一行应在约 27–28 格")
+                XCTAssertLessThanOrEqual(perEm, 28, "\(group.name) 四字一行应在约 27–28 格")
             }
             for box in hanzi {
                 XCTAssertGreaterThanOrEqual(box.width, 24, "\(group.name) \(box.text) 宽")
@@ -108,12 +110,13 @@ final class CoreTextOutlineTests: XCTestCase {
         }
         let short = try XCTUnwrap(provider.outline(lines: ["宝"]))
         let shortPerEm = try ShapeLayoutRules.cellsPerEm(short)
-        print("TEXT-GROUP-SCALE 单字宝 cellsPerEm=\(shortPerEm) 不是正式四组，只核对 1–3 字不会被放大到铺满 120")
-        XCTAssertGreaterThanOrEqual(shortPerEm, 26)
+        print(String(format: "TEXT-GROUP-SCALE 单字宝 cellsPerEm=%.6f 不是正式四组，固定比例 %.6f，不放大铺满 120",
+                     shortPerEm, ShapeLayoutRules.nominalTextCellsPerEm))
+        XCTAssertEqual(shortPerEm, ShapeLayoutRules.nominalTextCellsPerEm, accuracy: 1e-4)
         XCTAssertLessThan(shortPerEm, 40, "单字若被放大到铺满长边，每 em 会远大于 30")
     }
 
-    /// 「宝贝」比「生日快乐」短，第二行应在中间，而不是贴左。
+    /// 第二行墨水中心相对整张掩码中线，容差 8 格。这只看下三分之一的墨水块，不是逐字居中。
     func testShorterSecondLineIsCentered() throws {
         let outline = try XCTUnwrap(provider.outline(lines: ["生日快乐", "宝贝"]))
         let mask = try ShapeLayoutRules.text(outline).mask

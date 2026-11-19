@@ -203,7 +203,7 @@ final class AppModel: ObservableObject {
         } catch {
             throw TextComposeFailure.doesNotFit
         }
-        coordinator.prepareText(outline: outline, palette: palette, background: background)
+        coordinator.prepareText(lines: prepared, outline: outline, palette: palette, background: background)
         await coordinator.generateTapped()
     }
     func setShapePreset(_ id: ShapePresetID) { coordinator.setShapePreset(id) }

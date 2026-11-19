@@ -59,6 +59,10 @@ public final class AppCoordinator {
         /// nil = 照片拼图。背景不在这里：只改背景不重新匹配。
         var shapePreset: ShapePresetID?
         var shapePalette: ShapePalette?
+        /// 文字正文。没有文字时为 nil。换正文后旧结果不能再导出。
+        var textLines: [String]?
+        var textPalette: ShapePalette?
+        var textBackground: ShapeBackground?
     }
     /// 来源被静默去掉相簿（不是用户改的）：当前结果记下的来源同样换掉，`settingsPrimaryAction` 不因此变「开始拼图」。
     func notePrunedSelectionForProduct(old: SourceSelection, new: SourceSelection) {
@@ -67,7 +71,9 @@ public final class AppCoordinator {
     private var currentInputs: ProductInputs {
         ProductInputs(targetGeneration: targetGeneration, selection: state.flow.source.selection,
                       density: state.flow.settings.density,
-                      shapePreset: state.flow.shape?.preset, shapePalette: state.flow.shape?.palette)
+                      shapePreset: state.flow.shape?.preset, shapePalette: state.flow.shape?.palette,
+                      textLines: preparedText?.lines, textPalette: preparedText?.palette,
+                      textBackground: preparedText?.background)
     }
     /// 平台层执行系统动作（打开设置、受限选择器）。
     public var systemActionHandler: (@MainActor (SystemAction) -> Void)?
@@ -396,8 +402,8 @@ public final class AppCoordinator {
 
     /// 用已经取到的文字轮廓生成。不提供密度参数，固定细档，叠加强度为 0。
     /// 调用前须先通过 `TextComposition`；这里不再改字、不截断。
-    public func prepareText(outline: TextOutline, palette: ShapePalette, background: ShapeBackground) {
-        preparedText = PreparedTextMosaic(outline: outline, palette: palette, background: background)
+    public func prepareText(lines: [String], outline: TextOutline, palette: ShapePalette, background: ShapeBackground) {
+        preparedText = PreparedTextMosaic(lines: lines, outline: outline, palette: palette, background: background)
         state.flow.shape = nil
         state.flow.settings.density = .fine
         state.flow.settings.overlayAlpha = 0
@@ -433,7 +439,9 @@ public final class AppCoordinator {
     public var currentResultIsShape: Bool { product?.shapeFrame != nil }
 
     /// 形状结果这一阶段不能存作品。正在选形状、或当前结果本身是形状，都不能存。
-    public var allowsWorkSave: Bool { state.flow.shape == nil && !currentResultIsShape }
+    public var allowsWorkSave: Bool {
+        preparedText == nil && state.flow.shape == nil && !currentResultIsShape
+    }
     public func setShowScanSheet(_ on: Bool) { state.showScanSheet = on }
     public func setPresentedEmptyState(_ e: LibraryEmptyState?) { state.presentedEmptyState = e }
     public func setExportTier(_ t: ExportTier) {
@@ -570,6 +578,15 @@ public final class AppCoordinator {
         }
     }
 
+    /// 这次运行抓到的文字已经不是当前选择。照片和形状运行（没有文字）不走这里。
+    private func textSelectionMovedOn(from captured: PreparedTextMosaic?) -> Bool {
+        guard let captured else { return false }
+        guard let current = preparedText else { return true }
+        return current.lines != captured.lines
+            || current.palette != captured.palette
+            || current.background != captured.background
+    }
+
     private func run(id: Int, seed: UInt64) {
         if preparedText != nil {
             state.flow.settings.density = .fine
@@ -646,7 +663,9 @@ public final class AppCoordinator {
                 await consumer.value
                 await stageConsumer.value
                 guard let self else { return }
-                if self.state.flow.generation.currentRunID == id {
+                let stillThisRun = self.state.flow.generation.currentRunID == id
+                let textMoved = stillThisRun && self.textSelectionMovedOn(from: textMosaic)
+                if stillThisRun, !textMoved {
                     self.product = p
                     self.shapeIdentity = p.shapeFrame == nil ? nil : shapeChoice
                     self.productInputs = inputs
@@ -658,7 +677,11 @@ public final class AppCoordinator {
                     let promptedBefore = self.gateAvailable.map { MaterialSupply.evaluate(availableCount: $0).needsWarning } ?? false
                     self.state.postFilterShortageNotice = p.outcome.isBelowThresholdAfterFilter && !promptedBefore
                 }
-                self.send(.succeeded(runID: id, p.outcome))
+                if textMoved {
+                    self.send(.staleRunDiscarded(runID: id))
+                } else {
+                    self.send(.succeeded(runID: id, p.outcome))
+                }
             } catch {
                 continuation.finish()
                 stageContinuation.finish()
