@@ -182,7 +182,7 @@ final class ShapeTextFieldBridgeTests: XCTestCase {
         XCTAssertEqual(same.line(0).text, "生日快乐")
         XCTAssertEqual(same.line(1).text, "宝贝")
 
-        // 本行仍在组合时，换行不在这一刻提交。结束标记后的整段校验是另一次手工 editingChanged。
+        // 本行仍在组合时，换行不在这一刻提交。组合结束后用整段替换再校验。
         let pending = mount(lines: ["", ""])
         let pendingField = pending.line(0)
         XCTAssertTrue(pendingField.becomeFirstResponder())
@@ -199,9 +199,15 @@ final class ShapeTextFieldBridgeTests: XCTestCase {
         pendingField.unmarkText()
         XCTAssertNil(pendingField.markedTextRange)
         let beforeWhole = pending.store.commits.count
-        pendingField.text = "生日快乐\n宝贝"
-        // 边界：全文是测试写入控件后再 sendActions(.editingChanged)。不是 unmarkText 插入的换行，也不是键盘。
-        pendingField.sendActions(for: .editingChanged)
+        // 边界：模拟器把 UITextField.text =「生日快乐\n宝贝」收成「生日快乐 宝贝」，再按不支持字符拒绝。
+        // 换行只留在 shouldChangeCharactersIn 的 replacementString。组合已经结束。
+        // 这次是测试直接调用代理，不是键盘，也不是 unmarkText 自己插入的换行。
+        let wholeLength = (pendingField.text as NSString?)?.length ?? 0
+        let finished = (pendingField.delegate as? ShapeTextFieldAdapter)?.textField(
+            pendingField,
+            shouldChangeCharactersIn: NSRange(location: 0, length: wholeLength),
+            replacementString: "生日快乐\n宝贝")
+        XCTAssertEqual(finished, false)
         XCTAssertEqual(pending.store.commits.count, beforeWhole + 1)
         XCTAssertEqual(pending.store.commits.last?.text, "生日快乐\n宝贝")
         pump()

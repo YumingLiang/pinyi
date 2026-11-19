@@ -17,13 +17,24 @@ struct ShapeTextLinesEditor: View {
                                onCommit: { onCommit(0, $0, marks.marked[1]) },
                                onMarked: { marks.marked[0] = $0 },
                                onBegin: { focus = 0 },
-                               onReturn: { focus = 1 })
+                               onReturn: { field in
+                                   focus = 1
+                                   // 回车处理还没结束时立刻抢焦点会被系统拉回第一行，所以放到下一轮。
+                                   DispatchQueue.main.async {
+                                       _ = field.window?.textField(identifier: "shape-text-1")?.becomeFirstResponder()
+                                   }
+                               })
             ShapeTextLineField(title: L10nKey.shapeTextLine2.localized, text: normalized[1], identifier: "shape-text-1",
                                isFocused: focus == 1,
                                onCommit: { onCommit(1, $0, false) },
                                onMarked: { marks.marked[1] = $0 },
                                onBegin: { focus = 1 },
-                               onReturn: { focus = nil })
+                               onReturn: { field in
+                                   focus = nil
+                                   DispatchQueue.main.async {
+                                       _ = field.resignFirstResponder()
+                                   }
+                               })
         }
     }
 }
@@ -42,7 +53,7 @@ struct ShapeTextLineField: UIViewRepresentable {
     var onCommit: (String) -> Void
     var onMarked: (Bool) -> Void
     var onBegin: () -> Void
-    var onReturn: () -> Void
+    var onReturn: (UITextField) -> Void
 
     func makeUIView(context: Context) -> UITextField {
         let field = UITextField()
@@ -73,7 +84,7 @@ final class ShapeTextFieldAdapter: NSObject, UITextFieldDelegate {
     var onCommit: (String) -> Void = { _ in }
     var onMarked: (Bool) -> Void = { _ in }
     var onBegin: () -> Void = {}
-    var onReturn: () -> Void = {}
+    var onReturn: (UITextField) -> Void = { _ in }
     private var applyingModel = false
 
     /// 模型拒绝后把控件文本拉回，并把光标放在拉回后的正文里。组合中不动。
@@ -103,7 +114,7 @@ final class ShapeTextFieldAdapter: NSObject, UITextFieldDelegate {
     func textFieldDidBeginEditing(_ textField: UITextField) { onBegin() }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        onReturn()
+        onReturn(textField)
         return false
     }
 
@@ -128,5 +139,15 @@ final class ShapeTextFieldAdapter: NSObject, UITextFieldDelegate {
         let clamped = min(max(0, utf16), length)
         guard let position = field.position(from: field.beginningOfDocument, offset: clamped) else { return }
         field.selectedTextRange = field.textRange(from: position, to: position)
+    }
+}
+
+private extension UIView {
+    func textField(identifier: String) -> UITextField? {
+        if let field = self as? UITextField, field.accessibilityIdentifier == identifier { return field }
+        for child in subviews {
+            if let found = child.textField(identifier: identifier) { return found }
+        }
+        return nil
     }
 }
