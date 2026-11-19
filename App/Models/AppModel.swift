@@ -235,6 +235,10 @@ final class AppModel: ObservableObject {
         set { coordinator.setExportTier(newValue) }
     }
     var canExport: Bool { coordinator.canExport }
+    /// 结果页只有这次成品已经显示出来，才提示双指放大。空白、失败、或参数已改还没重生成时不提示。
+    var showsFinishedPreviewHint: Bool { resultImage != nil && canExport }
+    /// 形状的配色或密度已经改了，旧结果还在，新的生成还没完成。
+    var shapeEditsNeedRegeneration: Bool { coordinator.shapeEditsNeedRegeneration }
     func saveTapped() { Task { await coordinator.saveTapped() } }
     func exportFailurePrimaryTapped() { Task { await coordinator.exportFailurePrimaryTapped() } }
     func dismissExportResult() { coordinator.dismissExportResult() }

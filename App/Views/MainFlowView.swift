@@ -67,31 +67,40 @@ struct TargetStepView: View {
     /// 「再拼一张」进来时直接弹出选图（再拼一张 → 选一张 → 开始拼图，≤ 3 次点击）。
     @State private var showPicker = false
 
+    private var showsParallelEntries: Bool { !model.flow.isQuickAgain && !model.flow.isFreshQuickStart }
+    private var photoButtonKey: L10nKey {
+        if showsParallelEntries, !model.flow.hasTarget { return .homePhotoEntry }
+        return model.flow.targetButtonKey
+    }
+
     var body: some View {
         VStack(spacing: 20) {
-            Text(L10nKey.targetPrompt).font(.title3)
+            if !showsParallelEntries || model.flow.hasTarget {
+                Text(L10nKey.targetPrompt).font(.title3)
+            }
             if let cg = model.targetPreview {
                 Image(decorative: cg, scale: 1).resizable().scaledToFit().frame(maxHeight: 360).cornerRadius(12)
             }
             if let n = model.flow.targetNotice { Text(n).foregroundStyle(.red).font(.footnote) }
             // 决定 15：SwiftUI PhotosPicker（iOS 16+）。PhotosPicker 走系统进程，不需要相册读取权限。
-            // label 闭包是 @Sendable：先在 MainActor 上取值，闭包里只捕获值
-            let buttonKey = model.flow.targetButtonKey
+            // 首页两个入口一次选定类型：拼成一张照片，或拼成一个图形。不再加类型向导。
             PhotosPicker(selection: $item, matching: .images, photoLibrary: .shared()) {
-                Text(buttonKey)
+                Text(photoButtonKey).frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderedProminent).controlSize(.large)
             .photosPicker(isPresented: $showPicker, selection: $item, matching: .images, photoLibrary: .shared())
-            Button { model.flowSend(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
-                .buttonStyle(.borderedProminent).controlSize(.large)
-                .disabled(!model.flow.canGoNextFromTarget)
-            if !model.flow.isQuickAgain && !model.flow.isFreshQuickStart {
+            if showsParallelEntries {
                 Button { model.beginShape() } label: { Text(L10nKey.shapeEntry).frame(maxWidth: .infinity) }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.bordered).controlSize(.large)
+            }
+            if model.flow.hasTarget || !showsParallelEntries {
+                Button { model.flowSend(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .disabled(!model.flow.canGoNextFromTarget)
             }
         }
         .padding(24)
-        .navigationTitle(Text(L10nKey.targetNavTitle))
+        .navigationTitle(Text(showsParallelEntries && !model.flow.hasTarget ? L10nKey.homeNavTitle : L10nKey.targetNavTitle))
         .onAppear {
             // TODO(需求 v1.0 §4)：自做选图页（记住浏览位置）接入主流程后改为打开它；目前主流程仍是系统 PhotosPicker。
             if model.flow.autoOpensTargetPicker { showPicker = true }
@@ -268,7 +277,8 @@ struct SettingsStepView: View {
             if let n = model.flow.generation.settingsNotice {
                 Section { Text(n).foregroundStyle(.orange) }
             }
-            // 确认页（需求 v1.0 §2b）：「素材：{name} · {count} 张」+「换素材」。「裁剪」（§3）在 feat/app-layer 上还没有，接入后放这里。
+            CreationTargetSummary(model: model)
+            // 确认页：素材照片摘要 +「换素材照片」。照片模式另有目标照片；图形模式没有目标照片，也没有裁剪和叠加。
             Section {
                 HStack {
                     // 相簿列表加载完之前：上次的相簿名 +「正在统计…」（§2f 补充 3a）
@@ -337,7 +347,9 @@ struct SettingsStepView: View {
                 } minimumValueLabel: { Text(L10nKey.overlayLeft).font(.caption2) } maximumValueLabel: { Text(L10nKey.overlayRight).font(.caption2) }
             }
             }
-            Section(footer: Text(L10nKey.generatePrivacyHint)) {
+            Section(footer: model.shapeEditsNeedRegeneration
+                    ? Text(L10nKey.shapeStaleResult)
+                    : Text(L10nKey.generatePrivacyHint)) {
                 // B10.14：「再调一调」进来只动了叠加强度 →「完成」回原结果（不重新生成）；否则「开始拼图」
                 let action = model.settingsPrimaryAction
                 Button {
@@ -416,7 +428,16 @@ struct ResultView: View {
                 }
                 .onChange(of: model.resultZoom) { _ in model.resultZoomChanged(displayScale: Double(displayScale)) }
             }
-            Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
+            CreationTargetSummary(model: model)
+            if model.shapeEditsNeedRegeneration {
+                Text(L10nKey.shapeStaleResult).font(.footnote).foregroundStyle(.secondary)
+            }
+            if model.showsFinishedPreviewHint {
+                Text(L10nKey.previewHint).font(.footnote).foregroundStyle(.secondary)
+            }
+            if !model.allowsWorkSave && model.canExport {
+                Text(L10nKey.shapeExportNote).font(.footnote).foregroundStyle(.secondary)
+            }
             HStack {
                 Button { model.send(.backToSettings) } label: { Text(L10nKey.previewAdjust) }.buttonStyle(.bordered)
                 Button { model.send(.reshuffleTapped) } label: { Text(L10nKey.previewReshuffle) }.buttonStyle(.borderedProminent)
@@ -448,6 +469,30 @@ struct ResultView: View {
             if model.exportPhase.isBusy { ExportBusyOverlay() }
         }
         .modifier(ExportResultAlerts())
+    }
+}
+
+/// 确认页和预览页的当前目标。照片是目标照片；图形是名称、配色和背景。合成图不叫目标照片。
+private struct CreationTargetSummary: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        if let shape = model.flow.shape {
+            Text(LocalizedLine(.shapeSummary, [
+                shape.preset.titleKey.localized,
+                shape.palette.titleKey.localized,
+                (shape.background == .white ? L10nKey.shapeBackgroundWhite : L10nKey.shapeBackgroundBlack).localized,
+            ]))
+            .font(.subheadline)
+        } else if model.flow.hasTarget || model.targetPreview != nil {
+            HStack(spacing: 12) {
+                if let cg = model.targetPreview {
+                    Image(decorative: cg, scale: 1).resizable().scaledToFill()
+                        .frame(width: 44, height: 44).clipped().cornerRadius(6)
+                }
+                Text(L10nKey.targetNavTitle).font(.subheadline)
+            }
+        }
     }
 }
 

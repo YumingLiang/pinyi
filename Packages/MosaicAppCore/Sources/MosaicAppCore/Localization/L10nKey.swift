@@ -36,6 +36,8 @@ public extension L10nKey {
     static let permissionDeniedPrimary = L10nKey(rawValue: "permission.denied.primary")
     static let permissionDeniedSecondary = L10nKey(rawValue: "permission.denied.secondary")
     // 目标图
+    static let homeNavTitle = L10nKey(rawValue: "home.nav_title")
+    static let homePhotoEntry = L10nKey(rawValue: "home.photo_entry")
     static let targetNavTitle = L10nKey(rawValue: "target.nav_title")
     static let targetPrompt = L10nKey(rawValue: "target.prompt")
     static let targetChoose = L10nKey(rawValue: "target.choose")
@@ -167,6 +169,9 @@ public extension L10nKey {
     static let commonRetry = L10nKey(rawValue: "common.retry")
     // 预设形状（首版：无文字、不保存作品）
     static let shapeEntry = L10nKey(rawValue: "shape.entry")
+    static let shapeSummary = L10nKey(rawValue: "shape.summary")
+    static let shapeStaleResult = L10nKey(rawValue: "shape.stale_result")
+    static let shapeExportNote = L10nKey(rawValue: "shape.export_note")
     static let shapeSection = L10nKey(rawValue: "shape.section")
     static let shapePaletteSection = L10nKey(rawValue: "shape.palette.section")
     static let shapePaletteAuto = L10nKey(rawValue: "shape.palette.auto")
@@ -185,7 +190,7 @@ public extension L10nKey {
         permissionUndeterminedTitle, permissionUndeterminedBody, permissionUndeterminedPrimary, permissionUndeterminedSecondary,
         limitedTitle, limitedBody, limitedPrimary, limitedSecondary, limitedAllowAllLink,
         permissionDeniedTitle, permissionDeniedBody, permissionDeniedPrimary, permissionDeniedSecondary,
-        targetNavTitle, targetPrompt, targetChoose, targetReplace, targetNext, targetUnreadable,
+        homeNavTitle, homePhotoEntry, targetNavTitle, targetPrompt, targetChoose, targetReplace, targetNext, targetUnreadable,
         sourceNavTitle, sourceListAll, sourceListAllowed, sourceListCount, sourceListCountPending, sourceListTitleFormat,
         sourceAlbumOption, sourceAlbumOptionDesc, sourceAlbumListTitle, sourceAlbumItemCount, sourceAlbumUnreadable,
         sourceAddPhotos, sourceNext, sourceExcludedLowRes,
@@ -202,7 +207,7 @@ public extension L10nKey {
         emptyNoPhotosTitle, emptyNoPhotosBody, emptyNoPhotosOK, emptyNotDownloadedTitle, emptyNotDownloadedBody, emptyNotDownloadedRetry,
         settingsTitle, settingsPerformance, settingsAbout, aboutTitle, aboutBody, appDisplayName,
         commonCancel, commonDone, commonBack, commonOK, commonClose, commonRetry,
-        shapeEntry, shapeSection, shapePaletteSection, shapePaletteAuto, shapePaletteWarmRed, shapePalettePink,
+        shapeEntry, shapeSummary, shapeStaleResult, shapeExportNote, shapeSection, shapePaletteSection, shapePaletteAuto, shapePaletteWarmRed, shapePalettePink,
         shapePaletteBlue, shapePaletteGold, shapeBackgroundSection, shapeBackgroundWhite, shapeBackgroundBlack,
         .init(rawValue: "shape.preset.heart"), .init(rawValue: "shape.preset.star"), .init(rawValue: "shape.preset.circle"),
         .init(rawValue: "shape.preset.birthdayCake"), .init(rawValue: "shape.preset.flower"), .init(rawValue: "shape.preset.moon"),
