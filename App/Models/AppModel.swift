@@ -191,7 +191,31 @@ final class AppModel: ObservableObject {
     func setDensity(_ d: DensityChoice) { coordinator.setDensity(d) }
     func beginShape() { coordinator.beginShape() }
 
-    /// 文字参数直接生成。没有文字界面。失败在开跑前抛出，不改字、不截断。
+    func setShapeUsesText(_ usesText: Bool) { coordinator.setShapeUsesText(usesText) }
+    func setShapeTextLine(_ index: Int, _ proposed: String, hasMarkedText: Bool = false,
+                          secondLineIsComposing: Bool = false) {
+        coordinator.setShapeTextLine(index, proposed: proposed, hasMarkedText: hasMarkedText,
+                                     secondLineIsComposing: secondLineIsComposing)
+    }
+    var shapeTextCanGenerate: Bool { coordinator.shapeTextCanGenerate }
+    var shapeTextNotice: TextInputNotice? { state.shapeTextNotice }
+
+    /// 确认页「开始拼图」。文字走 `generateText`；预设和照片仍走原来的生成。
+    func startFromSettings() async {
+        if let shape = coordinator.state.flow.shape, shape.usesText {
+            guard coordinator.shapeTextCanGenerate else { return }
+            do {
+                try await generateText(lines: TextDraftEditor.committedLines(shape.textLines),
+                                       palette: shape.palette, background: shape.background)
+            } catch {
+                coordinator.noteTextComposeFailure(error)
+            }
+            return
+        }
+        await coordinator.generateTapped()
+    }
+
+    /// 文字参数直接生成。失败在开跑前抛出，不改字、不截断。
     func generateText(lines: [String], palette: ShapePalette = .auto,
                       background: ShapeBackground = .white) async throws {
         let prepared = try TextComposition.prepare(lines)
@@ -210,7 +234,7 @@ final class AppModel: ObservableObject {
     func setShapePalette(_ palette: ShapePalette) { coordinator.setShapePalette(palette) }
     func setShapeBackground(_ background: ShapeBackground) { coordinator.setShapeBackground(background) }
     var allowsWorkSave: Bool { coordinator.allowsWorkSave }
-    func generateTapped() { Task { await coordinator.generateTapped() } }
+    func generateTapped() { Task { await startFromSettings() } }
     /// 设置页主按钮（B10.14）：只改了叠加强度 →「完成」回原结果；否则「开始拼图」。
     var settingsPrimaryAction: SettingsPrimaryAction { coordinator.settingsPrimaryAction }
     /// 设置页「完成」：回到原结果，不重新生成（进结果页时按新强度重画预览）。

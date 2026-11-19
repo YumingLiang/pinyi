@@ -1,16 +1,23 @@
 import Foundation
 import MosaicCore
 
-/// 首版预设形状（设计 §1 的 10 个 ID）。文字不在这一阶段。
+/// 图形配置里的一次选择。首页不另开文字入口：文字和预设都在这个配置里切换。
 public struct ShapeChoice: Sendable, Equatable, Hashable {
     public var preset: ShapePresetID
     public var palette: ShapePalette
     public var background: ShapeBackground
+    /// 当前用文字，而不是预设。预设 ID 仍留着，切回预设时还在。
+    public var usesText: Bool
+    /// 正在输入的两行。空行可以留着；生成前再去掉空行。
+    public var textLines: [String]
 
-    public init(preset: ShapePresetID = .heart, palette: ShapePalette = .auto, background: ShapeBackground = .white) {
+    public init(preset: ShapePresetID = .heart, palette: ShapePalette = .auto, background: ShapeBackground = .white,
+                usesText: Bool = false, textLines: [String] = ["", ""]) {
         self.preset = preset
         self.palette = palette
         self.background = background
+        self.usesText = usesText
+        self.textLines = textLines
     }
 
     /// 未登记的 ID 不能选。

@@ -12,7 +12,7 @@ public struct MainFlow: Sendable, Hashable {
     public private(set) var targetNotice: L10nKey?
     public var source = SourcePickerState()
     public var settings = GenerationSettings()
-    /// 预设形状。nil = 用目标图的普通拼图。文字入口不在这一阶段。
+    /// 图形配置。nil = 用目标图的普通拼图。文字在这个配置里切换，不另开首页入口。
     public var shape: ShapeChoice?
     public var generation: GenerationMachine
     /// 「再拼一张」进行中（需求 v1.0 §2e）：已离开预览页去选新目标图 / 确认页，但上一张结果**还在**——
@@ -48,7 +48,7 @@ public struct MainFlow: Sendable, Hashable {
         case changeSource
         /// 作品查看页「再拼一张」、主流程没有停在结果页：去选目标图，选好直接进确认页。
         case freshQuickStartStarted
-        /// 首页「拼成一个图形」：跳过目标照片，去现有的素材页。默认爱心、按相册取色、白底。
+        /// 首页「拼成一个图形」：跳过目标照片，去现有的素材页。默认爱心、按相册取色、白底。文字在配置里再选。
         case beginShape
         /// 形状结果的「再拼一张」：回到形状配置，默认上次形状、配色和背景。不打开选目标照片。
         case shapeQuickAgainStarted
