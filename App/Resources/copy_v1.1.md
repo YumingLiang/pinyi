@@ -199,6 +199,7 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `shape.text.unsupported` | 输入了汉字、字母、数字以外的字符 | 只能输入汉字、英文字母和数字。 |
 | `shape.text.too_long` | 一行超过 4 个汉字的量 | 这一行太长了。汉字最多 4 个，英文和数字大约 8 个。 |
 | `shape.text.too_many_lines` | 超过两行 | 最多两行。 |
+| `shape.text.second_kept` | 第一行换行粘贴会盖掉第二行已有正文，整次不改 | 第二行已经有文字，没有改掉它。 |
 | `shape.text.empty` | 空正文不能开始拼图 | 先输入文字，才能开始拼图。 |
 | `shape.text.unreadable` | 合法文字排不开或不达 24 格 | 这组文字没法按当前大小排开，请换一组文字。 |
 | `shape.text.summary` | 确认页和预览页的文字摘要 | 文字：{正文} · {palette} · {background} |

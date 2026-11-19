@@ -206,6 +206,7 @@
 "shape.text.unsupported" = "只能输入汉字、英文字母和数字。";
 "shape.text.too_long" = "这一行太长了。汉字最多 4 个，英文和数字大约 8 个。";
 "shape.text.too_many_lines" = "最多两行。";
+"shape.text.second_kept" = "第二行已经有文字，没有改掉它。";
 "shape.text.empty" = "先输入文字，才能开始拼图。";
 "shape.text.unreadable" = "这组文字没法按当前大小排开，请换一组文字。";
 /* 参数: %1$@=正文, %2$@=配色, %3$@=背景 */

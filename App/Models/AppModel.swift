@@ -192,8 +192,10 @@ final class AppModel: ObservableObject {
     func beginShape() { coordinator.beginShape() }
 
     func setShapeUsesText(_ usesText: Bool) { coordinator.setShapeUsesText(usesText) }
-    func setShapeTextLine(_ index: Int, _ proposed: String, hasMarkedText: Bool = false) {
-        coordinator.setShapeTextLine(index, proposed: proposed, hasMarkedText: hasMarkedText)
+    func setShapeTextLine(_ index: Int, _ proposed: String, hasMarkedText: Bool = false,
+                          secondLineIsComposing: Bool = false) {
+        coordinator.setShapeTextLine(index, proposed: proposed, hasMarkedText: hasMarkedText,
+                                     secondLineIsComposing: secondLineIsComposing)
     }
     var shapeTextCanGenerate: Bool { coordinator.shapeTextCanGenerate }
     var shapeTextNotice: TextInputNotice? { state.shapeTextNotice }

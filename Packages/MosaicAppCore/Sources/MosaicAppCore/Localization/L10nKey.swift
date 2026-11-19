@@ -189,6 +189,7 @@ public extension L10nKey {
     static let shapeTextUnsupported = L10nKey(rawValue: "shape.text.unsupported")
     static let shapeTextTooLong = L10nKey(rawValue: "shape.text.too_long")
     static let shapeTextTooManyLines = L10nKey(rawValue: "shape.text.too_many_lines")
+    static let shapeTextSecondKept = L10nKey(rawValue: "shape.text.second_kept")
     static let shapeTextEmpty = L10nKey(rawValue: "shape.text.empty")
     static let shapeTextUnreadable = L10nKey(rawValue: "shape.text.unreadable")
     static let shapeTextSummary = L10nKey(rawValue: "shape.text.summary")
@@ -220,7 +221,7 @@ public extension L10nKey {
         shapeEntry, shapeSummary, shapeStaleResult, shapeExportNote, shapeSection, shapePaletteSection, shapePaletteAuto, shapePaletteWarmRed, shapePalettePink,
         shapePaletteBlue, shapePaletteGold, shapeBackgroundSection, shapeBackgroundWhite, shapeBackgroundBlack,
         shapeKindPreset, shapeKindText, shapeTextLine1, shapeTextLine2, shapeTextUnsupported, shapeTextTooLong,
-        shapeTextTooManyLines, shapeTextEmpty, shapeTextUnreadable, shapeTextSummary,
+        shapeTextTooManyLines, shapeTextSecondKept, shapeTextEmpty, shapeTextUnreadable, shapeTextSummary,
         .init(rawValue: "shape.preset.heart"), .init(rawValue: "shape.preset.star"), .init(rawValue: "shape.preset.circle"),
         .init(rawValue: "shape.preset.birthdayCake"), .init(rawValue: "shape.preset.flower"), .init(rawValue: "shape.preset.moon"),
         .init(rawValue: "shape.preset.fourLeafClover"), .init(rawValue: "shape.preset.house"),

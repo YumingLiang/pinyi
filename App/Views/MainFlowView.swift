@@ -273,7 +273,6 @@ struct AlbumMultiSelectView: View {
 
 struct SettingsStepView: View {
     @EnvironmentObject var model: AppModel
-    @State private var shapeTextFocus: Int?
 
     var body: some View {
         Form {
@@ -299,9 +298,9 @@ struct SettingsStepView: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("shape-kind")
                     if shape.usesText {
-                        let lines = shape.textLines
-                        shapeTextRow(0, title: .shapeTextLine1, text: lines.indices.contains(0) ? lines[0] : "")
-                        shapeTextRow(1, title: .shapeTextLine2, text: lines.count > 1 ? lines[1] : "")
+                        ShapeTextLinesEditor(lines: shape.textLines) { index, text, secondComposing in
+                            model.setShapeTextLine(index, text, secondLineIsComposing: secondComposing)
+                        }
                         if let notice = model.shapeTextNotice {
                             Text(notice.key).font(.footnote).foregroundStyle(.red)
                                 .accessibilityIdentifier("shape-text-notice")
@@ -397,14 +396,6 @@ struct SettingsStepView: View {
             Button { model.retryTapped() } label: { Text(L10nKey.generateFailedRetry) }
             Button(role: .cancel) { model.send(.backToSettings) } label: { Text(L10nKey.generateFailedBack) }
         } message: { Text(L10nKey.generateFailedBody) }
-    }
-
-    private func shapeTextRow(_ index: Int, title: L10nKey, text: String) -> some View {
-        ShapeTextLineField(title: title.localized, text: text, identifier: "shape-text-\(index)",
-                           isFocused: shapeTextFocus == index,
-                           onCommit: { model.setShapeTextLine(index, $0) },
-                           onBegin: { shapeTextFocus = index },
-                           onReturn: { shapeTextFocus = index == 0 ? 1 : nil })
     }
 }
 

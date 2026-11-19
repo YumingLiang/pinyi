@@ -63,6 +63,13 @@ final class TextDraftEditorTests: XCTestCase {
         XCTAssertTrue(TextInputBridge.shouldInsert(replacement: "\n", hasMarkedText: true))
         XCTAssertEqual(TextInputBridge.replacing("生日", utf16Range: NSRange(location: 2, length: 0), with: "快乐\n宝贝"),
                        "生日快乐\n宝贝")
+        let kept = TextDraftEditor.apply(lines: ["生日", "宝贝"], index: 0, proposed: "生日快乐\n其他")
+        XCTAssertEqual(kept.lines, ["生日", "宝贝"])
+        XCTAssertEqual(kept.notice, .secondLineKept)
+        let composing = TextDraftEditor.apply(lines: ["生日", ""], index: 0, proposed: "生日快乐\n宝贝",
+                                             secondLineIsComposing: true)
+        XCTAssertEqual(composing.lines, ["生日", ""])
+        XCTAssertEqual(composing.notice, .secondLineKept)
     }
 }
 

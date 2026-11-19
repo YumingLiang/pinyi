@@ -32,6 +32,8 @@ public enum TextInputNotice: Sendable, Hashable {
     case unsupported
     case lineTooLong(line: Int)
     case tooManyLines
+    /// 第一行的换行粘贴会改掉第二行已有正文，整次不写入。
+    case secondLineKept
     /// 字符合法，但轮廓排不开或不够 24 格。不缩小、不截断。
     case unreadable
 
@@ -40,6 +42,7 @@ public enum TextInputNotice: Sendable, Hashable {
         case .unsupported: return .shapeTextUnsupported
         case .lineTooLong: return .shapeTextTooLong
         case .tooManyLines: return .shapeTextTooManyLines
+        case .secondLineKept: return .shapeTextSecondKept
         case .unreadable: return .shapeTextUnreadable
         }
     }
@@ -59,8 +62,10 @@ public enum TextDraftEditor {
         lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    /// 改一行。真实换行只允许从第一行落到第二行。拒绝时原文不动。
-    public static func apply(lines: [String], index: Int, proposed: String) -> (lines: [String], notice: TextInputNotice?) {
+    /// 改一行。第一行的真实换行只在第二行还空、或和第二行相同、且第二行不在组合时，才写入第二行。
+    /// 第二行已有不同正文或正在组合时，整次不改，避免盖掉用户正在编辑的字。
+    public static func apply(lines: [String], index: Int, proposed: String,
+                             secondLineIsComposing: Bool = false) -> (lines: [String], notice: TextInputNotice?) {
         let current = normalized(lines)
         guard index == 0 || index == 1 else { return (current, .tooManyLines) }
         if proposed == current[index] { return (current, nil) }
@@ -71,6 +76,9 @@ public enum TextDraftEditor {
             if split.count > ShapeTextRules.maxLines { return (current, .tooManyLines) }
             let first = split.first ?? ""
             let second = split.count > 1 ? split[1] : ""
+            if secondLineIsComposing || (!current[1].isEmpty && current[1] != second) {
+                return (current, .secondLineKept)
+            }
             if let notice = problem(first, index: 0) ?? problem(second, index: 1) { return (current, notice) }
             return ([first, second], nil)
         }
@@ -98,12 +106,14 @@ public enum TextInputBridge {
         public var composing: Bool
     }
 
-    public static func receive(lines: [String], index: Int, fieldText: String, hasMarkedText: Bool) -> Outcome {
+    public static func receive(lines: [String], index: Int, fieldText: String, hasMarkedText: Bool,
+                               secondLineIsComposing: Bool = false) -> Outcome {
         let current = TextDraftEditor.normalized(lines)
         if hasMarkedText {
             return Outcome(lines: current, notice: nil, composing: true)
         }
-        let applied = TextDraftEditor.apply(lines: current, index: index, proposed: fieldText)
+        let applied = TextDraftEditor.apply(lines: current, index: index, proposed: fieldText,
+                                            secondLineIsComposing: secondLineIsComposing)
         return Outcome(lines: applied.lines, notice: applied.notice, composing: false)
     }
 

@@ -446,10 +446,12 @@ public final class AppCoordinator {
     }
 
     /// 写一行文字。组合态直接留下，不改正文、不报错。超限或不受支持的最终文本整次不写入。
-    public func setShapeTextLine(_ index: Int, proposed: String, hasMarkedText: Bool = false) {
+    public func setShapeTextLine(_ index: Int, proposed: String, hasMarkedText: Bool = false,
+                                 secondLineIsComposing: Bool = false) {
         guard var shape = state.flow.shape, shape.usesText else { return }
         let outcome = TextInputBridge.receive(lines: shape.textLines, index: index,
-                                              fieldText: proposed, hasMarkedText: hasMarkedText)
+                                              fieldText: proposed, hasMarkedText: hasMarkedText,
+                                              secondLineIsComposing: secondLineIsComposing)
         if outcome.composing { return }
         shape.textLines = outcome.lines
         state.flow.shape = shape
