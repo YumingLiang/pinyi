@@ -47,8 +47,10 @@ public final class AppCoordinator {
     var targetGeneration = 0
     /// 当前形状结果是用哪个选择生成的。选新目标图或退回目标页会清掉 `flow.shape`，结果还在时用它恢复，并继续禁止保存。
     var shapeIdentity: ShapeChoice?
-    /// 已排好的文字。没有文字界面时由测试或后续入口放进来。生成时固定细档，不用密度参数。
+    /// 已排好的文字。生成时固定细档，不用密度参数。
     var preparedText: PreparedTextMosaic?
+    /// 切到文字前的密度。切回预设时放回去，文字不把预设密度改掉。
+    var densityBeforeText: DensityChoice?
     /// `product` 是用哪组输入生成的（不含叠加强度）。设置页点「开始拼图」时若和当前输入一样，
     /// 说明「再调一调」只改了叠加强度：直接回到上一次结果，不重新生成（B10 第 3/13 条）。
     private var productInputs: ProductInputs?
@@ -63,6 +65,8 @@ public final class AppCoordinator {
         var textLines: [String]?
         var textPalette: ShapePalette?
         var textBackground: ShapeBackground?
+        /// 图形配置当前是不是文字。照片和预设都是 false。
+        var shapeUsesText: Bool
     }
     /// 来源被静默去掉相簿（不是用户改的）：当前结果记下的来源同样换掉，`settingsPrimaryAction` 不因此变「开始拼图」。
     func notePrunedSelectionForProduct(old: SourceSelection, new: SourceSelection) {
@@ -72,8 +76,25 @@ public final class AppCoordinator {
         ProductInputs(targetGeneration: targetGeneration, selection: state.flow.source.selection,
                       density: state.flow.settings.density,
                       shapePreset: state.flow.shape?.preset, shapePalette: state.flow.shape?.palette,
-                      textLines: preparedText?.lines, textPalette: preparedText?.palette,
-                      textBackground: preparedText?.background)
+                      textLines: currentTextLines, textPalette: currentTextPalette,
+                      textBackground: currentTextBackground, shapeUsesText: currentShapeUsesText)
+    }
+    /// 文字模式看配置里的正文。没有图形配置、但已经准备了文字时，看那次准备。预设和照片不带正文。
+    private var currentTextLines: [String]? {
+        if let shape = state.flow.shape { return shape.usesText ? TextDraftEditor.committedLines(shape.textLines) : nil }
+        return preparedText?.lines
+    }
+    private var currentTextPalette: ShapePalette? {
+        if let shape = state.flow.shape { return shape.usesText ? shape.palette : nil }
+        return preparedText?.palette
+    }
+    private var currentTextBackground: ShapeBackground? {
+        if let shape = state.flow.shape { return shape.usesText ? shape.background : nil }
+        return preparedText?.background
+    }
+    private var currentShapeUsesText: Bool {
+        if let shape = state.flow.shape { return shape.usesText }
+        return preparedText != nil
     }
     /// 平台层执行系统动作（打开设置、受限选择器）。
     public var systemActionHandler: (@MainActor (SystemAction) -> Void)?
@@ -370,6 +391,8 @@ public final class AppCoordinator {
     /// 目标图解码结果（平台层解码 + 降采样后交进来；nil = 读不出来）。
     public func setTarget(_ pixels: PixelBuffer?) {
         preparedText = nil
+        densityBeforeText = nil
+        state.shapeTextNotice = nil
         if state.flow.isQuickAgain {
             pendingTarget = pixels   // 上一张结果还在，它的目标图不能动；开始生成新图时才换进来（commitQuickAgain，代次 +1）
         } else {
@@ -391,26 +414,84 @@ public final class AppCoordinator {
         }
     }
     public func selectSource(_ s: SourceSelection) { state.flow.source.select(s) }
-    public func setDensity(_ d: DensityChoice) { state.flow.settings.density = d }
+    public func setDensity(_ d: DensityChoice) {
+        if state.flow.shape?.usesText == true { return }
+        state.flow.settings.density = d
+    }
     public func setOverlayAlpha(_ a: Double) { state.flow.settings.overlayAlpha = OverlayBlendLimits.clamp(a) }
 
-    /// 首页「用形状拼」。
+    /// 首页「用形状拼」。文字不从这里进，进配置后再切。
     public func beginShape() {
         preparedText = nil
+        densityBeforeText = nil
+        state.shapeTextNotice = nil
         flowSend(.beginShape)
     }
 
+    /// 同一图形配置里切换预设和文字。切到文字时固定细档、叠加为 0，并记住切走前的密度。
+    public func setShapeUsesText(_ usesText: Bool) {
+        guard var shape = state.flow.shape else { return }
+        if usesText, !shape.usesText {
+            densityBeforeText = state.flow.settings.density
+            state.flow.settings.density = .fine
+            state.flow.settings.overlayAlpha = 0
+        } else if !usesText, shape.usesText, let previous = densityBeforeText {
+            state.flow.settings.density = previous
+            densityBeforeText = nil
+        }
+        shape.usesText = usesText
+        state.flow.shape = shape
+        state.shapeTextNotice = nil
+        preparedText = nil
+    }
+
+    /// 写一行文字。超限或不受支持的字符不写入，并留下提示。
+    public func setShapeTextLine(_ index: Int, proposed: String) {
+        guard var shape = state.flow.shape, shape.usesText else { return }
+        let result = TextDraftEditor.apply(lines: shape.textLines, index: index, proposed: proposed)
+        let changed = result.lines != shape.textLines
+        shape.textLines = result.lines
+        state.flow.shape = shape
+        state.shapeTextNotice = result.notice
+        if result.notice != nil, !changed { state.shapeTextRevision += 1 }
+        if preparedText?.lines != TextDraftEditor.committedLines(result.lines) { preparedText = nil }
+    }
+
+    /// 文字还是空的、超限或含不受支持的字符时，不能开始生成。预设和照片不受这一条限制。
+    public var shapeTextCanGenerate: Bool {
+        guard let shape = state.flow.shape, shape.usesText else { return true }
+        return ShapeTextRules.validate(lines: shape.textLines) == .ok
+    }
+
+    /// 轮廓阶段的失败。正文保持原样，不截断、不改成更粗的格子。
+    public func noteTextComposeFailure(_ error: Error) {
+        switch error as? TextComposeFailure {
+        case .empty, nil: state.shapeTextNotice = nil
+        case .tooManyLines: state.shapeTextNotice = .tooManyLines
+        case .lineTooLong(let line): state.shapeTextNotice = .lineTooLong(line: line)
+        case .unsupported: state.shapeTextNotice = .unsupported
+        case .noOutline, .glyphTooSmall(_, _, _), .doesNotFit: state.shapeTextNotice = .unreadable
+        }
+    }
+
     /// 用已经取到的文字轮廓生成。不提供密度参数，固定细档，叠加强度为 0。
-    /// 调用前须先通过 `TextComposition`；这里不再改字、不截断。
+    /// 调用前须先通过 `TextComposition`；这里不再改字、不截断。已有图形配置时正文留在配置里。
     public func prepareText(lines: [String], outline: TextOutline, palette: ShapePalette, background: ShapeBackground) {
         preparedText = PreparedTextMosaic(lines: lines, outline: outline, palette: palette, background: background)
-        state.flow.shape = nil
+        if var shape = state.flow.shape {
+            shape.usesText = true
+            shape.textLines = TextDraftEditor.normalized(lines)
+            shape.palette = palette
+            shape.background = background
+            state.flow.shape = shape
+        }
         state.flow.settings.density = .fine
         state.flow.settings.overlayAlpha = 0
+        state.shapeTextNotice = nil
     }
 
     public func setShapePreset(_ id: ShapePresetID) {
-        guard id.isKnown, var shape = state.flow.shape else { return }
+        guard id.isKnown, var shape = state.flow.shape, !shape.usesText else { return }
         shape.preset = id
         state.flow.shape = shape
     }
@@ -473,6 +554,10 @@ public final class AppCoordinator {
     /// 「再调一调」回来只改了叠加强度时，设置页主按钮是「完成」（`settingsPrimaryAction == .done`），走 `adjustDoneTapped()`。
     public func generateTapped() async {
         guard !generateGatePending, !state.export.isBusy, !state.isGenerating else { return }
+        if let shape = state.flow.shape, shape.usesText {
+            guard shapeTextCanGenerate,
+                  preparedText?.lines == TextDraftEditor.committedLines(shape.textLines) else { return }
+        }
         // 结果页上（phase 仍是 `.result`）只有「再拼一张」的确认页能开始新图。
         if case .result = state.flow.generation.phase, !state.flow.isQuickAgain { return }
         generateGatePending = true
@@ -588,10 +673,9 @@ public final class AppCoordinator {
     }
 
     private func run(id: Int, seed: UInt64) {
-        if preparedText != nil {
+        if preparedText != nil || state.flow.shape?.usesText == true {
             state.flow.settings.density = .fine
             state.flow.settings.overlayAlpha = 0
-            state.flow.shape = nil
         }
         let shapeChoice = state.flow.shape
         let textMosaic = preparedText

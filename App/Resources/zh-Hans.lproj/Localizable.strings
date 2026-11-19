@@ -163,7 +163,7 @@
 "shape.summary" = "图形：%1$@ · %2$@ · %3$@";
 
 /* 改了形状、配色或密度但还没重新生成（copy_v1.1.md:183） */
-"shape.stale_result" = "这仍是按上次参数生成的结果。改了形状、配色或密度后，要重新生成才能导出。";
+"shape.stale_result" = "这仍是按上次参数生成的结果。改了形状、文字、配色或密度后，要重新生成才能导出。";
 
 /* 图形预览，导出和存作品不是一件事（copy_v1.1.md:184） */
 "shape.export_note" = "导出会写进系统相册，不会存到我的作品。";
@@ -197,6 +197,19 @@
 
 /* 黑（copy_v1.1.md:194） */
 "shape.background.black" = "黑";
+
+/* 图形配置里的预设 / 文字切换。首页不另开入口。 */
+"shape.kind.preset" = "预设";
+"shape.kind.text" = "文字";
+"shape.text.line1" = "第一行";
+"shape.text.line2" = "第二行";
+"shape.text.unsupported" = "只能输入汉字、英文字母和数字。";
+"shape.text.too_long" = "这一行太长了。汉字最多 4 个，英文和数字大约 8 个。";
+"shape.text.too_many_lines" = "最多两行。";
+"shape.text.empty" = "先输入文字，才能开始拼图。";
+"shape.text.unreadable" = "这组文字没法按当前大小排开，请换一组文字。";
+/* 参数: %1$@=正文, %2$@=配色, %3$@=背景 */
+"shape.text.summary" = "文字：%1$@ · %2$@ · %3$@";
 
 /* 爱心（copy_v1.1.md:195） */
 "shape.preset.heart" = "爱心";

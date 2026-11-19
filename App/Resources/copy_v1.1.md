@@ -174,13 +174,13 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 
 ### 4.3b 预设形状（首版）
 
-首页可改走形状，然后仍用现有的素材来源。文字拼图和「存到我的作品」这一阶段不出现。10 个形状 ID 与设计锁定表一致。
+首页仍是「拼成一张照片」和「拼成一个图形」两个入口。图形配置里可以在预设和文字之间切换，不另做文字入口，也不另做向导。文字固定细档，没有密度和叠加，也不能存到我的作品。10 个形状 ID 与设计锁定表一致。
 
 | key | 用途 | 文案 |
 |---|---|---|
 | `shape.entry` | 首页，拼成一个图形。不提未开放的文字 | 拼成一个图形 |
 | `shape.summary` | 确认页和预览页的图形摘要 | 图形：{preset} · {palette} · {background} |
-| `shape.stale_result` | 改了形状、配色或密度但还没重新生成 | 这仍是按上次参数生成的结果。改了形状、配色或密度后，要重新生成才能导出。 |
+| `shape.stale_result` | 改了形状、文字、配色或密度但还没重新生成 | 这仍是按上次参数生成的结果。改了形状、文字、配色或密度后，要重新生成才能导出。 |
 | `shape.export_note` | 图形预览，导出和存作品不是一件事 | 导出会写进系统相册，不会存到我的作品。 |
 | `shape.section` | 确认页形状 | 形状 |
 | `shape.palette.section` | 配色 | 颜色 |
@@ -192,6 +192,16 @@ MVP 相簿为**单选**。列表只展示含至少 1 张已授权照片的相簿
 | `shape.background.section` | 背景 | 背景 |
 | `shape.background.white` | 白 | 白 |
 | `shape.background.black` | 黑 | 黑 |
+| `shape.kind.preset` | 图形配置里选预设 | 预设 |
+| `shape.kind.text` | 图形配置里选文字 | 文字 |
+| `shape.text.line1` | 第一行 | 第一行 |
+| `shape.text.line2` | 第二行 | 第二行 |
+| `shape.text.unsupported` | 输入了汉字、字母、数字以外的字符 | 只能输入汉字、英文字母和数字。 |
+| `shape.text.too_long` | 一行超过 4 个汉字的量 | 这一行太长了。汉字最多 4 个，英文和数字大约 8 个。 |
+| `shape.text.too_many_lines` | 超过两行 | 最多两行。 |
+| `shape.text.empty` | 空正文不能开始拼图 | 先输入文字，才能开始拼图。 |
+| `shape.text.unreadable` | 合法文字排不开或不达 24 格 | 这组文字没法按当前大小排开，请换一组文字。 |
+| `shape.text.summary` | 确认页和预览页的文字摘要 | 文字：{正文} · {palette} · {background} |
 | `shape.preset.heart` | 爱心 | 爱心 |
 | `shape.preset.star` | 星星 | 星星 |
 | `shape.preset.circle` | 圆形 | 圆形 |

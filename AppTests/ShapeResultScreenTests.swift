@@ -171,6 +171,51 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertTrue(model.showsFinishedPreviewHint)
     }
 
+    /// 配置里的正文经 `startFromSettings` → `generateText`。调用的是 AppModel 方法，不是 SwiftUI 点击，也不是 XCUITest。
+    func testShapeConfigTextReachesPreviewAndJPEG() async throws {
+        let harness = try await makeHarness()
+        defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+        let model = harness.model
+        let ready = await waitUntil {
+            model.coordinator.state.indexStatus.hasCompletedInitialScan && model.coordinator.state.indexStatus.available > 0
+        }
+        XCTAssertTrue(ready, "合成素材没有扫进索引")
+        model.beginShape()
+        model.setShapeUsesText(true)
+        model.setShapeTextLine(0, "满月快乐呀")
+        XCTAssertEqual(model.flow.shape?.textLines.first, "")
+        XCTAssertEqual(model.shapeTextNotice, .lineTooLong(line: 0))
+        model.setShapeTextLine(0, "😀")
+        XCTAssertEqual(model.shapeTextNotice, .unsupported)
+        XCTAssertFalse(model.shapeTextCanGenerate)
+        await model.startFromSettings()
+        XCTAssertNil(model.coordinator.product, "超限和 emoji 不能进入生成")
+
+        model.setShapeTextLine(0, "满月快乐")
+        XCTAssertTrue(model.shapeTextCanGenerate)
+        XCTAssertEqual(model.flow.settings.density, .fine)
+        model.flowSend(.next)
+        await model.startFromSettings()
+        await passShortagePrompt(model)
+        await model.coordinator.settle()
+        guard case .result = model.flow.generation.phase else {
+            return XCTFail("配置正文没有进入结果页 \(model.flow.generation.phase)")
+        }
+        XCTAssertEqual(model.flow.shape?.usesText, true)
+        XCTAssertEqual(TextDraftEditor.committedLines(model.flow.shape?.textLines ?? []), ["满月快乐"])
+        XCTAssertFalse(model.allowsWorkSave)
+        XCTAssertNil(model.coordinator.target)
+        let shown = await waitUntil { model.resultImage != nil }
+        XCTAssertTrue(shown, "文字结果没有预览")
+        let image = try XCTUnwrap(model.resultImage)
+        XCTAssertGreaterThan(image.width, 8)
+        model.saveTapped()
+        let saved = await waitUntil { if case .saved = model.exportPhase { return true }; return false }
+        XCTAssertTrue(saved, "saveTapped 后不是已写入相册：\(model.exportPhase)")
+        let jpeg = try XCTUnwrap(decodeJPEG(try XCTUnwrap(harness.library.lastJPEG)))
+        XCTAssertGreaterThan(jpeg.width, 8)
+    }
+
     func testOfficialTextGroupsReachPreviewPixelsAndJPEG() async throws {
         let groups: [[String]] = [
             TextComposition.lines(from: "520"),

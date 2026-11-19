@@ -291,15 +291,34 @@ struct SettingsStepView: View {
             }
             if let shape = model.flow.shape {
                 Section(header: Text(L10nKey.shapeSection)) {
-                    ForEach(PresetShapes.registry, id: \.id) { entry in
-                        Button { model.setShapePreset(entry.id) } label: {
-                            HStack {
-                                Text(entry.id.titleKey)
-                                Spacer()
-                                if shape.preset == entry.id { Image(systemName: "checkmark").foregroundStyle(.tint) }
-                            }
+                    Picker(selection: Binding(get: { shape.usesText }, set: { model.setShapeUsesText($0) })) {
+                        Text(L10nKey.shapeKindPreset).tag(false)
+                        Text(L10nKey.shapeKindText).tag(true)
+                    } label: { Text(L10nKey.shapeSection) }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("shape-kind")
+                    if shape.usesText {
+                        let lines = shape.textLines
+                        shapeTextField(model, index: 0, title: .shapeTextLine1, text: lines.indices.contains(0) ? lines[0] : "")
+                        shapeTextField(model, index: 1, title: .shapeTextLine2, text: lines.count > 1 ? lines[1] : "")
+                        if let notice = model.shapeTextNotice {
+                            Text(notice.key).font(.footnote).foregroundStyle(.red)
+                                .accessibilityIdentifier("shape-text-notice")
+                        } else if !model.shapeTextCanGenerate {
+                            Text(L10nKey.shapeTextEmpty).font(.footnote).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("shape-text-notice")
                         }
-                        .foregroundStyle(.primary)
+                    } else {
+                        ForEach(PresetShapes.registry, id: \.id) { entry in
+                            Button { model.setShapePreset(entry.id) } label: {
+                                HStack {
+                                    Text(entry.id.titleKey)
+                                    Spacer()
+                                    if shape.preset == entry.id { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                        }
                     }
                 }
                 Section(header: Text(L10nKey.shapePaletteSection)) {
@@ -327,6 +346,7 @@ struct SettingsStepView: View {
                     }
                 }
             }
+            if model.flow.shape?.usesText != true {
             Section(header: Text(L10nKey.densitySection)) {
                 ForEach(DensityChoice.allCases, id: \.self) { d in
                     Button { model.setDensity(d) } label: {
@@ -341,6 +361,7 @@ struct SettingsStepView: View {
                     }
                     .foregroundStyle(.primary)
                 }
+            }
             }
             if model.flow.shape == nil {
             Section(header: Text(L10nKey.overlaySection), footer: Text(L10nKey.overlayHint)) {
@@ -362,7 +383,8 @@ struct SettingsStepView: View {
                     else { Text(action == .done ? L10nKey.commonDone : L10nKey.generateCTA).frame(maxWidth: .infinity) }
                 }
                     .buttonStyle(.borderedProminent).controlSize(.large)
-                    .disabled(model.isWaitingForAlbums)
+                    .disabled(model.isWaitingForAlbums || !model.shapeTextCanGenerate)
+                    .accessibilityIdentifier("shape-generate")
             }
         }
         .confirmationDialog(Text(L10nKey.shortagePregenerate),
@@ -375,6 +397,17 @@ struct SettingsStepView: View {
             Button(role: .cancel) { model.send(.backToSettings) } label: { Text(L10nKey.generateFailedBack) }
         } message: { Text(L10nKey.generateFailedBody) }
     }
+}
+
+private func shapeTextField(_ model: AppModel, index: Int, title: L10nKey, text: String) -> some View {
+    TextField(text: Binding(get: { text }, set: { model.setShapeTextLine(index, $0) }), prompt: Text(title)) {
+        Text(title)
+    }
+    .textInputAutocapitalization(.never)
+    .autocorrectionDisabled()
+    .lineLimit(1)
+    .id("shape-text-\(index)-\(model.shapeTextRevision)")
+    .accessibilityIdentifier("shape-text-\(index)")
 }
 
 extension GenerationMachine.Phase {
@@ -480,12 +513,22 @@ private struct CreationTargetSummary: View {
 
     var body: some View {
         if let shape = model.flow.shape {
+            if shape.usesText {
+                let body = shape.textLines.filter { !$0.isEmpty }.joined(separator: " / ")
+                Text(LocalizedLine(.shapeTextSummary, [
+                    body,
+                    shape.palette.titleKey.localized,
+                    (shape.background == .white ? L10nKey.shapeBackgroundWhite : L10nKey.shapeBackgroundBlack).localized,
+                ]))
+                .font(.subheadline)
+            } else {
             Text(LocalizedLine(.shapeSummary, [
                 shape.preset.titleKey.localized,
                 shape.palette.titleKey.localized,
                 (shape.background == .white ? L10nKey.shapeBackgroundWhite : L10nKey.shapeBackgroundBlack).localized,
             ]))
             .font(.subheadline)
+            }
         } else if model.flow.hasTarget || model.targetPreview != nil {
             HStack(spacing: 12) {
                 if let cg = model.targetPreview {
