@@ -1,5 +1,6 @@
 import UIKit
 import XCTest
+import MosaicCore
 import MosaicAppCore
 @testable import PhotoMosaic
 
