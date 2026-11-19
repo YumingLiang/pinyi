@@ -199,12 +199,14 @@ final class ShapeResultScreenTests: XCTestCase {
             XCTAssertEqual(model.coordinator.state.flow.settings.density, .fine, "\(lines)")
             XCTAssertNil(model.coordinator.target)
             XCTAssertFalse(model.allowsWorkSave, "\(lines)")
-            let shown = await waitUntil { model.resultImage != nil }
-            XCTAssertTrue(shown, "\(lines) 没有预览")
+            let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
+            let shown = await waitUntil { model.resultImage?.width == mask.columns * previewCell }
+            XCTAssertTrue(shown, "\(lines) 没有按网格尺寸显示预览")
             XCTAssertTrue(model.showsFinishedPreviewHint, "\(lines)")
             let image = try XCTUnwrap(model.resultImage)
+            XCTAssertEqual(image.width, mask.columns * previewCell, "\(lines)")
+            XCTAssertEqual(image.height, mask.rows * previewCell, "\(lines)")
             let inside = try XCTUnwrap((0..<mask.cellCount).first { mask.isActive($0) })
-            let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
             let previewPixel = pixelFromTop(try bitmap(image), width: image.width, columns: mask.columns,
                                             cellPixels: previewCell, index: inside)
             assertNear(previewPixel, tile, tolerance: 24, label: "\(lines) 预览内格")
