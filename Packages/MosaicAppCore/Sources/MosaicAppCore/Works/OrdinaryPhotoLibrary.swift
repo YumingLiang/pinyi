@@ -15,9 +15,17 @@ enum OrdinaryPhotoContent {
     }
 
     /// 按钮缓存用的内容键。`cd1-` 本身不含 fb 和强度，这里另加上量化强度和逐格 fb。
-    /// 这不是 `inFlight` 队列键。带 fc 的公开保存仍在登记队列前返回。
+    /// 不是保存队列键。队列用 `queueKey`，前缀不同，不能互相代替。
     static func flightKey(_ layout: MosaicLayout) -> String {
         var parts = [WorkContentDigest.of(layout), String(FNV1a64.quantize(layout.params.overlayAlpha))]
+        for cell in layout.cellAssignments { parts.append(cell.fallback ? "1" : "0") }
+        return parts.joined(separator: "|")
+    }
+
+    /// 公开保存的 `inFlight` 键。含 fc（在 `cd1-` 里）、调用方给出的强度，以及逐格 fb。
+    /// 和按钮缓存键不是同一串。守护还在时，登记之后仍拒绝新建，不把不同 fc 合成一张。
+    static func queueKey(_ layout: MosaicLayout, overlay: Double) -> String {
+        var parts = ["q1", WorkContentDigest.of(layout), String(FNV1a64.quantize(overlay))]
         for cell in layout.cellAssignments { parts.append(cell.fallback ? "1" : "0") }
         return parts.joined(separator: "|")
     }
@@ -227,6 +235,7 @@ extension FileWorksStore {
         layout.params.overlayAlpha = draft.overlayAlpha
         let layoutData = try Self.encoder().encode(layout)
         try layoutData.write(to: temp.appendingPathComponent(Self.layoutFileName), options: .atomic)
+        try interruptFilledPublish(.afterLayout)
         let preview = try await images.writePreview(layout: layout, target: draft.target, overlayAlpha: draft.overlayAlpha,
                                                     maxLongEdge: WorkImageLimits.previewLongEdge, fallbacks: [:], into: temp)
         guard OrdinaryPhotoLibrary.safeBasename(preview.fileName),
@@ -242,6 +251,7 @@ extension FileWorksStore {
         guard FileManager.default.fileExists(atPath: temp.appendingPathComponent(preview.fileName).path) else {
             throw ExportError.encodingFailed
         }
+        try interruptFilledPublish(.afterPreview)
         let fingerprint = WorkFingerprint.of(layout)
         var meta = WorkMeta(id: id, createdAt: now(), columns: layout.cols, rows: layout.rows, tier: draft.tier,
                             photoCount: layout.uniqueAssetIDs.count, missingCount: 0, overlayAlpha: draft.overlayAlpha,
@@ -251,6 +261,7 @@ extension FileWorksStore {
         meta.fallbackVersion = WorkMeta.currentFallbackVersion
         let metaData = try Self.encoder().encode(meta)
         try metaData.write(to: temp.appendingPathComponent(Self.metaFileName), options: .atomic)
+        try interruptFilledPublish(.afterMeta)
         if let sourceID, let sourceLayoutAtStart {
             let sourceURL = directory.appendingPathComponent(sourceID.directoryName).appendingPathComponent(Self.layoutFileName)
             let nowLayout = try? Data(contentsOf: sourceURL)
@@ -258,12 +269,16 @@ extension FileWorksStore {
         }
         let final = directory.appendingPathComponent(id.directoryName, isDirectory: true)
         try DirectoryRename.exclusive(from: temp, to: final)
-        if failAfterExclusiveRenameForTest {
-            failAfterExclusiveRenameForTest = false
-            throw WorksError.publishResultUncertain
-        }
+        try interruptFilledPublish(.afterRename)
         return WorkSaveResult(summary: WorkSummary(meta: meta, previewURL: final.appendingPathComponent(preview.fileName)),
                               outcome: .inserted)
+    }
+
+    private func interruptFilledPublish(_ point: FilledPublishInterrupt) throws {
+        guard interruptFilledPublishForTest == point else { return }
+        interruptFilledPublishForTest = nil
+        if point == .afterRename { throw WorksError.publishResultUncertain }
+        throw ExportError.encodingFailed
     }
 
     private func discardUnpublished(_ temp: URL) {

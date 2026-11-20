@@ -56,7 +56,7 @@ struct PhotoKitExistenceChecker: PhotoExistenceChecking {
 /// 预览图按保存的显式布局逐格绘制（扫描用 128 px 缩略图；兜底格用旧预览裁出的小图 `.high` 插值放大填满，不取照片；
 /// 都没有的格子留白；长边 2732，约 2732×2049×4 ≈ 22 MB 画布），
 /// 再按 α 叠加目标图网格区域——与结果页预览、导出条带同一公式。不依赖 `GenerationProduct`，作品页也能重画。
-struct ImageIOWorkImages: WorkImageEncoding {
+struct ImageIOWorkImages: WorkImageEncoding, Sendable {
     let thumbnails: any ThumbnailProviding
     static let quality = 0.85
 

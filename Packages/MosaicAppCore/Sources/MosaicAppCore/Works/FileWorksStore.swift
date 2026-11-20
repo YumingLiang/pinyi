@@ -57,6 +57,20 @@ public extension WorksStore {
 ///   内容指纹，用于命中；**只有命中并更新叠加强度时才把 meta.json 写成 v2**（QA A3），打开列表不写盘，装回旧包还能看到。
 ///   已经重复的旧作品不自动合并、不删。
 /// - 更新叠加强度的原子性见 `updateOverlay`：meta.json 是唯一提交点，带 `pendingPreviewFile` 日志，被杀后读时前滚。
+/// 新建事务的可注入中断点。不是磁盘格式。
+enum FilledPublishInterrupt: Equatable, Sendable {
+    case afterLayout
+    case afterPreview
+    case afterMeta
+    case afterRename
+}
+
+/// 打开作品时，迁移写 meta 之前和删掉旧文件之后。生产不读这两个 URL。
+enum MigrationEvidencePoint: Sendable {
+    case beforeCommit(preview: URL, fallback: URL?)
+    case afterCommit(preview: URL, fallback: URL?)
+}
+
 public actor FileWorksStore: WorksStore {
     public static let metaFileName = "meta.json"
     public static let layoutFileName = "layout.json"
@@ -72,11 +86,23 @@ public actor FileWorksStore: WorksStore {
     private var recomputedFingerprints: [WorkID: String] = [:]
     /// 正在改写的作品（打开和导出前可能同时触发缺图处理）：同一作品串行。
     private var updating: [WorkID: (token: UUID, task: Task<Work, any Error>)] = [:]
-    /// 测试在目录 rename 成功之后、回执返回之前失败。生产保持 false。
-    var failAfterExclusiveRenameForTest = false
+    /// 测试把新建事务停在某个提交点。生产保持 nil。rename 之前的中断会丢掉临时目录；rename 之后只丢回执。
+    var interruptFilledPublishForTest: FilledPublishInterrupt?
+    /// 测试在迁移提交前后观察旧预览 / 旧兜底。生产保持 nil，因此生产不会为了观察去读这些文件。
+    var migrationEvidenceForTest: (@Sendable (MigrationEvidencePoint) async -> Void)?
+    /// 测试把填色保存停在登记队列之后、做等价决定之前。生产保持 nil。
+    var beforeFilledSaveDecision: (@Sendable () async -> Void)?
 
-    func armFailAfterExclusiveRenameForTest() {
-        failAfterExclusiveRenameForTest = true
+    func armFilledPublishInterrupt(_ point: FilledPublishInterrupt) {
+        interruptFilledPublishForTest = point
+    }
+
+    func armMigrationEvidence(_ hook: @escaping @Sendable (MigrationEvidencePoint) async -> Void) {
+        migrationEvidenceForTest = hook
+    }
+
+    func armBeforeFilledSaveDecision(_ hook: @escaping @Sendable () async -> Void) {
+        beforeFilledSaveDecision = hook
     }
 
     public init(directory: URL, images: any WorkImageEncoding, now: @escaping @Sendable () -> Date = { Date() }) {
@@ -130,7 +156,7 @@ public actor FileWorksStore: WorksStore {
         }
         if draft.layout.shapeManifest != nil { draft.overlayAlpha = 0 }
         if draft.updateWorkID != nil || OrdinaryPhotoContent.isGuarded(draft.layout) {
-            return try saveFilledOrdinaryPhoto(draft)
+            return try await saveFilledOrdinaryPhotoQueued(draft)
         }
         if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
         // 只有带齐来源、配色、背景和网格一致的 bits-v1 掩码才写形状 / 文字。光有运行时掩码、损坏掩码仍拒绝。
@@ -160,6 +186,30 @@ public actor FileWorksStore: WorksStore {
         let token = UUID()
         inFlight[fingerprint] = (token, task)
         defer { if inFlight[fingerprint]?.token == token { inFlight[fingerprint] = nil } }
+        return try await task.value
+    }
+
+    /// 带 fc / fb 的公开保存先按 `queueKey` 排队，再决定。不同 fc / fb / 强度不共用一个任务。
+    /// 守护还在：任务里要么返回已有等价 ID，要么拒绝新建。这里不调用 `publishNewFilledPhoto`。
+    private func saveFilledOrdinaryPhotoQueued(_ draft: WorkDraft) async throws -> WorkSaveResult {
+        var draft = draft
+        draft.layout.params.overlayAlpha = draft.overlayAlpha
+        let key = OrdinaryPhotoContent.queueKey(draft.layout, overlay: draft.overlayAlpha)
+        var waited: UUID?
+        while let running = inFlight[key], running.token != waited {
+            waited = running.token
+            _ = try? await running.task.value
+        }
+        let task = Task { () throws -> WorkSaveResult in
+            if let hook = self.beforeFilledSaveDecision {
+                self.beforeFilledSaveDecision = nil
+                await hook()
+            }
+            return try self.saveFilledOrdinaryPhoto(draft)
+        }
+        let token = UUID()
+        inFlight[key] = (token, task)
+        defer { if inFlight[key]?.token == token { inFlight[key] = nil } }
         return try await task.value
     }
 
@@ -466,6 +516,11 @@ public actor FileWorksStore: WorksStore {
             let layoutData = try Self.encoder().encode(layout)
             let oldPreview = meta.previewFile
             let oldFallback = meta.fallbackFile
+            let oldPreviewURL = dir.appendingPathComponent(oldPreview)
+            let oldFallbackURL = oldFallback.map { dir.appendingPathComponent($0) }
+            if let evidence = migrationEvidenceForTest {
+                await evidence(.beforeCommit(preview: oldPreviewURL, fallback: oldFallbackURL))
+            }
             meta.previewFile = newName
             meta.previewPixelWidth = preview.pixelWidth
             meta.previewPixelHeight = preview.pixelHeight
@@ -480,8 +535,11 @@ public actor FileWorksStore: WorksStore {
             try Self.encoder().encode(meta).write(to: dir.appendingPathComponent(Self.metaFileName), options: .atomic)
             moved = []   // meta 已指向新文件：之后失败也不删它们
             try layoutData.write(to: dir.appendingPathComponent(Self.layoutFileName), options: .atomic)
-            if oldPreview != newName { try? fm.removeItem(at: dir.appendingPathComponent(oldPreview)) }
+            if oldPreview != newName { try? fm.removeItem(at: oldPreviewURL) }
             if let oldFallback, oldFallback != fallbackName { try? fm.removeItem(at: dir.appendingPathComponent(oldFallback)) }
+            if let evidence = migrationEvidenceForTest {
+                await evidence(.afterCommit(preview: oldPreviewURL, fallback: oldFallbackURL))
+            }
             return Work(summary: WorkSummary(meta: meta, previewURL: dir.appendingPathComponent(newName)), layout: layout,
                         targetURL: work.targetURL)
         } catch {

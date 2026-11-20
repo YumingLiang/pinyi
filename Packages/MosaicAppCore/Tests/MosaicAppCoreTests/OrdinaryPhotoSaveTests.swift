@@ -329,7 +329,7 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
         let (dir, _, store) = try await library()
         let layout = filled(["a", "", "c"])
         let id = WorkID()
-        await store.armFailAfterExclusiveRenameForTest()
+        await store.armFilledPublishInterrupt(.afterRename)
         do {
             _ = try await store.publishNewFilledPhoto(WorkDraft(layout: layout, target: nil, overlayAlpha: layout.params.overlayAlpha, origin: .savedManually), id: id)
             XCTFail("rename 成功后仍把回执交回去了")
@@ -350,6 +350,117 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
             XCTFail("认不出不能当成原结果")
         } catch WorksError.publishResultUncertain {}
         XCTAssertEqual(try snapshot(dir), before, "认不出只报不确定，不删已发布目录")
+    }
+
+    func testPublishInterruptBeforeRenameLeavesTheOldLibrary() async throws {
+        for point in [FilledPublishInterrupt.afterLayout, .afterPreview, .afterMeta] {
+            let (dir, _, store) = try await library()
+            let source = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c"]), target: nil, overlayAlpha: 0.15, origin: .savedManually))
+            let before = try snapshot(dir)
+            await store.armFilledPublishInterrupt(point)
+            let layout = filled(["a", "", "c"])
+            do {
+                _ = try await store.publishNewFilledPhoto(WorkDraft(layout: layout, target: nil, overlayAlpha: layout.params.overlayAlpha, origin: .savedManually))
+                XCTFail("\(point) 仍把事务发布了")
+            } catch {}
+            XCTAssertEqual(try snapshot(dir), before, "\(point) 之后旧库字节和目录不变")
+            XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent(source.summary.id.directoryName).path))
+        }
+    }
+
+    func testQueueKeyIsNotTheButtonKeyAndTracksFillFallbackAndOverlay() {
+        let layout = filled(["a", "", "c"])
+        let button = OrdinaryPhotoContent.flightKey(layout)
+        let queue = OrdinaryPhotoContent.queueKey(layout, overlay: layout.params.overlayAlpha)
+        XCTAssertNotEqual(button, queue, "按钮缓存键和队列键不是同一串")
+        XCTAssertNotEqual(queue, WorkFingerprint.of(layout), "队列键不是 s2-")
+        var marked = layout
+        marked.cellAssignments[1].fallback = true
+        XCTAssertNotEqual(queue, OrdinaryPhotoContent.queueKey(marked, overlay: layout.params.overlayAlpha))
+        let other = filled(["a", "", "c"], color: CellColor(r: 9, g: 9, b: 9))
+        XCTAssertNotEqual(queue, OrdinaryPhotoContent.queueKey(other, overlay: other.params.overlayAlpha))
+        XCTAssertNotEqual(queue, OrdinaryPhotoContent.queueKey(layout, overlay: layout.params.overlayAlpha + 0.05))
+    }
+
+    func testGuardedConcurrentDifferentFillsDoNotShareASavedID() async throws {
+        let (dir, _, store) = try await library()
+        let plain = sampleLayout(["a", "", "c"])
+        let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: plain.params.overlayAlpha, origin: .savedManually))
+        let red = filled(["a", "", "c"], color: CellColor(r: 1, g: 0, b: 0))
+        let blue = filled(["a", "", "c"], color: CellColor(r: 0, g: 0, b: 2))
+        try plant(red, id: saved.summary.id, overlay: red.params.overlayAlpha, in: dir)
+        let before = try snapshot(dir)
+        let hold = ScanHold()
+        await store.armBeforeFilledSaveDecision {
+            hold.markEntered()
+            await hold.waitRelease()
+        }
+        let redSave = Task { try await store.save(WorkDraft(layout: red, target: nil, overlayAlpha: red.params.overlayAlpha, origin: .savedManually)) }
+        await hold.waitEntered()
+        let blueBox = ResultBox()
+        let blueSave = Task {
+            do {
+                _ = try await store.save(WorkDraft(layout: blue, target: nil, overlayAlpha: blue.params.overlayAlpha, origin: .savedManually))
+                blueBox.value = 1
+            } catch WorksError.unsupportedFilledCells {
+                blueBox.value = 2
+            } catch {
+                blueBox.value = 3
+            }
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let blueWhileRedHeld = blueBox.value
+        hold.release()
+        let redResult = try await redSave.value
+        await blueSave.value
+        XCTAssertEqual(blueWhileRedHeld, 2, "守护阶段：红还停着时，蓝应已经拒绝新建，而不是等红的 .unchanged。这不证明公开新建已经并发发布")
+        XCTAssertEqual(redResult.outcome, .unchanged)
+        XCTAssertEqual(redResult.summary.id, saved.summary.id)
+        XCTAssertEqual(try snapshot(dir), before, "拒绝蓝的时候不另存、不改红的目录")
+    }
+
+    func testFallbackChangeDropsTheSavedButton() async throws {
+        let (dir, images, store) = try await library()
+        let plain = sampleLayout(["a", "", "c"])
+        let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: plain.params.overlayAlpha, origin: .savedManually))
+        let matched = filled(["a", "", "c"])
+        try plant(matched, id: saved.summary.id, overlay: matched.params.overlayAlpha, in: dir)
+        var shown = matched
+        let controller = WorksController(store: store, existence: FakeExistence(), images: images,
+                                        resultContext: { WorkResultContext(layout: shown, target: nil,
+                                                                           overlayAlpha: shown.params.overlayAlpha, tier: nil, resultRevision: 1) })
+        await controller.refreshFilledPhotoStatus()
+        XCTAssertEqual(controller.state.saveStatus, .saved(saved.summary.id))
+        shown.cellAssignments[1].fallback = true
+        await controller.resultContextDidChange().value
+        if case .saved = controller.state.saveStatus { XCTFail("只改 fb 仍沿用没有 fb 的已保存 \(controller.state.saveStatus)") }
+    }
+
+    func testRegisteredFallbackMigrationReportsBothSidesWithoutReading() async throws {
+        let (dir, images, store) = try await library()
+        let saved = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c"]), target: nil, overlayAlpha: 0, origin: .savedManually))
+        let work = dir.appendingPathComponent(saved.summary.id.directoryName)
+        let fallback = work.appendingPathComponent("fallback-kept.jpg")
+        try Data("fb".utf8).write(to: fallback)
+        let metaURL = work.appendingPathComponent("meta.json")
+        var object = try json(metaURL)
+        object["fallbackFile"] = "fallback-kept.jpg"
+        try write(object, metaURL)
+        let box = EvidenceBox()
+        await store.armMigrationEvidence { point in
+            switch point {
+            case .beforeCommit(_, let fallbackURL):
+                box.beforeExists = fallbackURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            case .afterCommit(_, let fallbackURL):
+                box.afterExists = fallbackURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? true
+            }
+        }
+        let controller = WorksController(store: store, existence: FakeExistence(), images: images)
+        await controller.open(saved.summary.id)
+        XCTAssertEqual(box.beforeExists, true, "提交前已登记兜底还在")
+        XCTAssertEqual(box.afterExists, false, "提交后文件管理删掉了它。删文件不是读取记录")
+        XCTAssertNil(controller.openedWork?.meta.fallbackFile)
     }
 
     func testButtonDoesNotTreatADifferentFillAsSaved() async throws {
@@ -417,6 +528,15 @@ enum OrdinaryPhotoFlightKey {
 }
 
 /// 让先发起的纯读停在写缓存之前。进入和放行都由测试显式触发，不靠睡眠。
+private final class EvidenceBox: @unchecked Sendable {
+    var beforeExists = false
+    var afterExists = true
+}
+
+private final class ResultBox: @unchecked Sendable {
+    var value = 0
+}
+
 private final class RevisionBox: @unchecked Sendable {
     var value: Int
     init(_ value: Int) { self.value = value }
