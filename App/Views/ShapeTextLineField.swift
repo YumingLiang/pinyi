@@ -37,6 +37,7 @@ struct ShapeTextLinesEditor: View {
 
 /// 回车交代的最新目标。下一轮只执行这一次，后一次盖过还没执行的前一次。
 /// 不在 `updateUIView` 里改第一响应者，避免更新过程中再写焦点状态。
+@MainActor
 final class ShapeTextFocusHandoff {
     private var desired: Int?
     private var scheduled = false
@@ -48,9 +49,11 @@ final class ShapeTextFocusHandoff {
         guard !scheduled else { return }
         scheduled = true
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.scheduled = false
-            self.apply()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.scheduled = false
+                self.apply()
+            }
         }
     }
 
