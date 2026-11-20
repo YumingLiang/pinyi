@@ -49,22 +49,24 @@ final class WorksPrivacyRoundTests: XCTestCase {
 
     // MARK: B
 
-    /// `write(_ draft:)` 收到带 fc 的布局直接拒绝，不留任何文件。
+    /// 普通照片只有 fc、没有旧作时可以新存。fb 布尔和形状 fc 仍拒绝，不留临时目录。
     func testWriteRejectsFilledCells() async throws {
         let h = Harness()
         var layout = sampleLayout(["a", "", "c"])
         layout.cellAssignments[1].fill = CellColor(r: 1, g: 2, b: 3)
+        let made = try await h.store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.2, origin: .savedManually))
+        XCTAssertEqual(made.outcome, .inserted)
+        var marked = layout
+        marked.cellAssignments[1].fallback = true
         do {
-            _ = try await h.store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.2, origin: .savedManually))
-            XCTFail("应当拒绝")
+            _ = try await h.store.save(WorkDraft(layout: marked, target: nil, overlayAlpha: 0.2, origin: .savedManually))
+            XCTFail("fb 布尔不能跟着 fc 新作一起放开")
         } catch let e as WorksError {
             XCTAssertEqual(e, .unsupportedFilledCells)
         }
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: h.dir.path), [])
-        let list = await h.store.list()
-        XCTAssertTrue(list.isEmpty)
-        // 没有 fc 的照常存
-        _ = try await h.store.save(WorkDraft(layout: sampleLayout(["a", "", "c"]), target: nil, overlayAlpha: 0.2, origin: .savedManually))
+        let names = try FileManager.default.contentsOfDirectory(atPath: h.dir.path)
+        XCTAssertFalse(names.contains { $0.hasPrefix(".tmp-fc-new-") })
+        XCTAssertEqual(names.filter { !$0.hasPrefix(".") }.count, 1)
     }
 
     // MARK: D-a 孤儿文件
