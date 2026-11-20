@@ -4,7 +4,7 @@ import UIKit
 import UniformTypeIdentifiers
 import XCTest
 import MosaicCore
-import MosaicAppCore
+@testable import MosaicAppCore
 @testable import PhotoMosaic
 
 /// 形状从「用形状拼」进入，不选用户目标图。fd3c7f0 上结果页仍出现，但 `AppModel.renderPreview` 和
