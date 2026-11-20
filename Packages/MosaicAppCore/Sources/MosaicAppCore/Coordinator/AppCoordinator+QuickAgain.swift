@@ -95,7 +95,10 @@ extension AppCoordinator {
             startNewFromResult()
             return
         }
-        if case .result = state.flow.generation.phase { return }
+        if case .result = state.flow.generation.phase {
+            remakeOpenedPhotoWork = false
+            return
+        }
         // 发起页（产品 03:16 / 02:35 口径）：从作品查看页点的就回作品查看页——包括「再调一调」途中进作品页点的
         // （查看页下面的主流程恢复成「再调一调」设置页，原目标图和「完成」都在，从查看页返回即到）。
         // 没有作品 ID（旧调用）时，「再调一调」途中按设置页发起算。

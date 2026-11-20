@@ -156,4 +156,33 @@ final class ShapeWorkRemakeTests: XCTestCase {
         XCTAssertFalse(c.state.flow.offersShapeEntry)
         c.stop()
     }
+
+    func testPhotoRemakeThatCannotStartDoesNotClearShapeLater() async throws {
+        let h = CoordinatorHarness(assets: 300)
+        let c = h.coordinator
+        let saver = FakeResultSaver()
+        saver.coordinator = c
+        c.resultSaver = saver
+        c.start()
+        await c.settle()
+        c.beginShape()
+        c.flowSend(.next)
+        await c.generateTapped()
+        await c.settle()
+        guard case .result = c.state.flow.generation.phase else { return XCTFail("没有形状结果") }
+        let shape = c.state.flow.shape
+        c.flowSend(.back)
+        XCTAssertEqual(c.state.flow.step, .settings)
+        c.startNewFromWorkTapped(workID: nil, openedPhotoWork: true)
+        XCTAssertEqual(c.state.flow.shape, shape)
+        XCTAssertEqual(c.shapeIdentity, shape)
+        c.send(.becameActive)
+        saver.savedRevision = c.state.resultRevision
+        c.startNewMosaicTapped()
+        XCTAssertEqual(c.state.flow.step, .settings)
+        XCTAssertEqual(c.state.flow.shape, shape)
+        XCTAssertTrue(c.state.flow.isQuickAgain)
+        XCTAssertNotEqual(c.state.flow.step, .target)
+        c.stop()
+    }
 }

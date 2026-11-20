@@ -254,14 +254,11 @@ final class AppModel: ObservableObject {
     func startNewFromWork(id: WorkID) {
         guard !state.isGenerating, !state.export.isBusy else { return }
         let opened = works.controller.openedWork
-        if opened?.id == id, let layout = opened?.layout {
-            if let manifest = layout.shapeManifest {
-                coordinator.startNewFromWorkTapped(workID: id, savedShape: manifest, densityName: layout.params.density)
-            } else {
-                coordinator.startNewFromWorkTapped(workID: id, openedPhotoWork: true)
-            }
+        guard opened?.id == id, let layout = opened?.layout else { return }
+        if let manifest = layout.shapeManifest {
+            coordinator.startNewFromWorkTapped(workID: id, savedShape: manifest, densityName: layout.params.density)
         } else {
-            coordinator.startNewFromWorkTapped(workID: id)
+            coordinator.startNewFromWorkTapped(workID: id, openedPhotoWork: true)
         }
         navigationResetToken += 1
     }

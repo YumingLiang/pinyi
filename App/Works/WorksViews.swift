@@ -197,7 +197,7 @@ struct WorkDetailView: View {
                 Label { Text(L10nKey.quickAgain) } icon: { Image(systemName: "plus") }
             }
             .buttonStyle(.borderless)
-            .disabled(model.exportPhase.isBusy || model.state.isGenerating)
+            .disabled(works.state.opened?.id != id || model.exportPhase.isBusy || model.state.isGenerating)
         }
         .padding()
         .navigationTitle(Text(verbatim: works.state.opened.map { WorksModel.dateFormatter.string(from: $0.summary.createdAt) } ?? ""))
