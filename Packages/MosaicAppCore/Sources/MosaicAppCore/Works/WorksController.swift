@@ -334,7 +334,9 @@ public final class WorksController {
         let list = await store.list()
         state.summaries = list
         state.isLoaded = true
-        refreshSaveStatus()
+        filledPhotoScanGeneration += 1
+        let generation = filledPhotoScanGeneration
+        await applyFilledPhotoScan(generation: generation, captured: resultContext())
     }
 
     /// 结果变了（新生成 / 换一种拼法）：按新结果重算按钮状态（通常回到「存到我的作品」）。平台层在 `resultRevision` 变化时调。
@@ -345,8 +347,18 @@ public final class WorksController {
         refreshSaveStatus()
     }
 
-    /// 结果页现状变了（叠加强度、进出结果页）：重算按钮状态。平台层在叠加强度 / 结果页 / revision 变化时调，可重复调。
-    public func resultContextDidChange() { refreshSaveStatus() }
+    /// 结果页现状变了（叠加强度、进出结果页）：先丢掉填色缓存，再按当前上下文纯读重扫。可重复调。
+    @discardableResult
+    public func resultContextDidChange() -> Task<Void, Never> {
+        filledPhotoScanGeneration += 1
+        filledPhotoExact = nil
+        refreshSaveStatus()
+        let generation = filledPhotoScanGeneration
+        let captured = resultContext()
+        return Task { @MainActor [weak self] in
+            await self?.applyFilledPhotoScan(generation: generation, captured: captured)
+        }
+    }
 
     /// 按「当前结果 vs 作品库」算按钮状态（B10-5）：
     /// 库里有同指纹作品（结果页记住的作品优先，否则取 updatedAt/createdAt 最新的一份，和存储层查重同一个 `WorkSummary.saveTarget`）→ 叠加强度相同 `.saved`，不同 `.needsUpdate`；没有 → `.idle`。
@@ -368,22 +380,37 @@ public final class WorksController {
         return r.id
     }
 
-    /// 带 fc / fb 的普通照片不能用 `s2-` 当成已保存。缓存来自纯读扫描。
+    /// 带 fc / fb 的普通照片不能用 `s2-` 当成已保存。缓存来自纯读扫描，目录没了就要失效。
     private var filledPhotoExact: (key: String, id: WorkID)?
+    private var filledPhotoScanGeneration = 0
+    /// 测试把扫描拖慢，用来确认旧扫描不能盖住更新的上下文。
+    var filledPhotoScanDelay: Duration = .zero
 
     /// 重新纯读作品库，刷新带填色照片的按钮。不前滚、不清文件。
     public func refreshFilledPhotoStatus() async {
-        let ctx = resultContext()
+        filledPhotoScanGeneration += 1
+        let generation = filledPhotoScanGeneration
+        await applyFilledPhotoScan(generation: generation, captured: resultContext())
+    }
+
+    private func applyFilledPhotoScan(generation: Int, captured: WorkResultContext) async {
+        if filledPhotoScanDelay > .zero { try? await Task.sleep(for: filledPhotoScanDelay) }
+        guard generation == filledPhotoScanGeneration else { return }
+        let ctx = captured
         guard let layout = ctx.layout, OrdinaryPhotoContent.isGuarded(layout) else {
+            guard generation == filledPhotoScanGeneration else { return }
             filledPhotoExact = nil
             refreshSaveStatus()
             return
         }
+        let key = OrdinaryPhotoContent.flightKey(layout)
         let match = await (store as? FileWorksStore)?.matchOrdinaryPhoto(
             WorkDraft(layout: layout, target: nil, overlayAlpha: layout.params.overlayAlpha,
                       origin: .savedManually, preferredWorkID: rememberedID(for: ctx.resultRevision)))
+        guard generation == filledPhotoScanGeneration else { return }
+        guard let now = resultContext().layout, OrdinaryPhotoContent.flightKey(now) == key else { return }
         if let id = match?.equivalent?.id, match?.blocked == false {
-            filledPhotoExact = (OrdinaryPhotoContent.flightKey(layout), id)
+            filledPhotoExact = (key, id)
         } else {
             filledPhotoExact = nil
         }

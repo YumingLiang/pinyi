@@ -196,6 +196,116 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
         XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"))
     }
 
+    func testDeletingTheMatchedDirectoryClearsSavedStatus() async throws {
+        let (dir, images, store) = try await library()
+        let plain = sampleLayout(["a", "", "c"])
+        let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: plain.params.overlayAlpha, origin: .savedManually))
+        let matched = filled(["a", "", "c"])
+        try plant(matched, id: saved.summary.id, overlay: matched.params.overlayAlpha, in: dir)
+        var shown = matched
+        let controller = WorksController(store: store, existence: FakeExistence(), images: images,
+                                        resultContext: { WorkResultContext(layout: shown, target: nil,
+                                                                           overlayAlpha: shown.params.overlayAlpha, tier: nil, resultRevision: 1) })
+        await controller.refreshFilledPhotoStatus()
+        XCTAssertEqual(controller.state.saveStatus, .saved(saved.summary.id))
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(saved.summary.id.directoryName))
+        await controller.reload()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent(saved.summary.id.directoryName).path), "重扫不能把删掉的作品目录补回来")
+        if case .saved = controller.state.saveStatus { XCTFail("目录删了仍报已保存 \(controller.state.saveStatus)") }
+        shown = filled(["a", "", "c"], color: CellColor(r: 1, g: 1, b: 1))
+        await controller.resultContextDidChange().value
+        XCTAssertEqual(controller.state.saveStatus, .idle)
+    }
+
+    func testContextChangeDoesNotKeepAStaleSavedID() async throws {
+        let (dir, images, store) = try await library()
+        let plain = sampleLayout(["a", "", "c"])
+        let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: plain.params.overlayAlpha, origin: .savedManually))
+        let matched = filled(["a", "", "c"])
+        try plant(matched, id: saved.summary.id, overlay: matched.params.overlayAlpha, in: dir)
+        let shown = matched
+        let controller = WorksController(store: store, existence: FakeExistence(), images: images,
+                                        resultContext: { WorkResultContext(layout: shown, target: nil,
+                                                                           overlayAlpha: shown.params.overlayAlpha, tier: nil, resultRevision: 1) })
+        await controller.refreshFilledPhotoStatus()
+        XCTAssertEqual(controller.state.saveStatus, .saved(saved.summary.id))
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(saved.summary.id.directoryName))
+        let scan = controller.resultContextDidChange()
+        if case .saved = controller.state.saveStatus { XCTFail("上下文失效后仍沿用已删作品 \(controller.state.saveStatus)") }
+        await scan.value
+        XCTAssertEqual(controller.state.saveStatus, .idle)
+    }
+
+    func testOlderFilledScanCannotOverwriteANewerContext() async throws {
+        let (dir, images, store) = try await library()
+        let plain = sampleLayout(["a", "", "c"])
+        let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: plain.params.overlayAlpha, origin: .savedManually))
+        let matched = filled(["a", "", "c"])
+        try plant(matched, id: saved.summary.id, overlay: matched.params.overlayAlpha, in: dir)
+        var shown = matched
+        let controller = WorksController(store: store, existence: FakeExistence(), images: images,
+                                        resultContext: { WorkResultContext(layout: shown, target: nil,
+                                                                           overlayAlpha: shown.params.overlayAlpha, tier: nil, resultRevision: 1) })
+        controller.filledPhotoScanDelay = .milliseconds(100)
+        let older = Task { await controller.refreshFilledPhotoStatus() }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        controller.filledPhotoScanDelay = .zero
+        shown = filled(["a", "", "c"], color: CellColor(r: 7, g: 7, b: 7))
+        let newer = Task { await controller.refreshFilledPhotoStatus() }
+        await newer.value
+        await older.value
+        XCTAssertEqual(controller.state.saveStatus, .idle, "后发起的不等价上下文不能被先发起的 .saved 盖回去")
+    }
+
+    func testPreferredEquivalentCandidateWins() async throws {
+        let (dir, _, store) = try await library()
+        let first = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c"]), target: nil, overlayAlpha: 0.15, origin: .savedManually))
+        let second = try await store.save(WorkDraft(layout: sampleLayout(["d", "e", "f"], seed: 8), target: nil, overlayAlpha: 0.15, origin: .savedManually))
+        let matched = filled(["a", "", "c"])
+        try plant(matched, id: first.summary.id, overlay: matched.params.overlayAlpha, in: dir)
+        try plant(matched, id: second.summary.id, overlay: matched.params.overlayAlpha, in: dir)
+        let before = try snapshot(dir)
+        let chosen = try await store.save(WorkDraft(layout: matched, target: nil, overlayAlpha: matched.params.overlayAlpha,
+                                                    origin: .savedManually, preferredWorkID: second.summary.id))
+        XCTAssertEqual(chosen.outcome, .unchanged)
+        XCTAssertEqual(chosen.summary.id, second.summary.id)
+        XCTAssertEqual(try snapshot(dir), before, "多份等价里选偏好，不写库")
+    }
+
+    func testConcurrentPublishesKeepBothDirectories() async throws {
+        let (dir, _, store) = try await library()
+        let source = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c"]), target: nil, overlayAlpha: 0.15, origin: .savedManually))
+        let before = try snapshot(dir.appendingPathComponent(source.summary.id.directoryName))
+        let red = filled(["a", "", "c"], color: CellColor(r: 1, g: 0, b: 0))
+        let blue = filled(["a", "", "c"], color: CellColor(r: 0, g: 0, b: 2))
+        let redID = WorkID()
+        let blueID = WorkID()
+        async let left = store.publishNewFilledPhoto(WorkDraft(layout: red, target: nil, overlayAlpha: red.params.overlayAlpha, origin: .savedManually), id: redID)
+        async let right = store.publishNewFilledPhoto(WorkDraft(layout: blue, target: nil, overlayAlpha: blue.params.overlayAlpha, origin: .savedManually), id: blueID)
+        let (one, two) = try await (left, right)
+        XCTAssertEqual(one.summary.id, redID)
+        XCTAssertEqual(two.summary.id, blueID)
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(source.summary.id.directoryName)), before)
+        let leftLayout = try await store.load(redID).layout.cellAssignments[1].fill
+        let rightLayout = try await store.load(blueID).layout.cellAssignments[1].fill
+        XCTAssertEqual(leftLayout, CellColor(r: 1, g: 0, b: 0))
+        XCTAssertEqual(rightLayout, CellColor(r: 0, g: 0, b: 2))
+    }
+
+    func testLostReceiptAfterRenameIsReadOnly() async throws {
+        let (dir, _, store) = try await library()
+        let layout = filled(["a", "", "c"])
+        let id = WorkID()
+        _ = try await store.publishNewFilledPhoto(WorkDraft(layout: layout, target: nil, overlayAlpha: layout.params.overlayAlpha, origin: .savedManually), id: id)
+        let found = try await store.readPublishedFilledPhoto(id: id, expecting: layout)
+        XCTAssertEqual(found.id, id, "丢掉返回值后，同一份内容只能只读认出原 ID")
+        do {
+            _ = try await store.readPublishedFilledPhoto(id: id, expecting: filled(["a", "", "c"], color: CellColor(r: 3, g: 3, b: 3)))
+            XCTFail("认不出不能当成原结果")
+        } catch WorksError.publishResultUncertain {}
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent(id.directoryName).path))
+    }
+
     func testButtonDoesNotTreatADifferentFillAsSaved() async throws {
         let (_, images, store) = try await library()
         let plain = sampleLayout(["a", "", "c"])

@@ -14,7 +14,8 @@ enum OrdinaryPhotoContent {
         return layout.cellAssignments.contains { $0.fill != nil || $0.fallback }
     }
 
-    /// 并发键含 fc、fb 和强度。不同填色不能排进同一个 `s2-` 队列。
+    /// 按钮缓存用的内容键。`cd1-` 本身不含 fb 和强度，这里另加上量化强度和逐格 fb。
+    /// 这不是 `inFlight` 队列键。带 fc 的公开保存仍在登记队列前返回。
     static func flightKey(_ layout: MosaicLayout) -> String {
         var parts = [WorkContentDigest.of(layout), String(FNV1a64.quantize(layout.params.overlayAlpha))]
         for cell in layout.cellAssignments { parts.append(cell.fallback ? "1" : "0") }
