@@ -368,8 +368,34 @@ public final class WorksController {
         return r.id
     }
 
+    /// 带 fc / fb 的普通照片不能用 `s2-` 当成已保存。缓存来自纯读扫描。
+    private var filledPhotoExact: (key: String, id: WorkID)?
+
+    /// 重新纯读作品库，刷新带填色照片的按钮。不前滚、不清文件。
+    public func refreshFilledPhotoStatus() async {
+        let ctx = resultContext()
+        guard let layout = ctx.layout, OrdinaryPhotoContent.isGuarded(layout) else {
+            filledPhotoExact = nil
+            refreshSaveStatus()
+            return
+        }
+        let match = await (store as? FileWorksStore)?.matchOrdinaryPhoto(
+            WorkDraft(layout: layout, target: nil, overlayAlpha: layout.params.overlayAlpha,
+                      origin: .savedManually, preferredWorkID: rememberedID(for: ctx.resultRevision)))
+        if let id = match?.equivalent?.id, match?.blocked == false {
+            filledPhotoExact = (OrdinaryPhotoContent.flightKey(layout), id)
+        } else {
+            filledPhotoExact = nil
+        }
+        refreshSaveStatus()
+    }
+
     private func computeSaveStatus(_ ctx: WorkResultContext) -> WorkSaveStatus {
         guard let layout = ctx.layout else { return .idle }
+        if OrdinaryPhotoContent.isGuarded(layout) {
+            if let hit = filledPhotoExact, hit.key == OrdinaryPhotoContent.flightKey(layout) { return .saved(hit.id) }
+            return .idle
+        }
         let fp = currentFingerprint(layout, revision: ctx.resultRevision)
         guard let match = WorkSummary.saveTarget(in: state.summaries, fingerprint: fp,
                                                  preferred: rememberedID(for: ctx.resultRevision)) else { return .idle }

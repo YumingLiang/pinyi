@@ -383,10 +383,13 @@ public struct WorkDraft: Sendable {
     public var seed: UInt64?
     public var origin: WorkOrigin
     /// 结果页记住的「当前结果对应的作品」（存过 / 更新过之后；经「再调一调」来回不丢）。还在且同指纹时优先命中它。
+    /// 这是多份等价作品里的偏好，不是「就地更新这一张」的意图。
     public var preferredWorkID: WorkID?
+    /// 调用方明确要改这一张已有作品。对不上就拒绝，不另存、不改投别的作品。
+    public var updateWorkID: WorkID?
 
     public init(layout: MosaicLayout, target: PixelBuffer?, overlayAlpha: Double, tier: String? = nil, seed: UInt64? = nil,
-                origin: WorkOrigin, preferredWorkID: WorkID? = nil) {
+                origin: WorkOrigin, preferredWorkID: WorkID? = nil, updateWorkID: WorkID? = nil) {
         self.layout = layout
         self.target = target
         self.overlayAlpha = overlayAlpha
@@ -394,6 +397,7 @@ public struct WorkDraft: Sendable {
         self.seed = seed
         self.origin = origin
         self.preferredWorkID = preferredWorkID
+        self.updateWorkID = updateWorkID
     }
 }
 
@@ -504,4 +508,12 @@ public enum WorksError: Error, Sendable, Equatable {
     /// 形状结果还不能存成作品。设计里的 manifest v2 要有 source / color / background / bits-v1 mask，由 S5 写入。
     /// 形状 / 文字还不能按契约存：缺来源、掩码和网格不一致、编码不是 bits-v1，或只有运行时掩码。
     case unsupportedShapeSave
+    /// 调用方点名要改某一张已有作品，但内容和它不等价。不写盘，也不另存。
+    case unsupportedExistingWorkUpdate
+    /// 相关作品有未完成的强度日志，或布局和 meta 的强度对不上，没法证明是不是同一张。不写盘，也不自动恢复。
+    case cannotProvePhotoEquivalence
+    /// 新建目录的发布结果对不上这次事务。不删已发布目录，也不再造一份。
+    case publishResultUncertain
+    /// 同名正式目录已经在，不能替换。
+    case publishCollision
 }

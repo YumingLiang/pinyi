@@ -64,8 +64,8 @@ public actor FileWorksStore: WorksStore {
     static let trashPrefix = ".trash-"
 
     public nonisolated let directory: URL
-    private let images: any WorkImageEncoding
-    private let now: @Sendable () -> Date
+    let images: any WorkImageEncoding
+    let now: @Sendable () -> Date
     /// 每个指纹最多一个正在写的任务（新存或更新叠加）；后来的同指纹保存等它写完再按最新状态决定。
     private var inFlight: [String: (token: UUID, task: Task<WorkSaveResult, any Error>)] = [:]
     /// 旧口径作品在内存里补算出的新指纹（不写盘，避免每次列表都读 layout.json）。
@@ -123,6 +123,9 @@ public actor FileWorksStore: WorksStore {
             draft.layout.shapeFrame = ShapeFrame(background: manifest.spec.background, mask: manifest.mask)
         }
         if draft.layout.shapeManifest != nil { draft.overlayAlpha = 0 }
+        if draft.updateWorkID != nil || OrdinaryPhotoContent.isGuarded(draft.layout) {
+            return try saveFilledOrdinaryPhoto(draft)
+        }
         if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
         // 只有带齐来源、配色、背景和网格一致的 bits-v1 掩码才写形状 / 文字。光有运行时掩码、损坏掩码仍拒绝。
         if !draft.layout.canPersistShape { throw WorksError.unsupportedShapeSave }
