@@ -241,8 +241,12 @@ final class FilledCellImageIOReadTests: XCTestCase {
     }
 }
 
-/// 普通照片作品：打开后走 `exportOpenedTapped`，再单独画一张带 fc 的预览和 `.hd` 导出。
-/// 存盘守护仍在。不是页面点击，也不是 0 次 open。
+/// 普通照片的重开渲染链，和另外几条分开的对照。存盘守护仍在。不是页面点击。
+///
+/// 渲染链只看 `WorksController.open`（已登记兜底会迁移）和 `exportOpenedTapped`。
+/// 观察只到 `ImageIOWorkImages.imageSource`：`readImage` / `readTarget` / `loadImage`。
+/// 看不到 `Data(contentsOf:)` 和裸 `open`。文件能 seek 只说明它是普通文件，不说明 ImageIO 怎么读。
+/// 列表 / 查看的 `decodePreview` 允许读预览，单独记，不并进渲染链的「没读」。
 @MainActor
 final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
     private let photo = (r: UInt8(20), g: UInt8(180), b: UInt8(40))
@@ -256,7 +260,7 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let known = root.appendingPathComponent("known-target.jpg")
         try writeSolidJPEG(to: known, width: 16, height: 16, r: targetColor.r, g: targetColor.g, b: targetColor.b)
-        try assertSeekableFile(known)
+        try assertSeekableFile(known) // 只证明是可定位的普通文件，不证明 ImageIO 用了哪一种读取
         let layout = photoLayout(fill: nil)
         let store = FileWorksStore(directory: root.appendingPathComponent("Works", isDirectory: true),
                                    images: ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo)))
@@ -270,42 +274,119 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
         try FileManager.default.copyItem(at: known, to: targetURL)
         try writeSolidJPEG(to: previewURL, width: 16, height: 16, r: sentinel.r, g: sentinel.g, b: sentinel.b)
 
-        let proved = try await ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo)).readTarget(at: targetURL)
-        assertNear(center(proved), targetColor, tolerance: 8, label: "同一 JPEG 经生产 readTarget")
+        let images = ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo))
+        let proved = try await images.readTarget(at: targetURL)
+        assertNear(center(proved), targetColor, tolerance: 8, label: "readTarget 解码进缓冲的是目标蓝，不是格子色")
         let log = ProductionReadLog()
         defer { log.stop() }
         log.reset()
-        let again = try await ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo)).readTarget(at: targetURL)
-        assertNear(center(again), targetColor, tolerance: 8, label: "观察器正对照")
-        XCTAssertEqual(log.paths().filter { $0 == targetURL.path }.count, 1, "正对照没有记下这次生产读取，后面的零记录没有敏感性")
+        _ = try await images.readTarget(at: targetURL)
+        XCTAssertEqual(hits(log, targetURL), 1, "同一条 imageSource 必须记下这次 readTarget，否则后面的缺记录没有敏感性")
         log.reset()
 
-        let controller = WorksController(store: store, existence: AllPresent(), images: ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo)))
+        let controller = WorksController(store: store, existence: AllPresent(), images: images)
         let exporter = RecordingExporter(thumbs: TwoColorThumbs(photo: photo, other: photo))
         controller.exportHandler = exporter
         try await within(20) { await controller.open(saved.summary.id) }
         XCTAssertEqual(controller.openedWork?.id, saved.summary.id)
-        let fallbackURL = dir.appendingPathComponent("fallback.png")
-        try writeSolidJPEG(to: fallbackURL, width: 8, height: 8, r: sentinel.r, g: sentinel.g, b: sentinel.b)
-        XCTAssertEqual(log.paths().filter { $0 == previewURL.path }.count, 0, "打开作品的 ImageIO 入口没有读哨兵预览。裸 open 不在此列")
-        XCTAssertEqual(log.paths().filter { $0 == fallbackURL.path }.count, 0)
+        XCTAssertEqual(hits(log, previewURL), 0, "这次 open 没有缺失、也没有已登记兜底，imageSource 没读哨兵预览")
         log.reset()
 
         try await within(20) { await controller.exportOpenedTapped(purpose: .save) }
         XCTAssertNil(exporter.failure)
-        XCTAssertEqual(exporter.fallbacks.count, 0)
-        let consumed = try XCTUnwrap(exporter.target, "导出没有消费作品里的目标 JPEG")
-        assertNear(center(consumed), targetColor, tolerance: 8, label: "exportOpenedTapped 读到的目标图")
-        XCTAssertGreaterThanOrEqual(log.paths().filter { $0 == targetURL.path }.count, 1, "完整导出路径没有消费这张 JPEG")
-        XCTAssertEqual(log.paths().filter { $0 == previewURL.path }.count, 0, "导出路径的 ImageIO 入口没有读哨兵预览。不是 0 次 open")
-        XCTAssertEqual(log.paths().filter { $0 == fallbackURL.path }.count, 0, "导出路径的 ImageIO 入口没有读哨兵兜底文件")
+        XCTAssertEqual(exporter.fallbacks.count, 0, "没有 fc / fb，导出不带兜底小图")
+        let consumed = try XCTUnwrap(exporter.target, "exportOpenedTapped 应把 readTarget 的缓冲交出去")
+        assertNear(center(consumed), targetColor, tolerance: 8, label: "交给导出器的目标缓冲")
+        XCTAssertGreaterThanOrEqual(hits(log, targetURL), 1, "再导出链路经 readTarget 打开了这张目标 JPEG")
+        XCTAssertEqual(hits(log, previewURL), 0, "这条再导出链路的 imageSource 没读预览。不是全进程 0 次 open，也不包括列表查看")
         let exported = try XCTUnwrap(decodeJPEG(try XCTUnwrap(exporter.url)))
-        assertNear(sample(try bitmap(exported), image: exported, columns: 2, index: 0), photo, tolerance: 12, label: "导出格不是哨兵预览")
-        assertNear(sample(try bitmap(exported), image: exported, columns: 2, index: 1), photo, tolerance: 12, label: "邻格")
+        assertNear(sample(try bitmap(exported), image: exported, columns: 2, index: 0), photo, tolerance: 12,
+                   label: "导出格是缩略图绿。叠加强度是 0，格子不用目标蓝")
+        assertNear(sample(try bitmap(exported), image: exported, columns: 2, index: 1), photo, tolerance: 12, label: "邻格也是缩略图")
+    }
 
+    func testRegisteredFallbackRemainsForReopenAndRenderChainDoesNotDecodeIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("photo-fb-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let images = ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo))
+        let store = FileWorksStore(directory: root.appendingPathComponent("Works", isDirectory: true), images: images)
+        let saved = try await store.save(WorkDraft(layout: photoLayout(fill: nil), target: try solid(width: 8, height: 8, r: 1, g: 2, b: 3),
+                                                   overlayAlpha: 0, origin: .savedManually))
+        let dir = saved.summary.previewURL.deletingLastPathComponent()
+        let fallbackURL = dir.appendingPathComponent("fallback-kept.jpg")
+        try writeSolidJPEG(to: fallbackURL, width: 8, height: 8, r: sentinel.r, g: sentinel.g, b: sentinel.b)
+        var meta = saved.summary.meta
+        meta.fallbackFile = fallbackURL.lastPathComponent
+        try FileWorksStore.encoder().encode(meta).write(to: dir.appendingPathComponent("meta.json"), options: .atomic)
+        let before = try await store.load(saved.summary.id)
+        XCTAssertEqual(before.meta.fallbackFile, "fallback-kept.jpg")
+        XCTAssertTrue(before.meta.needsFallbackMigration)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fallbackURL.path), "打开前已登记的兜底文件还在")
+        let previewURL = before.summary.previewURL
+
+        let log = ProductionReadLog()
+        defer { log.stop() }
         log.reset()
-        _ = try await ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo)).readImage(at: previewURL)
-        XCTAssertEqual(log.paths().filter { $0 == previewURL.path }.count, 1, "故意读哨兵预览必须被击穿")
+        let controller = WorksController(store: store, existence: AllPresent(), images: images)
+        let exporter = RecordingExporter(thumbs: TwoColorThumbs(photo: photo, other: photo))
+        controller.exportHandler = exporter
+        try await within(20) { await controller.open(saved.summary.id) }
+        XCTAssertNil(controller.openedWork?.meta.fallbackFile, "迁移提交后 meta 不再登记兜底图")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fallbackURL.path),
+                       "提交后由文件管理删掉旧兜底文件。这是删文件，不是 ImageIO 解码记录")
+        XCTAssertEqual(hits(log, fallbackURL), 0, "open 迁移链路的 imageSource 没有解码已登记兜底图")
+        XCTAssertEqual(hits(log, previewURL), 0, "open 迁移链路的 imageSource 没有解码旧预览")
+        log.reset()
+        try await within(20) { await controller.exportOpenedTapped(purpose: .save) }
+        XCTAssertNil(exporter.failure)
+        XCTAssertEqual(hits(log, fallbackURL), 0, "再导出链路也没有解码已删或已登记的兜底图")
+        XCTAssertEqual(hits(log, previewURL), 0, "再导出链路没有解码迁移前的旧预览")
+    }
+
+    func testUnregisteredFallbackIsRemovedBeforeOpenReturns() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("photo-orphan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let images = ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo))
+        let store = FileWorksStore(directory: root.appendingPathComponent("Works", isDirectory: true), images: images)
+        let saved = try await store.save(WorkDraft(layout: photoLayout(fill: nil), target: nil, overlayAlpha: 0, origin: .savedManually))
+        let dir = saved.summary.previewURL.deletingLastPathComponent()
+        let orphan = dir.appendingPathComponent("fallback-orphan.jpg")
+        try writeSolidJPEG(to: orphan, width: 8, height: 8, r: sentinel.r, g: sentinel.g, b: sentinel.b)
+        XCTAssertNil(saved.summary.meta.fallbackFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: orphan.path))
+        let previewURL = saved.summary.previewURL
+        let controller = WorksController(store: store, existence: AllPresent(), images: images)
+        try await within(20) { await controller.open(saved.summary.id) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path),
+                       "未登记的 fallback* 在 open 返回前由 removeOrphans 删掉。文件不在了，不能拿它证明 ImageIO 没读")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: previewURL.path), "meta 登记的预览还在")
+    }
+
+    func testLoadImageAndReadImageRecordADeliberatePreviewRead() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("photo-view-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let images = ImageIOWorkImages(thumbnails: TwoColorThumbs(photo: photo, other: photo))
+        let store = FileWorksStore(directory: root.appendingPathComponent("Works", isDirectory: true), images: images)
+        let saved = try await store.save(WorkDraft(layout: photoLayout(fill: nil), target: nil, overlayAlpha: 0, origin: .savedManually))
+        let previewURL = saved.summary.previewURL
+        let log = ProductionReadLog()
+        defer { log.stop() }
+        log.reset()
+        let thumb = ImageIOWorkImages.loadImage(previewURL, maxPixel: 32)
+        XCTAssertNotNil(thumb)
+        XCTAssertEqual(hits(log, previewURL), 1, "生产 loadImage 必须记到这张预览")
+        log.reset()
+        _ = try await images.readImage(at: previewURL)
+        XCTAssertEqual(hits(log, previewURL), 1, "生产 readImage 必须记到这张预览")
+        log.reset()
+        var view = WorksState()
+        view.limitedAccess = false
+        let shown = view.decodePreview(for: saved.summary) { ImageIOWorkImages.loadImage($0, maxPixel: 32) }
+        XCTAssertNotNil(shown, "列表 / 查看允许读已登记预览")
+        XCTAssertEqual(hits(log, previewURL), 1, "decodePreview 走 loadImage，单独记。不是渲染链禁读")
     }
 
     func testOrdinaryPhotoFillPreviewMatchesExportAndSaveStaysRejected() async throws {
@@ -343,27 +424,34 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
             XCTFail("意外错误 \(error)")
         }
         let listed = await store.list()
-        XCTAssertTrue(listed.isEmpty)
+        XCTAssertTrue(listed.isEmpty, "作品列表没有新作品")
+        let worksDir = root.appendingPathComponent("Works", isDirectory: true)
+        let worksEntries = (try? FileManager.default.contentsOfDirectory(atPath: worksDir.path)) ?? []
+        XCTAssertTrue(worksEntries.isEmpty, "作品目录没有作品文件夹")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(previewFile.fileName).path),
+                      "临时根里的预览文件还在。列表为空不等于整棵临时目录为空")
     }
 
-    /// 超时是失败，不当成「没有读取」，也不当成取消。
-    private func within<T>(_ seconds: TimeInterval, _ work: () async throws -> T) async throws -> T {
-        let box = OSAllocatedUnfairLock<(Result<T, Error>)?>(initialState: nil)
+    private func hits(_ log: ProductionReadLog, _ url: URL) -> Int {
+        log.paths().filter { $0 == url.path }.count
+    }
+
+    /// 结果留在 MainActor 上，不放进可跨线程的锁。超时先失败返回，后面的读取断言不会跑。
+    private func within<T>(_ seconds: TimeInterval, _ work: @MainActor () async throws -> T) async throws -> T {
+        let box = MainActorBox<T>()
         let done = XCTestExpectation(description: "within")
         let task = Task { @MainActor in
-            let result: Result<T, Error>
-            do { result = .success(try await work()) }
-            catch { result = .failure(error) }
-            box.withLock { $0 = result }
+            do { box.value = .success(try await work()) }
+            catch { box.value = .failure(error) }
             done.fulfill()
         }
         let outcome = await XCTWaiter().fulfillment(of: [done], timeout: seconds)
         if outcome != .completed {
             task.cancel()
-            XCTFail("操作超过 \(seconds) 秒。这不是零读取，也不是导出被取消的证据")
+            XCTFail("操作超过 \(seconds) 秒。超时不是零读取，也不是这条链路被取消的证据")
             throw CocoaError(.userCancelled)
         }
-        return try XCTUnwrap(box.withLock { $0 }).get()
+        return try XCTUnwrap(box.value).get()
     }
 
     private func photoLayout(fill: CellColor?) -> MosaicLayout {
@@ -468,6 +556,11 @@ private struct TwoColorThumbs: ThumbnailProviding {
         guard let tile = try? PixelBuffer(width: 8, height: 8, bytes: bytes) else { return .failed }
         return .image(tile)
     }
+}
+
+@MainActor
+private final class MainActorBox<T> {
+    var value: Result<T, Error>?
 }
 
 @MainActor
