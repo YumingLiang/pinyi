@@ -1,6 +1,7 @@
 import CoreGraphics
 import Darwin
 import ImageIO
+import os
 import UniformTypeIdentifiers
 import XCTest
 import MosaicCore
@@ -19,16 +20,17 @@ final class FilledCellPixelTests: XCTestCase {
         try FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let sentinel = root.appendingPathComponent("sentinel.jpg")
+        try writeSolidJPEG(to: sentinel, width: 8, height: 8, r: 255, g: 0, b: 255)
+        let sentinelBytes = try Data(contentsOf: sentinel)
+        XCTAssertGreaterThan(sentinelBytes.count, 0)
         let oldPreview = oldDir.appendingPathComponent("preview.jpg")
-        try writeSolidJPEG(to: oldPreview, width: 8, height: 8, r: 255, g: 0, b: 255)
-        let oldBytes = try Data(contentsOf: oldPreview)
-        let probe = try OpenProbe(url: oldPreview)
-        defer { probe.close() }
-        XCTAssertEqual(probe.drainOpens(), 0, "登记之后先清掉监视本身的打开")
-        let control = open(oldPreview.path, O_RDONLY)
-        XCTAssertGreaterThanOrEqual(control, 0)
-        close(control)
-        XCTAssertGreaterThan(probe.drainOpens(), 0, "正对照必须让内核记到这个旧预览文件被打开")
+        let pipe = PreviewPipe(url: oldPreview)
+        defer { pipe.release() }
+        try await pipe.preload(sentinelBytes)
+        let consumed = pipe.takeBytes()
+        XCTAssertEqual(consumed, sentinelBytes, "正对照：从这个路径读走的就是预览字节")
+        try await pipe.preload(sentinelBytes)
 
         let mask = try CellMask(columns: 2, rows: 2, bitsV1: [0b0000_1101])
         let frame = ShapeFrame(background: .black, mask: mask)
@@ -54,8 +56,7 @@ final class FilledCellPixelTests: XCTestCase {
         let exportURL = try await LiveMosaicExporter(thumbnails: thumbs).export(request) { _ in }
         defer { try? FileManager.default.removeItem(at: exportURL) }
 
-        XCTAssertEqual(probe.drainOpens(), 0, "真实预览和再导出没有打开旧预览文件")
-        XCTAssertEqual(try Data(contentsOf: oldPreview), oldBytes)
+        XCTAssertEqual(pipe.takeBytes(), sentinelBytes, "真实预览和再导出没有读走旧预览里的字节")
         XCTAssertEqual(thumbs.ids(), [], "fc 格和形状外不取照片")
 
         let preview = try XCTUnwrap(decodeJPEG(previewURL))
@@ -137,60 +138,106 @@ final class FilledCellPixelTests: XCTestCase {
     }
 }
 
-/// 内核级打开计数。正对照打开文件之后次数增加；渲染期间不再增加，才算旧预览读取为 0。
-private final class OpenProbe {
-    private let fd: Int32
-    private let queue: Int32
+/// 旧预览放在 FIFO 里。iOS 的公开 vnode 事件没有 `NOTE_OPEN`，kqueue 报不了“被打开”。
+/// 这里观察的是读走的字节：正对照把整段 JPEG 读走；渲染之后同一段还在，才算没有读。
+/// 只打开、一个字节都不读的调用不在这次观察里。ImageIO 解码会读字节。
+private final class PreviewPipe {
+    let url: URL
+    private var reader: Int32 = -1
 
-    init(url: URL) throws {
-        fd = open(url.path, O_EVTONLY)
-        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        queue = kqueue()
-        guard queue >= 0 else {
-            close(fd)
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        var change = kevent(ident: UInt(fd), filter: Int16(EVFILT_VNODE), flags: UInt16(EV_ADD | EV_CLEAR),
-                            fflags: UInt32(NOTE_OPEN), data: 0, udata: nil)
-        guard Darwin.kevent(queue, &change, 1, nil, 0, nil) == 0 else {
-            close(queue)
-            close(fd)
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    init(url: URL) {
+        self.url = url
+    }
+
+    func release() {
+        if reader >= 0 {
+            releaseDescriptor(reader)
+            reader = -1
         }
     }
 
-    func close() {
-        Darwin.close(queue)
-        Darwin.close(fd)
+    func preload(_ data: Data) async throws {
+        release()
+        if FileManager.default.fileExists(atPath: url.path) {
+            unlink(url.path)
+        }
+        guard mkfifo(url.path, 0o600) == 0 else { throw pipeError() }
+        let path = url.path
+        let readerFd: Int32 = try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let opened = DispatchSemaphore(value: 0)
+                let stored = OSAllocatedUnfairLock(initialState: Int32(-1))
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let fd = Darwin.open(path, O_RDONLY)
+                    stored.withLock { $0 = fd }
+                    opened.signal()
+                }
+                let writer = Darwin.open(path, O_WRONLY)
+                opened.wait()
+                let fd = stored.withLock { $0 }
+                guard writer >= 0, fd >= 0 else {
+                    if writer >= 0 { releaseDescriptor(writer) }
+                    if fd >= 0 { releaseDescriptor(fd) }
+                    continuation.resume(throwing: pipeError())
+                    return
+                }
+                var offset = 0
+                let ok: Bool = data.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress else { return false }
+                    while offset < raw.count {
+                        let n = Darwin.write(writer, base + offset, raw.count - offset)
+                        if n < 0 {
+                            if errno == EINTR { continue }
+                            return false
+                        }
+                        offset += n
+                    }
+                    return true
+                }
+                releaseDescriptor(writer)
+                guard ok else {
+                    releaseDescriptor(fd)
+                    continuation.resume(throwing: pipeError())
+                    return
+                }
+                continuation.resume(returning: fd)
+            }
+        }
+        reader = readerFd
     }
 
-    func drainOpens() -> Int {
-        var count = 0
+    func takeBytes() -> Data {
+        guard reader >= 0 else { return Data() }
+        var out = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
-            var event = kevent()
-            var timeout = timespec(tv_sec: 0, tv_nsec: 0)
-            let n = Darwin.kevent(queue, nil, 0, &event, 1, &timeout)
-            if n <= 0 { break }
-            if event.fflags & UInt32(NOTE_OPEN) != 0 { count += 1 }
+            let n = Darwin.read(reader, &buffer, buffer.count)
+            if n == 0 { break }
+            if n < 0 {
+                if errno == EINTR { continue }
+                break
+            }
+            out.append(contentsOf: buffer.prefix(n))
         }
-        return count
+        return out
     }
 }
 
-private final class NoFetchThumbs: ThumbnailProviding, @unchecked Sendable {
-    private let lock = NSLock()
-    private var fetched: [String] = []
+private func releaseDescriptor(_ fd: Int32) {
+    _ = Darwin.close(fd)
+}
 
-    func ids() -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return fetched
-    }
+private func pipeError() -> POSIXError {
+    POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+}
+
+private final class NoFetchThumbs: ThumbnailProviding, @unchecked Sendable {
+    private let fetched = OSAllocatedUnfairLock(initialState: [String]())
+
+    func ids() -> [String] { fetched.withLock { $0 } }
 
     func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {
-        lock.lock()
-        fetched.append(assetID)
-        lock.unlock()
+        fetched.withLock { $0.append(assetID) }
         return .missing
     }
 }
