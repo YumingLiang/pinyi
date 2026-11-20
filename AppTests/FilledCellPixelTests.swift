@@ -439,7 +439,7 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
     }
 
     /// 结果留在 MainActor 上，不放进可跨线程的锁。超时先失败返回，后面的读取断言不会跑。
-    private func within<T>(_ seconds: TimeInterval, _ work: @MainActor () async throws -> T) async throws -> T {
+    private func within<T>(_ seconds: TimeInterval, _ work: @escaping @MainActor () async throws -> T) async throws -> T {
         let box = MainActorBox<T>()
         let done = XCTestExpectation(description: "within")
         let task = Task { @MainActor in
