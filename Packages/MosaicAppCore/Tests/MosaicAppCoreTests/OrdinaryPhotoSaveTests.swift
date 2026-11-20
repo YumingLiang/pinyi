@@ -427,6 +427,58 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
         XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"))
     }
 
+    func testSameQueueKeyInFlightDoesNotReturnTheOtherReceipt() async throws {
+        let (dir, _, store) = try await library()
+        let plain = sampleLayout(["a", "b", "c"])
+        let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: plain.params.overlayAlpha, origin: .savedManually))
+        let oldBytes = try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName))
+        await store.armForcedFilledQueueKey("forced-same-key")
+        let red = filled(["a", "", "c"], color: CellColor(r: 1, g: 0, b: 0))
+        let blue = filled(["a", "", "c"], color: CellColor(r: 0, g: 0, b: 2))
+        let hold = ScanHold()
+        let waiting = ScanHold()
+        await store.armBeforeFilledSaveDecision {
+            hold.markEntered()
+            await hold.waitRelease()
+        }
+        await store.armFilledQueueWaitStarted { waiting.markEntered() }
+        let redSave = Task {
+            try await store.save(WorkDraft(layout: red, target: nil, overlayAlpha: red.params.overlayAlpha, origin: .savedManually))
+        }
+        await hold.waitEntered()
+        let blueSave = Task {
+            try await store.save(WorkDraft(layout: blue, target: nil, overlayAlpha: blue.params.overlayAlpha, origin: .savedManually))
+        }
+        await waiting.waitEntered()
+        hold.release()
+        let redResult = try await redSave.value
+        let blueResult = try await blueSave.value
+        XCTAssertEqual(redResult.outcome, .inserted)
+        XCTAssertEqual(blueResult.outcome, .inserted)
+        XCTAssertNotEqual(redResult.summary.id, blueResult.summary.id, "同键在途重叠也不能把红的回执交给蓝")
+        let redLayout = try FileWorksStore.decoder().decode(MosaicLayout.self, from: Data(contentsOf: dir.appendingPathComponent(redResult.summary.id.directoryName).appendingPathComponent("layout.json")))
+        let blueLayout = try FileWorksStore.decoder().decode(MosaicLayout.self, from: Data(contentsOf: dir.appendingPathComponent(blueResult.summary.id.directoryName).appendingPathComponent("layout.json")))
+        XCTAssertEqual(redLayout.cellAssignments[1].fill, CellColor(r: 1, g: 0, b: 0))
+        XCTAssertEqual(blueLayout.cellAssignments[1].fill, CellColor(r: 0, g: 0, b: 2))
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName)), oldBytes)
+        XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"))
+    }
+
+    func testOverlayAcrossQuantizeBucketInsideSameOverlayStaysUnchanged() async throws {
+        let base = 0.15
+        let crossed = 0.15 + 6e-7
+        XCTAssertNotEqual(FNV1a64.quantize(base), FNV1a64.quantize(crossed), "必须跨过量化档，才能抓住改成量化相等")
+        XCTAssertTrue(WorkFingerprint.sameOverlay(base, crossed), "abs 差 6e-7 仍小于产品的 1e-6")
+        let (dir, _, store) = try await library()
+        let layout = filled(["a", "", "c"])
+        let first = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: base, origin: .savedManually))
+        let afterFirst = try snapshot(dir)
+        let second = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: crossed, origin: .savedManually))
+        XCTAssertEqual(second.outcome, .unchanged)
+        XCTAssertEqual(second.summary.id, first.summary.id, "跨量化档但仍在 sameOverlay 内，必须沿用原 ID")
+        XCTAssertEqual(try snapshot(dir), afterFirst, "零写盘")
+    }
+
     func testMeaningfulOverlayIsNotDeduped() async throws {
         let (dir, _, store) = try await library()
         let layout = filled(["a", "", "c"])

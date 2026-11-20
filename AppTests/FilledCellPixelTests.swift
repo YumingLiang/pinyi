@@ -487,7 +487,7 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
         XCTAssertEqual(hits(log, previewURL), 1, "decodePreview 走 loadImage，单独记。不是渲染链禁读")
     }
 
-    func testOrdinaryPhotoFillPreviewMatchesExportAndSaveStaysRejected() async throws {
+    func testPublicSaveFreshDataReopenMatchesHDExport() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("photo-fc-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

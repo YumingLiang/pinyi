@@ -94,6 +94,8 @@ public actor FileWorksStore: WorksStore {
     var beforeFilledSaveDecision: (@Sendable () async -> Void)?
     /// 测试强迫两条不同内容共用一个队列键。生产保持 nil，不能拿它代替真实哈希碰撞搜索。
     var forcedFilledQueueKeyForTest: String?
+    /// 测试在后来的保存看见仍在飞的同键任务时通知。生产保持 nil，不改变决定。
+    var filledQueueWaitStartedForTest: (@Sendable () -> Void)?
 
     func armFilledPublishInterrupt(_ point: FilledPublishInterrupt) {
         interruptFilledPublishForTest = point
@@ -109,6 +111,10 @@ public actor FileWorksStore: WorksStore {
 
     func armForcedFilledQueueKey(_ key: String) {
         forcedFilledQueueKeyForTest = key
+    }
+
+    func armFilledQueueWaitStarted(_ hook: @escaping @Sendable () -> Void) {
+        filledQueueWaitStartedForTest = hook
     }
 
     public init(directory: URL, images: any WorkImageEncoding, now: @escaping @Sendable () -> Date = { Date() }) {
@@ -203,6 +209,7 @@ public actor FileWorksStore: WorksStore {
         var waited: UUID?
         while let running = inFlight[key], running.token != waited {
             waited = running.token
+            filledQueueWaitStartedForTest?()
             _ = try? await running.task.value
         }
         let task = Task { () async throws -> WorkSaveResult in
