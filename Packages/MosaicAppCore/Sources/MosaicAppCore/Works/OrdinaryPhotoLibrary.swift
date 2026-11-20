@@ -14,6 +14,14 @@ enum OrdinaryPhotoContent {
         return layout.cellAssignments.contains { $0.fill != nil || $0.fallback }
     }
 
+    /// 可以公开新存的普通照片：有 fc，没有形状，也没有 fb 布尔。
+    /// fb 布尔不是兜底文件的内容。那种布局还没验证，公开保存继续拒绝。
+    static func canPublishNew(_ layout: MosaicLayout) -> Bool {
+        guard layout.shapeFrame == nil, layout.shapeManifest == nil else { return false }
+        guard !layout.cellAssignments.contains(where: { $0.fallback }) else { return false }
+        return layout.cellAssignments.contains { $0.fill != nil }
+    }
+
     /// 按钮缓存用的内容键。`cd1-` 本身不含 fb 和强度，这里另加上量化强度和逐格 fb。
     /// 不是保存队列键。队列用 `queueKey`，前缀不同，不能互相代替。
     static func flightKey(_ layout: MosaicLayout) -> String {
@@ -23,7 +31,7 @@ enum OrdinaryPhotoContent {
     }
 
     /// 公开保存的 `inFlight` 键。含 fc（在 `cd1-` 里）、调用方给出的强度，以及逐格 fb。
-    /// 和按钮缓存键不是同一串。守护还在时，登记之后仍拒绝新建，不把不同 fc 合成一张。
+    /// 只用来把可能相同的保存排进同一队。命中与否仍要走 `same`，不能把别人的结果直接交出去。
     static func queueKey(_ layout: MosaicLayout, overlay: Double) -> String {
         var parts = ["q1", WorkContentDigest.of(layout), String(FNV1a64.quantize(overlay))]
         for cell in layout.cellAssignments { parts.append(cell.fallback ? "1" : "0") }
@@ -166,7 +174,7 @@ extension FileWorksStore {
         return (WorkSummary.saveTarget(in: equivalent, fingerprint: fingerprint, preferred: draft.preferredWorkID), false)
     }
 
-    func saveFilledOrdinaryPhoto(_ draft: WorkDraft) throws -> WorkSaveResult {
+    func saveFilledOrdinaryPhoto(_ draft: WorkDraft) async throws -> WorkSaveResult {
         var draft = draft
         draft.layout.params.overlayAlpha = draft.overlayAlpha
         if let explicit = draft.updateWorkID {
@@ -177,7 +185,8 @@ extension FileWorksStore {
         if let existing = match.equivalent {
             return WorkSaveResult(summary: existing, outcome: .unchanged)
         }
-        throw WorksError.unsupportedFilledCells
+        guard OrdinaryPhotoContent.canPublishNew(draft.layout) else { throw WorksError.unsupportedFilledCells }
+        return try await publishNewFilledPhoto(draft)
     }
 
     private func saveExplicitOrdinaryPhoto(_ draft: WorkDraft, id: WorkID) throws -> WorkSaveResult {
@@ -194,8 +203,8 @@ extension FileWorksStore {
         throw WorksError.unsupportedExistingWorkUpdate
     }
 
-    /// 测试里的新建事务。公开 `save` 在守护解除前不会走到这里。
-    /// 不写 contentDigest / revision。中止只删本次未发布的 `.tmp-fc-new-` 目录。
+    /// 普通照片新建。公开 `save` 只在无等价旧作、无点名旧 ID、且 `canPublishNew` 时调用。
+    /// 不写 contentDigest / revision。失败只删本次 `.tmp-fc-new-` 临时目录。
     func publishNewFilledPhoto(_ draft: WorkDraft, id: WorkID = WorkID(), sourceLayoutAtStart: Data? = nil, sourceID: WorkID? = nil) async throws -> WorkSaveResult {
         let fm = FileManager.default
         let tx = UUID().uuidString

@@ -503,7 +503,8 @@ public enum WorksStoreError: Error, Sendable, Equatable {
 
 /// 作品写入的前置条件错误（架构师 11-17 B）。
 public enum WorksError: Error, Sendable, Equatable {
-    /// 带纯色格（`fc`）的布局还不能存成作品。预览和再导出已经按同一决定填这个颜色，但写盘仍拒绝。
+    /// 还不能按这条路径存。形状 / 文字的 fc、带 fb 布尔的普通照片、以及没有走完新建事务的写入，仍然拒绝。
+    /// 普通照片、没有等价旧作、没有点名旧 ID、只有 fc 时，公开保存会新建一份。
     case unsupportedFilledCells
     /// 形状结果还不能存成作品。设计里的 manifest v2 要有 source / color / background / bits-v1 mask，由 S5 写入。
     /// 形状 / 文字还不能按契约存：缺来源、掩码和网格不一致、编码不是 bits-v1，或只有运行时掩码。

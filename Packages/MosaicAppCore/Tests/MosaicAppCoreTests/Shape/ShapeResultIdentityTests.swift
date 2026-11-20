@@ -159,15 +159,12 @@ final class ShapeResultIdentityTests: XCTestCase {
         }
         var filled = photo
         filled.cellAssignments[1].fill = CellColor(r: 1, g: 2, b: 3)
-        do {
-            _ = try await store.save(WorkDraft(layout: filled, target: nil, overlayAlpha: 0.3,
-                                               origin: .savedManually, preferredWorkID: saved.summary.id))
-            XCTFail("fc 应在更新前拒绝")
-        } catch let error as WorksError {
-            XCTAssertEqual(error, .unsupportedFilledCells)
-        }
+        let made = try await store.save(WorkDraft(layout: filled, target: nil, overlayAlpha: 0.3,
+                                                  origin: .savedManually, preferredWorkID: saved.summary.id))
+        XCTAssertEqual(made.outcome, .inserted)
+        XCTAssertNotEqual(made.summary.id, saved.summary.id, "preferred 不是点名更新；不同 fc 新存，不改旧作")
         let after = images.state.get()
-        XCTAssertEqual(after.previews, before.previews)
+        XCTAssertEqual(after.previews, before.previews + 1)
         XCTAssertEqual(after.targets, before.targets)
         XCTAssertEqual(after.fallbackWrites, before.fallbackWrites)
         let again = try await store.load(saved.summary.id)

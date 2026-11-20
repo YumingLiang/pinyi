@@ -512,22 +512,44 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
         assertNear(sample(try bitmap(preview), image: preview, columns: 2, index: 1), photo, tolerance: 12, label: "预览邻格")
         assertNear(sample(try bitmap(exported), image: exported, columns: 2, index: 1), photo, tolerance: 12, label: "导出邻格")
 
-        let store = FileWorksStore(directory: root.appendingPathComponent("Works", isDirectory: true), images: ImageIOWorkImages(thumbnails: thumbs))
-        do {
-            _ = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0, origin: .savedManually))
-            XCTFail("带 fc 的普通照片仍不能写盘")
-        } catch let error as WorksError {
-            XCTAssertEqual(error, .unsupportedFilledCells)
-        } catch {
-            XCTFail("意外错误 \(error)")
+        let works = root.appendingPathComponent("Works", isDirectory: true)
+        let images = ImageIOWorkImages(thumbnails: thumbs)
+        let store = FileWorksStore(directory: works, images: images)
+        let old = try await store.save(WorkDraft(layout: photoLayout(fill: nil), target: nil, overlayAlpha: 0, origin: .savedManually))
+        try writeSolidJPEG(to: old.summary.previewURL, width: 16, height: 16, r: sentinel.r, g: sentinel.g, b: sentinel.b)
+        let oldFallback = old.summary.previewURL.deletingLastPathComponent().appendingPathComponent("fallback-sentinel.jpg")
+        try writeSolidJPEG(to: oldFallback, width: 8, height: 8, r: sentinel.r, g: sentinel.g, b: sentinel.b)
+        let oldPreviewBytes = try Data(contentsOf: old.summary.previewURL)
+        let oldFallbackBytes = try Data(contentsOf: oldFallback)
+        let oldLayoutBytes = try Data(contentsOf: old.summary.previewURL.deletingLastPathComponent().appendingPathComponent("layout.json"))
+        let log = ProductionReadLog()
+        defer { log.stop() }
+        log.reset()
+        let made = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0, origin: .savedManually))
+        XCTAssertEqual(made.outcome, .inserted)
+        XCTAssertNotEqual(made.summary.id, old.summary.id)
+        XCTAssertEqual(try Data(contentsOf: old.summary.previewURL), oldPreviewBytes, "公开新作不改旧预览")
+        XCTAssertEqual(try Data(contentsOf: oldFallback), oldFallbackBytes, "公开新作不改旧兜底文件")
+        XCTAssertEqual(try Data(contentsOf: old.summary.previewURL.deletingLastPathComponent().appendingPathComponent("layout.json")), oldLayoutBytes)
+        XCTAssertEqual(hits(log, old.summary.previewURL), 0, "这次公开保存的 imageSource 没读旧预览。不是全局 0 次 open")
+        XCTAssertEqual(hits(log, oldFallback), 0, "这次公开保存的 imageSource 没读旧兜底。Data 和裸 open 仍看不见")
+        let published = works.appendingPathComponent(made.summary.id.directoryName)
+        let stored = try FileWorksStore.decoder().decode(MosaicLayout.self, from: Data(contentsOf: published.appendingPathComponent("layout.json")))
+        let fresh = FileWorksStore(directory: works, images: images)
+        let found = try await fresh.readPublishedFilledPhoto(id: made.summary.id, expecting: stored)
+        XCTAssertEqual(found.id, made.summary.id, "新 store 只读认回真实新文件，不调用 load / open / list")
+        log.reset()
+        let reopened = try await within(20) {
+            try await LiveMosaicExporter(thumbnails: thumbs).export(ExportRequest(layout: stored, target: nil, tier: .hd)) { _ in }
         }
-        let listed = await store.list()
-        XCTAssertTrue(listed.isEmpty, "作品列表没有新作品")
-        let worksDir = root.appendingPathComponent("Works", isDirectory: true)
-        let worksEntries = (try? FileManager.default.contentsOfDirectory(atPath: worksDir.path)) ?? []
-        XCTAssertTrue(worksEntries.isEmpty, "作品目录没有作品文件夹")
+        defer { try? FileManager.default.removeItem(at: reopened) }
+        let reopenedImage = try XCTUnwrap(decodeJPEG(reopened))
+        assertNear(sample(try bitmap(reopenedImage), image: reopenedImage, columns: 2, index: 0), fill, tolerance: 8, label: "公开保存后再导出的 fc")
+        assertNear(sample(try bitmap(reopenedImage), image: reopenedImage, columns: 2, index: 1), photo, tolerance: 12, label: "公开保存后再导出的邻格")
+        XCTAssertEqual(hits(log, old.summary.previewURL), 0, "再导出链没读旧预览哨兵")
+        XCTAssertEqual(hits(log, oldFallback), 0, "再导出链没读旧兜底哨兵")
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(previewFile.fileName).path),
-                      "临时根里的预览文件还在。列表为空不等于整棵临时目录为空")
+                      "事务外的临时预览还在。新作品在 Works 里，不是靠清空临时根证明的")
     }
 
     private func hits(_ log: ProductionReadLog, _ url: URL) -> Int {

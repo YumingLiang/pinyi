@@ -48,14 +48,20 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
         XCTAssertNotEqual(WorkContentDigest.of(plain), WorkContentDigest.of(black))
         XCTAssertFalse(OrdinaryPhotoContent.same(plain, black, metaOverlay: plain.params.overlayAlpha))
         XCTAssertNotEqual(OrdinaryPhotoFlightKey.of(black), OrdinaryPhotoFlightKey.of(red))
-        let before = try snapshot(dir)
-        do {
-            _ = try await store.save(WorkDraft(layout: black, target: nil, overlayAlpha: black.params.overlayAlpha, origin: .savedManually))
-            XCTFail("不同 fc 不能沿用旧 ID")
-        } catch WorksError.unsupportedFilledCells {}
-        XCTAssertEqual(try snapshot(dir), before)
-        XCTAssertEqual(images.state.get().previews, 1)
-        XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"), "守护拒绝时不留下新建事务目录")
+        let namesBefore = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        let oldName = try XCTUnwrap(namesBefore.first { !$0.hasPrefix(".") })
+        let oldBytes = try snapshot(dir.appendingPathComponent(oldName))
+        let made = try await store.save(WorkDraft(layout: black, target: nil, overlayAlpha: black.params.overlayAlpha, origin: .savedManually))
+        XCTAssertEqual(made.outcome, .inserted)
+        XCTAssertNotEqual(made.summary.id.directoryName, oldName, "不同 fc 新存一份，不沿用旧 ID")
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(oldName)), oldBytes, "旧库字节不变")
+        XCTAssertEqual(images.state.get().previews, 2)
+        XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"))
+        let stable = try snapshot(dir)
+        let again = try await store.save(WorkDraft(layout: black, target: nil, overlayAlpha: black.params.overlayAlpha, origin: .savedManually))
+        XCTAssertEqual(again.outcome, .unchanged)
+        XCTAssertEqual(again.summary.id, made.summary.id)
+        XCTAssertEqual(try snapshot(dir), stable, "同内容第二次公开保存不写盘")
     }
 
     func testFallbackAndOverlayAreNotSwallowedByTheOldFingerprint() {
@@ -95,11 +101,12 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
             XCTFail("相关 pending 不能另存")
         } catch WorksError.cannotProvePhotoEquivalence {}
         XCTAssertEqual(try snapshot(dir), before)
+        let pendingBytes = try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName))
         let unrelated = filled(["q", "", "z"], color: CellColor(r: 8, g: 8, b: 8))
-        do {
-            _ = try await store.save(WorkDraft(layout: unrelated, target: nil, overlayAlpha: unrelated.params.overlayAlpha, origin: .savedManually))
-            XCTFail("无关作品的 pending 不能变成别的错误，但新建仍被守护挡住")
-        } catch WorksError.unsupportedFilledCells {}
+        let other = try await store.save(WorkDraft(layout: unrelated, target: nil, overlayAlpha: unrelated.params.overlayAlpha, origin: .savedManually))
+        XCTAssertEqual(other.outcome, .inserted)
+        XCTAssertNotEqual(other.summary.id, saved.summary.id)
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName)), pendingBytes, "无关新作不改有 pending 的那一份")
         XCTAssertTrue(try String(contentsOf: dir.appendingPathComponent(saved.summary.id.directoryName).appendingPathComponent("meta.json"), encoding: .utf8).contains("pendingPreviewFile"))
     }
 
@@ -110,10 +117,9 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
         var object = try json(metaURL)
         object["formatVersion"] = 99
         try write(object, metaURL)
-        do {
-            _ = try await store.save(WorkDraft(layout: filled(["q", "", "z"]), target: nil, overlayAlpha: 0.15, origin: .savedManually))
-            XCTFail("仍被守护拒绝")
-        } catch WorksError.unsupportedFilledCells {}
+        let made = try await store.save(WorkDraft(layout: filled(["q", "", "z"]), target: nil, overlayAlpha: 0.15, origin: .savedManually))
+        XCTAssertEqual(made.outcome, .inserted)
+        XCTAssertNotEqual(made.summary.id, saved.summary.id)
         XCTAssertTrue(FileManager.default.fileExists(atPath: metaURL.path), "高版本只跳过，不清理")
         let raw = try String(contentsOf: metaURL, encoding: .utf8)
         XCTAssertTrue(raw.contains("99"))
@@ -383,41 +389,97 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
         XCTAssertNotEqual(queue, OrdinaryPhotoContent.queueKey(layout, overlay: layout.params.overlayAlpha + 0.05))
     }
 
-    func testGuardedConcurrentDifferentFillsDoNotShareASavedID() async throws {
+    func testPublicConcurrentDifferentFillsPublishTwoWorks() async throws {
         let (dir, _, store) = try await library()
-        let plain = sampleLayout(["a", "", "c"])
+        let plain = sampleLayout(["a", "b", "c"])
         let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: plain.params.overlayAlpha, origin: .savedManually))
+        let oldBytes = try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName))
         let red = filled(["a", "", "c"], color: CellColor(r: 1, g: 0, b: 0))
         let blue = filled(["a", "", "c"], color: CellColor(r: 0, g: 0, b: 2))
-        try plant(red, id: saved.summary.id, overlay: red.params.overlayAlpha, in: dir)
+        async let left = store.save(WorkDraft(layout: red, target: nil, overlayAlpha: red.params.overlayAlpha, origin: .savedManually))
+        async let right = store.save(WorkDraft(layout: blue, target: nil, overlayAlpha: blue.params.overlayAlpha, origin: .savedManually))
+        let (one, two) = try await (left, right)
+        XCTAssertEqual(one.outcome, .inserted)
+        XCTAssertEqual(two.outcome, .inserted)
+        XCTAssertNotEqual(one.summary.id, two.summary.id)
+        XCTAssertNotEqual(one.summary.id, saved.summary.id)
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName)), oldBytes, "公开并发新建不改旧库")
+        let redLayout = try FileWorksStore.decoder().decode(MosaicLayout.self, from: Data(contentsOf: dir.appendingPathComponent(one.summary.id.directoryName).appendingPathComponent("layout.json")))
+        let blueLayout = try FileWorksStore.decoder().decode(MosaicLayout.self, from: Data(contentsOf: dir.appendingPathComponent(two.summary.id.directoryName).appendingPathComponent("layout.json")))
+        XCTAssertEqual(redLayout.cellAssignments[1].fill, CellColor(r: 1, g: 0, b: 0))
+        XCTAssertEqual(blueLayout.cellAssignments[1].fill, CellColor(r: 0, g: 0, b: 2))
+        XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"))
+    }
+
+    func testForcedQueueCollisionDoesNotHandOverTheOtherResult() async throws {
+        let (dir, _, store) = try await library()
+        await store.armForcedFilledQueueKey("forced-same-key")
+        let red = filled(["a", "", "c"], color: CellColor(r: 1, g: 0, b: 0))
+        let blue = filled(["a", "", "c"], color: CellColor(r: 0, g: 0, b: 2))
+        let first = try await store.save(WorkDraft(layout: red, target: nil, overlayAlpha: red.params.overlayAlpha, origin: .savedManually))
+        let second = try await store.save(WorkDraft(layout: blue, target: nil, overlayAlpha: blue.params.overlayAlpha, origin: .savedManually))
+        XCTAssertEqual(first.outcome, .inserted)
+        XCTAssertEqual(second.outcome, .inserted)
+        XCTAssertNotEqual(first.summary.id, second.summary.id, "同一个粗队列键、内容不同，不能领走对方的新 ID")
+        let again = try await store.save(WorkDraft(layout: red, target: nil, overlayAlpha: red.params.overlayAlpha, origin: .savedManually))
+        XCTAssertEqual(again.outcome, .unchanged)
+        XCTAssertEqual(again.summary.id, first.summary.id, "完整比较仍认回自己的那一份，不是蓝的")
+        XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"))
+    }
+
+    func testMeaningfulOverlayIsNotDeduped() async throws {
+        let (dir, _, store) = try await library()
+        let layout = filled(["a", "", "c"])
+        let first = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.15, origin: .savedManually))
+        let afterFirst = try snapshot(dir)
+        let near = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.15 + 1e-8, origin: .savedManually))
+        XCTAssertEqual(near.outcome, .unchanged)
+        XCTAssertEqual(near.summary.id, first.summary.id, "小于 sameOverlay 的 1e-6 仍是同一强度")
+        XCTAssertEqual(try snapshot(dir), afterFirst, "产品强度语义内的差别不写盘")
+        let moved = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0.15 + 2e-6, origin: .savedManually))
+        XCTAssertEqual(moved.outcome, .inserted)
+        XCTAssertNotEqual(moved.summary.id, first.summary.id, "量化键只筛选；超过 sameOverlay 的强度差要另存")
+    }
+
+    func testFallbackBooleanStaysRejected() async throws {
+        let (dir, _, store) = try await library()
+        var layout = filled(["a", "", "c"])
+        layout.cellAssignments[1].fill = nil
+        layout.cellAssignments[1].fallback = true
         let before = try snapshot(dir)
-        let hold = ScanHold()
-        await store.armBeforeFilledSaveDecision {
-            hold.markEntered()
-            await hold.waitRelease()
-        }
-        let redSave = Task { try await store.save(WorkDraft(layout: red, target: nil, overlayAlpha: red.params.overlayAlpha, origin: .savedManually)) }
-        await hold.waitEntered()
-        let blueBox = ResultBox()
-        let blueSave = Task {
-            do {
-                _ = try await store.save(WorkDraft(layout: blue, target: nil, overlayAlpha: blue.params.overlayAlpha, origin: .savedManually))
-                blueBox.value = 1
-            } catch WorksError.unsupportedFilledCells {
-                blueBox.value = 2
-            } catch {
-                blueBox.value = 3
-            }
-        }
-        try await Task.sleep(for: .milliseconds(300))
-        let blueWhileRedHeld = blueBox.value
-        hold.release()
-        let redResult = try await redSave.value
-        await blueSave.value
-        XCTAssertEqual(blueWhileRedHeld, 2, "守护阶段：红还停着时，蓝应已经拒绝新建，而不是等红的 .unchanged。这不证明公开新建已经并发发布")
-        XCTAssertEqual(redResult.outcome, .unchanged)
-        XCTAssertEqual(redResult.summary.id, saved.summary.id)
-        XCTAssertEqual(try snapshot(dir), before, "拒绝蓝的时候不另存、不改红的目录")
+        do {
+            _ = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: layout.params.overlayAlpha, origin: .savedManually))
+            XCTFail("fb 布尔不是已验证的兜底文件，不能公开新建")
+        } catch WorksError.unsupportedFilledCells {}
+        XCTAssertEqual(try snapshot(dir), before)
+        XCTAssertFalse(try snapshot(dir).contains(".tmp-fc-new-"))
+    }
+
+    func testPublicRetryAfterLostReceiptReadsThePublishedID() async throws {
+        let (dir, _, store) = try await library()
+        let plain = sampleLayout(["a", "b", "c"])
+        let saved = try await store.save(WorkDraft(layout: plain, target: nil, overlayAlpha: plain.params.overlayAlpha, origin: .savedManually))
+        let oldBytes = try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName))
+        let layout = filled(["a", "", "c"])
+        await store.armFilledPublishInterrupt(.afterRename)
+        do {
+            _ = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: layout.params.overlayAlpha, origin: .savedManually))
+            XCTFail("rename 之后仍把回执交回去了")
+        } catch WorksError.publishResultUncertain {}
+        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { !$0.hasPrefix(".") && $0 != saved.summary.id.directoryName }
+        XCTAssertEqual(names.count, 1, "回执丢了，但正式目录已经在")
+        let published = try XCTUnwrap(WorkID(directoryName: names[0]))
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName)), oldBytes)
+        let fresh = FileWorksStore(directory: dir, images: FakeWorkImages(), now: FakeWallClock().provider)
+        let stored = try FileWorksStore.decoder().decode(MosaicLayout.self, from: Data(contentsOf: dir.appendingPathComponent(published.directoryName).appendingPathComponent("layout.json")))
+        let found = try await fresh.readPublishedFilledPhoto(id: published, expecting: stored)
+        XCTAssertEqual(found.id, published, "新 store 只读认回，不走 load / open")
+        let stable = try snapshot(dir)
+        let retry = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: layout.params.overlayAlpha, origin: .savedManually))
+        XCTAssertEqual(retry.outcome, .unchanged)
+        XCTAssertEqual(retry.summary.id, published)
+        XCTAssertEqual(try snapshot(dir), stable, "重试只读命中，不再写一份")
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName)), oldBytes)
     }
 
     func testFallbackChangeDropsTheSavedButton() async throws {

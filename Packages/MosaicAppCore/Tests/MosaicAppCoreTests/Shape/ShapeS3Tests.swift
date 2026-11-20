@@ -174,12 +174,9 @@ final class ShapeS3Tests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), [])
         var filled = sampleLayout(["a", "", "c"])
         filled.cellAssignments[1].fill = CellColor(r: 1, g: 2, b: 3)
-        do {
-            _ = try await store.save(WorkDraft(layout: filled, target: nil, overlayAlpha: 0, origin: .savedManually))
-            XCTFail("fc 仍要拒绝")
-        } catch let error as WorksError {
-            XCTAssertEqual(error, .unsupportedFilledCells)
-        }
+        let made = try await store.save(WorkDraft(layout: filled, target: nil, overlayAlpha: 0, origin: .savedManually))
+        XCTAssertEqual(made.outcome, .inserted, "普通照片 fc 新作可以公开保存；形状上面已经拒绝")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { !$0.hasPrefix(".") }, [made.summary.id.directoryName])
     }
 
     func testManifestContractRoundTripAndRejectsPartialV2() throws {

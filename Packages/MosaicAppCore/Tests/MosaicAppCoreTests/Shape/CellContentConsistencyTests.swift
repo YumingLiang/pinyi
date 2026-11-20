@@ -67,8 +67,12 @@ final class CellContentConsistencyTests: XCTestCase {
         let empty = makeTempDir()
         defer { try? FileManager.default.removeItem(at: empty) }
         let fresh = FileWorksStore(directory: empty, images: FakeWorkImages())
-        try await rejectBoth(on: fresh, label: "空目录")
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: empty.path), [])
+        let made = try await saveOrdinaryFill(on: fresh)
+        XCTAssertEqual(made.outcome, .inserted)
+        let names = try FileManager.default.contentsOfDirectory(atPath: empty.path)
+        XCTAssertEqual(names.filter { !$0.hasPrefix(".") }, [made.summary.id.directoryName])
+        XCTAssertFalse(names.contains { $0.hasPrefix(".tmp-fc-new-") })
+        try await rejectShape(on: fresh, label: "空目录")
 
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -76,23 +80,21 @@ final class CellContentConsistencyTests: XCTestCase {
         let saved = try await store.save(WorkDraft(layout: sampleLayout(["a", "b", "c"]), target: nil,
                                                    overlayAlpha: 0.15, origin: .savedManually))
         XCTAssertEqual(saved.outcome, .inserted)
-        let before = try snapshot(dir)
-        XCTAssertFalse(before.isEmpty)
-        try await rejectBoth(on: store, label: "已有照片作品")
-        XCTAssertEqual(try snapshot(dir), before)
-        let listed = await store.list()
-        XCTAssertEqual(listed.map(\.id), [saved.summary.id])
+        let before = try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName))
+        let filled = try await saveOrdinaryFill(on: store)
+        XCTAssertNotEqual(filled.summary.id, saved.summary.id, "普通照片 fc 新存一份，不改旧作")
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName)), before)
+        try await rejectShape(on: store, label: "已有照片作品")
+        XCTAssertEqual(try snapshot(dir.appendingPathComponent(saved.summary.id.directoryName)), before)
     }
 
-    private func rejectBoth(on store: FileWorksStore, label: String) async throws {
+    private func saveOrdinaryFill(on store: FileWorksStore) async throws -> WorkSaveResult {
         var filled = sampleLayout(["a", "b", "c"])
         filled.cellAssignments[1].fill = insideFill
-        do {
-            _ = try await store.save(WorkDraft(layout: filled, target: nil, overlayAlpha: 0.15, origin: .savedManually))
-            XCTFail("\(label) 带 fc 不能写盘")
-        } catch let error as WorksError {
-            XCTAssertEqual(error, .unsupportedFilledCells)
-        }
+        return try await store.save(WorkDraft(layout: filled, target: nil, overlayAlpha: 0.15, origin: .savedManually))
+    }
+
+    private func rejectShape(on store: FileWorksStore, label: String) async throws {
         var shaped = sampleLayout(["a", "b", "c"])
         shaped.shapeFrame = ShapeFrame(background: .white, mask: try CellMask(columns: shaped.cols, rows: shaped.rows, allActive: true))
         do {

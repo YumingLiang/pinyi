@@ -92,6 +92,8 @@ public actor FileWorksStore: WorksStore {
     var migrationEvidenceForTest: (@Sendable (MigrationEvidencePoint) async -> Void)?
     /// 测试把填色保存停在登记队列之后、做等价决定之前。生产保持 nil。
     var beforeFilledSaveDecision: (@Sendable () async -> Void)?
+    /// 测试强迫两条不同内容共用一个队列键。生产保持 nil，不能拿它代替真实哈希碰撞搜索。
+    var forcedFilledQueueKeyForTest: String?
 
     func armFilledPublishInterrupt(_ point: FilledPublishInterrupt) {
         interruptFilledPublishForTest = point
@@ -103,6 +105,10 @@ public actor FileWorksStore: WorksStore {
 
     func armBeforeFilledSaveDecision(_ hook: @escaping @Sendable () async -> Void) {
         beforeFilledSaveDecision = hook
+    }
+
+    func armForcedFilledQueueKey(_ key: String) {
+        forcedFilledQueueKeyForTest = key
     }
 
     public init(directory: URL, images: any WorkImageEncoding, now: @escaping @Sendable () -> Date = { Date() }) {
@@ -189,23 +195,22 @@ public actor FileWorksStore: WorksStore {
         return try await task.value
     }
 
-    /// 带 fc / fb 的公开保存先按 `queueKey` 排队，再决定。不同 fc / fb / 强度不共用一个任务。
-    /// 守护还在：任务里要么返回已有等价 ID，要么拒绝新建。这里不调用 `publishNewFilledPhoto`。
+    /// 带 fc / fb 的公开保存先按队列键排队。等前面的任务结束之后重新做完整比较，不把对方的回执交出去。
     private func saveFilledOrdinaryPhotoQueued(_ draft: WorkDraft) async throws -> WorkSaveResult {
         var draft = draft
         draft.layout.params.overlayAlpha = draft.overlayAlpha
-        let key = OrdinaryPhotoContent.queueKey(draft.layout, overlay: draft.overlayAlpha)
+        let key = forcedFilledQueueKeyForTest ?? OrdinaryPhotoContent.queueKey(draft.layout, overlay: draft.overlayAlpha)
         var waited: UUID?
         while let running = inFlight[key], running.token != waited {
             waited = running.token
             _ = try? await running.task.value
         }
-        let task = Task { () throws -> WorkSaveResult in
+        let task = Task { () async throws -> WorkSaveResult in
             if let hook = self.beforeFilledSaveDecision {
                 self.beforeFilledSaveDecision = nil
                 await hook()
             }
-            return try self.saveFilledOrdinaryPhoto(draft)
+            return try await self.saveFilledOrdinaryPhoto(draft)
         }
         let token = UUID()
         inFlight[key] = (token, task)

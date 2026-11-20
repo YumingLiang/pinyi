@@ -481,6 +481,11 @@ public final class WorksController {
                                                         preferredWorkID: rememberedID(for: ctx.resultRevision)))
             remembered = (ctx.resultRevision, result.summary.id)
             if result.outcome == .updatedOverlay { showToast(.worksUpdated) }
+            var shown = layout
+            shown.params.overlayAlpha = ctx.overlayAlpha
+            if OrdinaryPhotoContent.isGuarded(shown) {
+                filledPhotoExact = (OrdinaryPhotoContent.flightKey(shown), result.summary.id)
+            }
             // 刷新列表（新增 / 预览图换了），再按库重算按钮状态（期间结果可能又变了，按最新的算）
             let list = await store.list()
             state.summaries = list
