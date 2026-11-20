@@ -763,8 +763,18 @@ public final class AppCoordinator {
                 let textMoved = stillThisRun && self.textSelectionMovedOn(from: textMosaic)
                 if stillThisRun, !textMoved {
                     self.product = p
-                    self.shapeIdentity = p.shapeFrame == nil ? nil : shapeChoice
-                    self.productInputs = inputs
+                    if p.shapeFrame != nil, shapeChoice == nil, let textMosaic {
+                        // 直接 generateText 时还没有图形配置。身份用这次正文，否则结果有掩码但不能存。
+                        let identity = ShapeChoice(preset: .heart, palette: textMosaic.palette,
+                                                  background: textMosaic.background, usesText: true,
+                                                  textLines: TextDraftEditor.normalized(textMosaic.lines))
+                        self.shapeIdentity = identity
+                        if self.state.flow.shape == nil { self.state.flow.shape = identity }
+                        self.productInputs = self.currentInputs
+                    } else {
+                        self.shapeIdentity = p.shapeFrame == nil ? nil : shapeChoice
+                        self.productInputs = inputs
+                    }
                     self.state.resultRevision += 1
                     if p.lowRes.enabled {
                         self.state.lowResExclusion = LowResExclusion(selection: selection, assetIDs: p.lowRes.excludedAssetIDs)

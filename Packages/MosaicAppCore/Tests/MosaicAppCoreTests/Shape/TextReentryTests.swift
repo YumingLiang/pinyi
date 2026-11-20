@@ -143,7 +143,7 @@ final class TextReentryTests: XCTestCase {
             return XCTFail("文字没有结果 \(c.state.flow.generation.phase)")
         }
         XCTAssertTrue(c.canExport)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave, "直接生成的文字结果有完整身份，可以存")
         prepare(c, ["LOVE"])
         XCTAssertEqual(c.preparedText?.lines, ["LOVE"])
         XCTAssertFalse(c.canExport, "换了正文，旧的 520 结果不能继续导出")

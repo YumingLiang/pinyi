@@ -188,6 +188,9 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertTrue(model.canExport)
         let seed = model.coordinator.product?.generation.seed
         model.startNewMosaicTapped()
+        XCTAssertEqual(model.unsavedPrompt, .startNew, "没存进作品时再拼要提示，不直接离开结果")
+        XCTAssertEqual(model.flow.step, .result)
+        model.unsavedPromptDiscard()
         XCTAssertNil(model.unsavedPrompt)
         XCTAssertEqual(model.flow.step, .settings)
         XCTAssertEqual(model.flow.shape?.preset, .heart)
@@ -333,6 +336,34 @@ final class ShapeResultScreenTests: XCTestCase {
                                            cellPixels: exportCell, index: inside)
             assertNear(exportPixel, tile, tolerance: 36, label: "\(lines) 导出内格")
             attachRaster(jpeg, name: "jpeg-\(label)")
+
+            // saveTapped 只写相册。下面才是 120 格作品：保存、新 store 打开、再导出。2×1 夹具不算这条。
+            await model.works.controller.saveCurrentResultTapped()
+            let listed = await model.works.controller.store.list()
+            let summary = try XCTUnwrap(listed.first, "\(lines) 没有写入作品目录")
+            XCTAssertNil(summary.meta.targetFile, "\(lines) 不存合成目标图")
+            let fresh = FileWorksStore(directory: harness.root.appendingPathComponent("Works", isDirectory: true),
+                                      images: ImageIOWorkImages(thumbnails: SolidThumbs(r: tile.r, g: tile.g, b: tile.b)))
+            let loaded = try await fresh.load(summary.id)
+            XCTAssertEqual(loaded.layout.shapeFrame?.background, .white, "\(lines)")
+            XCTAssertEqual(loaded.layout.shapeManifest?.spec.background, .white, "\(lines)")
+            if case .text(let stored) = loaded.layout.shapeManifest?.spec.source {
+                XCTAssertEqual(stored, lines, "\(lines) 正文以存盘为准，不重新描字")
+            } else {
+                XCTFail("\(lines) 再打开不是文字")
+            }
+            XCTAssertNil(loaded.targetURL, "\(lines)")
+            let reexport = try await LiveMosaicExporter(thumbnails: SolidThumbs(r: tile.r, g: tile.g, b: tile.b))
+                .export(ExportRequest(layout: loaded.layout, target: nil, tier: .share)) { _ in }
+            defer { try? FileManager.default.removeItem(at: reexport) }
+            let again = try XCTUnwrap(decodeJPEG(try Data(contentsOf: reexport)))
+            let againCell = again.width / mask.columns
+            let againBytes = try bitmap(again)
+            assertNear(pixelFromTop(againBytes, width: again.width, columns: mask.columns, cellPixels: againCell, index: inside),
+                       tile, tolerance: 36, label: "\(lines) 再导出内格")
+            let outside = try XCTUnwrap((0..<mask.cellCount).first { !mask.isActive($0) })
+            assertNear(pixelFromTop(againBytes, width: again.width, columns: mask.columns, cellPixels: againCell, index: outside),
+                       (r: 255, g: 255, b: 255), tolerance: 8, label: "\(lines) 再导出掩码外")
         }
         XCTAssertTrue(problems.isEmpty, problems.joined(separator: "\n"))
     }
