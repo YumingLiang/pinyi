@@ -258,6 +258,10 @@ extension FileWorksStore {
         }
         let final = directory.appendingPathComponent(id.directoryName, isDirectory: true)
         try DirectoryRename.exclusive(from: temp, to: final)
+        if failAfterExclusiveRenameForTest {
+            failAfterExclusiveRenameForTest = false
+            throw WorksError.publishResultUncertain
+        }
         return WorkSaveResult(summary: WorkSummary(meta: meta, previewURL: final.appendingPathComponent(preview.fileName)),
                               outcome: .inserted)
     }

@@ -72,6 +72,12 @@ public actor FileWorksStore: WorksStore {
     private var recomputedFingerprints: [WorkID: String] = [:]
     /// 正在改写的作品（打开和导出前可能同时触发缺图处理）：同一作品串行。
     private var updating: [WorkID: (token: UUID, task: Task<Work, any Error>)] = [:]
+    /// 测试在目录 rename 成功之后、回执返回之前失败。生产保持 false。
+    var failAfterExclusiveRenameForTest = false
+
+    func armFailAfterExclusiveRenameForTest() {
+        failAfterExclusiveRenameForTest = true
+    }
 
     public init(directory: URL, images: any WorkImageEncoding, now: @escaping @Sendable () -> Date = { Date() }) {
         self.directory = directory
