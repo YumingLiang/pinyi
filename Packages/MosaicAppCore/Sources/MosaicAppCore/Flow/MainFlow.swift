@@ -35,6 +35,12 @@ public struct MainFlow: Sendable, Hashable {
     /// 选图页一出现就自动弹出选图（再拼一张 → 选一张 → 开始拼图，≤ 3 次点击）。
     public var autoOpensTargetPicker: Bool { (isQuickAgain || isFreshQuickStart) && step == .target && !hasTarget }
 
+    /// 目标页还没选定类型时，才提供「拼成一个图形」。
+    /// 照片一旦选上，这次会话不再从这里改去图形。再拼和新开流程也不提供这个入口。
+    public var offersShapeEntry: Bool {
+        step == .target && !hasTarget && !isQuickAgain && !isFreshQuickStart
+    }
+
     public init(initialSeed: UInt64) { generation = GenerationMachine(initialSeed: initialSeed) }
 
     public enum Event: Sendable, Hashable {
@@ -118,7 +124,7 @@ public struct MainFlow: Sendable, Hashable {
         case .changeSource:
             if step == .settings { step = .source }
         case .beginShape:
-            guard step == .target, !isQuickAgain, !isFreshQuickStart else { return }
+            guard offersShapeEntry else { return }
             shape = ShapeChoice()
             step = .source
         case .freshShapeConfigStarted:

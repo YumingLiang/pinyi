@@ -421,7 +421,9 @@ public final class AppCoordinator {
     public func setOverlayAlpha(_ a: Double) { state.flow.settings.overlayAlpha = OverlayBlendLimits.clamp(a) }
 
     /// 首页「用形状拼」。文字不从这里进，进配置后再切。
+    /// 照片已经选上，或当前不在可选类型的目标页时，整次忽略，不清已有正文。
     public func beginShape() {
+        guard state.flow.offersShapeEntry else { return }
         preparedText = nil
         densityBeforeText = nil
         state.shapeTextNotice = nil

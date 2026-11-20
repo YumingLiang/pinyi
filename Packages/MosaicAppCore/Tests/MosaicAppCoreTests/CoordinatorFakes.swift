@@ -113,14 +113,23 @@ final class GatedGenerator: MosaicGenerating, Sendable {
         self.runner = runner
     }
     struct ForcedFailure: Error, Sendable {}
+    struct SeenTarget: Sendable, Equatable {
+        var width: Int
+        var height: Int
+        var leading: [UInt8]
+        var shapeMask: Bool
+    }
+    let seenTargets = Locked<[SeenTarget]>([])
     func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
              progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        note(target, shapeMask: false)
         try await pass()
         return try await runner.run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress, stage: stage)
     }
     func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
              activeCells: CellMask?, shapeBackground: ShapeBackground?,
              progress: (@Sendable (Double) -> Void)?, stage: (@Sendable (GenerationStage) -> Void)?) async throws -> GenerationProduct {
+        note(target, shapeMask: activeCells != nil)
         try await pass()
         return try await runner.run(target: target, snapshot: snapshot, settings: settings, seed: seed,
                                     activeCells: activeCells, shapeBackground: shapeBackground,
@@ -133,6 +142,12 @@ final class GatedGenerator: MosaicGenerating, Sendable {
     }
     func invalidateLocalResolution() { runner.invalidateLocalResolution() }
 
+    private func note(_ target: PixelBuffer, shapeMask: Bool) {
+        seenTargets.update {
+            $0.append(SeenTarget(width: target.width, height: target.height,
+                                 leading: Array(target.bytes.prefix(12)), shapeMask: shapeMask))
+        }
+    }
     private func pass() async throws {
         let n = calls.update { $0 += 1; return $0 }
         if let g = gate.get() {
@@ -143,6 +158,7 @@ final class GatedGenerator: MosaicGenerating, Sendable {
     }
     func run(target: PixelBuffer, snapshot: IndexSnapshot, settings: GenerationSettings, seed: UInt64,
              progress: (@Sendable (Double) -> Void)?) async throws -> GenerationProduct {
+        note(target, shapeMask: false)
         try await pass()
         return try await runner.run(target: target, snapshot: snapshot, settings: settings, seed: seed, progress: progress)
     }

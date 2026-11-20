@@ -15,6 +15,36 @@ import MosaicAppCore
 final class ShapeResultScreenTests: XCTestCase {
     private let tile = (r: UInt8(20), g: UInt8(180), b: UInt8(40))
 
+    func testSelectedPhotoStaysPhotoThroughConfirmAndGeneration() async throws {
+        let harness = try await makeHarness()
+        defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+        let model = harness.model
+        let ready = await waitUntil {
+            model.coordinator.state.indexStatus.hasCompletedInitialScan && model.coordinator.state.indexStatus.available > 0
+        }
+        XCTAssertTrue(ready, "合成素材没有扫进索引")
+        XCTAssertTrue(model.flow.offersShapeEntry)
+        let photo = try PixelBuffer(width: 64, height: 48, bytes: [UInt8](repeating: 9, count: 64 * 48 * 4))
+        model.coordinator.setTarget(photo)
+        XCTAssertFalse(model.flow.offersShapeEntry, "目标页在照片选上后不再提供图形入口")
+        model.beginShape()
+        XCTAssertNil(model.flow.shape)
+        XCTAssertEqual(model.flow.step, .target)
+        model.flowSend(.next)
+        model.flowSend(.next)
+        XCTAssertEqual(model.flow.step, .settings)
+        XCTAssertNil(model.flow.shape, "确认页没有形状、预设、文字、配色或背景")
+        XCTAssertEqual(model.coordinator.target?.width, photo.width)
+        await model.coordinator.generateTapped()
+        await passShortagePrompt(model)
+        await model.coordinator.settle()
+        guard case .result = model.flow.generation.phase else {
+            return XCTFail("照片没有生成 \(model.flow.generation.phase)")
+        }
+        XCTAssertNil(model.coordinator.product?.shapeFrame, "生成用的是已选照片，不是爱心")
+        XCTAssertEqual(model.coordinator.target?.bytes.prefix(12), photo.bytes.prefix(12))
+    }
+
     func testPhotoModeWithoutTargetHasNoPreviewAndDoesNotExport() async throws {
         let harness = try await makeHarness()
         defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }

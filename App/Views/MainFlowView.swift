@@ -84,16 +84,17 @@ struct TargetStepView: View {
             if let n = model.flow.targetNotice { Text(n).foregroundStyle(.red).font(.footnote) }
             // 决定 15：SwiftUI PhotosPicker（iOS 16+）。PhotosPicker 走系统进程，不需要相册读取权限。
             // label 闭包是 @Sendable：先在 MainActor 上取值，闭包里只捕获值。
-            // 首页两个入口一次选定类型：拼成一张照片，或拼成一个图形。不再加类型向导。
+            // 首页两个入口一次选定类型。照片选上之后，这一页只留更换目标照片和「下一步」。
             let buttonKey = photoButtonKey
             PhotosPicker(selection: $item, matching: .images, photoLibrary: .shared()) {
                 Text(buttonKey).frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent).controlSize(.large)
             .photosPicker(isPresented: $showPicker, selection: $item, matching: .images, photoLibrary: .shared())
-            if showsParallelEntries {
+            if model.flow.offersShapeEntry {
                 Button { model.beginShape() } label: { Text(L10nKey.shapeEntry).frame(maxWidth: .infinity) }
                     .buttonStyle(.bordered).controlSize(.large)
+                    .accessibilityIdentifier("shape-entry")
             }
             if model.flow.hasTarget || !showsParallelEntries {
                 Button { model.flowSend(.next) } label: { Text(L10nKey.targetNext).frame(maxWidth: .infinity) }
