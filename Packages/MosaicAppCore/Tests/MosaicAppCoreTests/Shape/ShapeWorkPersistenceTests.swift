@@ -140,4 +140,20 @@ final class ShapeWorkRemakeTests: XCTestCase {
         XCTAssertTrue(c.state.flow.isFreshShapeConfig)
         c.stop()
     }
+
+    func testOpenedPhotoWorkClearsShapeAndUsesThePhotoPicker() async {
+        let h = CoordinatorHarness(assets: 4)
+        let c = h.coordinator
+        c.start()
+        await c.settle()
+        c.beginShape()
+        XCTAssertNotNil(c.state.flow.shape)
+        c.startNewFromWorkTapped(workID: nil, openedPhotoWork: true)
+        XCTAssertNil(c.state.flow.shape)
+        XCTAssertNil(c.shapeIdentity)
+        XCTAssertEqual(c.state.flow.step, .target)
+        XCTAssertTrue(c.state.flow.isFreshQuickStart)
+        XCTAssertFalse(c.state.flow.offersShapeEntry)
+        c.stop()
+    }
 }

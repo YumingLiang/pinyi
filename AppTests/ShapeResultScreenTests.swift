@@ -367,6 +367,48 @@ final class ShapeResultScreenTests: XCTestCase {
         var model: AppModel
     }
 
+    func testStartNewFromOpenedWorkRestoresTextAndClearsAPhoto() async throws {
+        let harness = try await makeHarness()
+        defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+        let model = harness.model
+        let mask = try CellMask(columns: 2, rows: 1, bitsV1: [0b0000_0001])
+        let manifest = ShapeManifest(spec: ShapeSpec(source: .text(lines: ["生日快乐", "宝贝"]), palette: .warmRed, background: .white),
+                                     mask: mask)
+        let shape = MosaicLayout(cols: 2, rows: 1,
+                                 cellAssignments: [MosaicLayout.CellAssignment(localIdentifier: "fixture"),
+                                                   MosaicLayout.CellAssignment(localIdentifier: "")],
+                                 targetSize: .init(width: 8, height: 4),
+                                 targetCrop: CropRect(x: 0, y: 0, width: 8, height: 4),
+                                 params: .init(overlayAlpha: 0, density: "coarse", seed: 3),
+                                 shapeFrame: ShapeFrame(background: .white, mask: mask),
+                                 shapeManifest: manifest)
+        let saved = try await model.works.controller.store.save(
+            WorkDraft(layout: shape, target: nil, overlayAlpha: 0, origin: .savedManually))
+        await model.works.controller.open(saved.summary.id)
+        model.startNewFromWork(id: saved.summary.id)
+        XCTAssertEqual(model.flow.shape?.usesText, true)
+        XCTAssertEqual(model.flow.shape?.textLines, ["生日快乐", "宝贝"])
+        XCTAssertEqual(model.flow.shape?.palette, .warmRed)
+        XCTAssertEqual(model.flow.settings.density, .fine)
+        XCTAssertEqual(model.flow.step, .settings)
+
+        let photo = MosaicLayout(cols: 2, rows: 1,
+                                 cellAssignments: [MosaicLayout.CellAssignment(localIdentifier: "fixture"),
+                                                   MosaicLayout.CellAssignment(localIdentifier: "b")],
+                                 targetSize: .init(width: 8, height: 4),
+                                 targetCrop: CropRect(x: 0, y: 0, width: 8, height: 4),
+                                 params: .init(overlayAlpha: 0, density: "coarse", seed: 8))
+        let photoSaved = try await model.works.controller.store.save(
+            WorkDraft(layout: photo, target: nil, overlayAlpha: 0, origin: .savedManually))
+        await model.works.controller.open(photoSaved.summary.id)
+        model.startNewFromWork(id: photoSaved.summary.id)
+        XCTAssertNil(model.flow.shape)
+        XCTAssertNil(model.coordinator.shapeIdentity)
+        XCTAssertEqual(model.flow.step, .target)
+        XCTAssertTrue(model.flow.isFreshQuickStart)
+        XCTAssertFalse(model.flow.offersShapeEntry)
+    }
+
     private func makeHarness() async throws -> Harness {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("shape-screen-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
