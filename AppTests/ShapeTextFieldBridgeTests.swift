@@ -117,8 +117,27 @@ final class ShapeTextFieldBridgeTests: XCTestCase {
         pump()
         XCTAssertFalse(second.isFirstResponder, "第二行回车应结束编辑")
         XCTAssertFalse(first.isFirstResponder)
+        pump()
+        XCTAssertFalse(second.isFirstResponder, "结束后再转一圈也不能把焦点拉回第二行")
+        XCTAssertFalse(first.isFirstResponder)
         XCTAssertEqual(first.text, "生日快乐")
         XCTAssertEqual(second.text, "宝贝")
+    }
+
+    /// 第一次回车的移交还没执行，第二次回车已经要求结束。只能留下后一次。
+    /// 直接调用代理，不是可见键盘。
+    func testLaterReturnOverridesAnUnappliedHandoff() {
+        let rig = mount(lines: ["生日快乐", "宝贝"])
+        let first = rig.line(0)
+        let second = rig.line(1)
+        XCTAssertTrue(first.becomeFirstResponder())
+        first.delegate?.textFieldDidBeginEditing?(first)
+        pump()
+        XCTAssertEqual((first.delegate as? ShapeTextFieldAdapter)?.textFieldShouldReturn(first), false)
+        XCTAssertEqual((second.delegate as? ShapeTextFieldAdapter)?.textFieldShouldReturn(second), false)
+        pump()
+        XCTAssertFalse(first.isFirstResponder)
+        XCTAssertFalse(second.isFirstResponder, "后一次回车必须盖过还没执行的焦点移交")
     }
 
     func testNewlinePasteFillsEmptySecondLineButKeepsEditedOrMarkedText() {

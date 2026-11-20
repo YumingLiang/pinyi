@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import os
 import Photos
 import UniformTypeIdentifiers
 import MosaicCore
@@ -71,29 +72,44 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .medium
         let steps = ShapeStripExport.steps(columns: layout.cols, rows: layout.rows, cellPixels: cp, shape: layout.shapeFrame)
-        for step in steps {
-            guard let background = step.background else { continue }
-            let (r, g, b) = background.srgb8
+        var outsideBackground = [ShapeBackground?](repeating: nil, count: layout.cellCount)
+        for step in steps where step.index < outsideBackground.count {
+            outsideBackground[step.index] = step.background
+        }
+        func paint(_ index: Int, hasFallback: Bool) -> CellPaint {
+            layout.cellPaint(at: index, outsideBackground: index < outsideBackground.count ? outsideBackground[index] : nil,
+                             hasFallback: hasFallback)
+        }
+        func fillRect(_ index: Int, _ r: UInt8, _ g: UInt8, _ b: UInt8) {
             ctx.setFillColor(CGColor(colorSpace: cs, components: [
                 CGFloat(r) / 255, CGFloat(g) / 255, CGFloat(b) / 255, 1,
             ])!)
-            let cx = step.index % layout.cols, cy = step.index / layout.cols
+            let cx = index % layout.cols, cy = index / layout.cols
             ctx.fill(CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
         }
+        for step in steps {
+            guard case .shapeBackground(let background) = paint(step.index, hasFallback: false) else { continue }
+            let (r, g, b) = background.srgb8
+            fillRect(step.index, r, g, b)
+        }
+        for step in steps {
+            guard case .fill(let color) = paint(step.index, hasFallback: false) else { continue }
+            fillRect(step.index, color.r, color.g, color.b)
+        }
 
-        // 兜底格：不取照片，旧预览裁出的小图放大填满（双线性 / .high，不用最近邻）。形状外不画兜底图。
+        // 没有 fc 的兜底格：不取照片，小图放大填满（双线性 / .high，不用最近邻）。形状外和 fc 格不画兜底图。
         ctx.interpolationQuality = .high
-        let outside = Set(steps.compactMap { $0.background == nil ? nil : $0.index })
-        for (cell, tile) in fallbacks where cell < layout.cellCount && !outside.contains(cell) {
+        for (cell, tile) in fallbacks where cell < layout.cellCount {
+            guard case .fallback = paint(cell, hasFallback: true) else { continue }
             guard let img = ImagePixels.cgImage(tile) else { continue }
             let cx = cell % layout.cols, cy = cell / layout.cols
             ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
         }
         ctx.interpolationQuality = .medium
 
-        let ids: [String?] = layout.cellAssignments.enumerated().map { i, c in
-            if outside.contains(i) { return nil }
-            return c.localIdentifier.isEmpty || fallbacks[i] != nil ? nil : c.localIdentifier
+        let ids: [String?] = (0..<layout.cellCount).map { i in
+            guard case .photo(let id, _) = paint(i, hasFallback: fallbacks[i] != nil) else { return nil }
+            return id
         }
         let cols = layout.cols
         let thumbs = thumbnails
@@ -133,7 +149,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
     }
 
     func readTarget(at url: URL) async throws -> PixelBuffer {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+        guard let src = Self.imageSource(at: url),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
               let pb = ImagePixels.opaqueSRGB(cg)
         else { throw ExportError.encodingFailed }
@@ -145,7 +161,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
         #if INTERNAL_TOOLS
         PreviewReadProbe.recordFileRead()
         #endif
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+        guard let src = Self.imageSource(at: url),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
               let pb = ImagePixels.opaqueSRGB(cg)
         else { throw ExportError.encodingFailed }
@@ -184,7 +200,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
         #if INTERNAL_TOOLS
         PreviewReadProbe.recordFileRead()
         #endif
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        guard let src = imageSource(at: url) else { return nil }
         let opts = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -193,11 +209,37 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ] as CFDictionary
         return CGImageSourceCreateThumbnailAtIndex(src, 0, opts)
     }
+
+    /// 三个会打开旧预览文件的生产入口都从这里走。没有测试观察者时不记路径。
+    static func imageSource(at url: URL) -> CGImageSource? {
+        ImageIOReadObservation.note(url)
+        return CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+    }
+}
+
+/// 测试安装的观察者。生产默认没有观察者，因此不保存路径。
+/// 只覆盖 `readImage` / `readTarget` / `loadImage`。看不到裸的 `open`。
+enum ImageIOReadObservation {
+    private static let handlers = OSAllocatedUnfairLock(initialState: [UUID: @Sendable (URL) -> Void]())
+
+    static func note(_ url: URL) {
+        let current = handlers.withLock { $0 }
+        for handler in current.values { handler(url) }
+    }
+
+    @discardableResult
+    static func install(_ handler: @escaping @Sendable (URL) -> Void) -> UUID {
+        let id = UUID()
+        handlers.withLock { $0[id] = handler }
+        return id
+    }
+
+    static func remove(_ id: UUID) {
+        handlers.withLock { $0[id] = nil }
+    }
 }
 
 #if INTERNAL_TOOLS
-import os
-
 /// 内测计数：列表和查看页读预览文件的真实入口是 `ImageIOWorkImages.loadImage` / `readImage`。
 /// 日志只有次数。不记路径、作品 ID、相册名或错误内容。不改变谁可以读。
 ///

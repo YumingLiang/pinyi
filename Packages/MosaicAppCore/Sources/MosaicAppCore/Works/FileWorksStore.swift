@@ -149,8 +149,7 @@ public actor FileWorksStore: WorksStore {
     }
 
     private func write(_ draft: WorkDraft, layoutData: Data, fingerprint: String) async throws -> WorkSummary {
-        // 守护（架构师 11-17 B）：新存作品的预览按 `fallbacks: [:]` 画，带纯色格（`fc`）的布局会画成白格、和导出对不上。
-        // 长期改法（works-missing-fill）：预览渲染器和导出器都直接读 fc，然后去掉这个守护。
+        // 预览和再导出已经按同一 `cellPaint` 读 `fc`。带 `fc` 或形状的作品仍不写盘：Apple 像素验收通过之前不解除这两道守护。
         if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
         let fm = FileManager.default
         let id = WorkID()

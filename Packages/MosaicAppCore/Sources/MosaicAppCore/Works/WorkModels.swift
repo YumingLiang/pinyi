@@ -209,6 +209,39 @@ public enum WorkFingerprint {
     public static func sameOverlay(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-6 }
 }
 
+/// 作品内容摘要（`cd1-`）。覆盖指纹里的格子数据，再加每格 `fc` 的有无和 RGB。
+///
+/// 叠加强度不在摘要里。没有 `fc` 只记一个「无」位，不记成黑色 `(0,0,0)`。
+/// 形状掩码不在摘要里：`shapeFrame` 仍不写盘，形状外格子由条带决定。
+/// 保存仍用 `s2-` 指纹去重，并且带 `fc` 或形状的草稿在进入去重前就被拒绝。这个摘要不写进 meta。
+public enum WorkContentDigest {
+    public static let version = 1
+    public static let prefix = "cd1-"
+
+    public static func of(_ layout: MosaicLayout) -> String {
+        var h = FNV1a64()
+        h.add(Array("pinyi.work.cd1".utf8))
+        h.add(Int64(bitPattern: layout.params.seed))
+        h.add(Int64(layout.cols))
+        h.add(Int64(layout.rows))
+        h.add(layout.targetCrop)
+        h.add(Int64(layout.cellAssignments.count))
+        for cell in layout.cellAssignments {
+            h.add(Array(cell.localIdentifier.utf8))
+            h.add([0])
+            h.add(cell.crop)
+            if let fill = cell.fill {
+                h.add([1, fill.r, fill.g, fill.b])
+            } else {
+                h.add([0])
+            }
+        }
+        return prefix + h.hex
+    }
+
+    public static func isCurrent(_ digest: String) -> Bool { digest.hasPrefix(prefix) }
+}
+
 /// FNV-1a 64 累加器。
 struct FNV1a64 {
     private(set) var value: UInt64 = 0xcbf2_9ce4_8422_2325
@@ -448,7 +481,7 @@ public enum WorksStoreError: Error, Sendable, Equatable {
 
 /// 作品写入的前置条件错误（架构师 11-17 B）。
 public enum WorksError: Error, Sendable, Equatable {
-    /// `write(_ draft:)` 收到带纯色格（`fc`）的布局：新存作品的预览渲染还不读 fc，先拒绝（长期改法见 works-missing-fill）。
+    /// 带纯色格（`fc`）的布局还不能存成作品。预览和再导出已经按同一决定填这个颜色，但写盘仍拒绝。
     case unsupportedFilledCells
     /// 形状结果还不能存成作品。设计里的 manifest v2 要有 source / color / background / bits-v1 mask，由 S5 写入。
     /// S3 只有预览和导出用的运行时掩码，不会写成另一种 formatVersion 2。
