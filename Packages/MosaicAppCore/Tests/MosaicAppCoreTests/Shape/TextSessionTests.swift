@@ -157,7 +157,7 @@ final class TextSessionTests: XCTestCase {
         XCTAssertEqual(TextDraftEditor.committedLines(c.state.flow.shape?.textLines ?? []), ["满月快乐"])
         XCTAssertEqual(c.state.flow.source.selection, source)
         XCTAssertTrue(c.canExport)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
         XCTAssertNotNil(c.product?.shapeFrame)
 
         c.send(.backToSettings)
@@ -171,6 +171,10 @@ final class TextSessionTests: XCTestCase {
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertTrue(c.canExport)
 
+        let saver = FakeResultSaver()
+        saver.coordinator = c
+        saver.savedRevision = c.state.resultRevision
+        c.resultSaver = saver
         c.startNewMosaicTapped()
         XCTAssertNil(c.state.unsavedPrompt)
         XCTAssertEqual(c.state.flow.step, .settings)
@@ -180,7 +184,7 @@ final class TextSessionTests: XCTestCase {
         c.flowSend(.back)
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertTrue(c.canExport)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
         c.stop()
     }
 

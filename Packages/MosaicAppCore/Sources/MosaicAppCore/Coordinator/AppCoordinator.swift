@@ -523,9 +523,15 @@ public final class AppCoordinator {
     /// 当前结果是不是形状。以结果上的 `shapeFrame` 为准，不看导航里可能已被清掉的 `flow.shape`。
     public var currentResultIsShape: Bool { product?.shapeFrame != nil }
 
-    /// 形状结果这一阶段不能存作品。正在选形状、或当前结果本身是形状，都不能存。
+    /// 照片结果可以存。形状 / 文字要有完整 manifest，并且当前参数还是这张结果的，才能存。
+    /// 只有运行时掩码、或配色密度已经改了还没重生成时，不显示保存。
     public var allowsWorkSave: Bool {
-        preparedText == nil && state.flow.shape == nil && !currentResultIsShape
+        if currentResultIsShape {
+            guard resultMatchesCurrentParameters, let layout = currentLayout(), layout.canPersistShape,
+                  layout.shapeManifest != nil else { return false }
+            return true
+        }
+        return preparedText == nil && state.flow.shape == nil
     }
     public func setShowScanSheet(_ on: Bool) { state.showScanSheet = on }
     public func setPresentedEmptyState(_ e: LibraryEmptyState?) { state.presentedEmptyState = e }
@@ -819,7 +825,25 @@ public final class AppCoordinator {
 
     /// 当前结果固化成的布局（导出、「存到我的作品」都用它）。
     public func currentLayout() -> MosaicLayout? {
-        product.map { MosaicLayout(product: $0, overlayAlpha: state.flow.settings.overlayAlpha) }
+        guard let product else { return nil }
+        return MosaicLayout(product: product, overlayAlpha: state.flow.settings.overlayAlpha,
+                            shapeManifest: currentShapeManifest(for: product))
+    }
+
+    /// 这次形状结果能写进作品的参数。缺选择、未登记预设或空文字时返回 nil。
+    func currentShapeManifest(for product: GenerationProduct) -> ShapeManifest? {
+        guard let frame = product.shapeFrame, let choice = shapeIdentity else { return nil }
+        let source: ShapeSource
+        if choice.usesText {
+            let lines = TextDraftEditor.committedLines(choice.textLines)
+            guard !lines.isEmpty else { return nil }
+            source = .text(lines: lines)
+        } else {
+            guard choice.preset.isKnown else { return nil }
+            source = .preset(choice.preset)
+        }
+        let spec = ShapeSpec(source: source, palette: choice.palette, background: frame.background)
+        return ShapeManifest(spec: spec, mask: frame.mask)
     }
 
     /// 「保存到相册」（结果页）。判断顺序：权限 > 空间 > 其他（文案 §5.3）。

@@ -81,8 +81,10 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
     /// 网格在目标图里的区域（目标图像素；短边方向已居中裁掉余量）。
     public var targetCrop: CropRect
     public var params: Params
-    /// 预览 / 导出用的形状掩码和背景。不进 JSON。nil = 普通拼图。
+    /// 预览 / 导出用的形状掩码和背景。普通拼图为 nil。能存盘时和 `shapeManifest` 一起在。
     public var shapeFrame: ShapeFrame?
+    /// 可写进作品的形状 / 文字参数和冻结掩码。nil = 布局仍是第 1 版，不带形状字段。
+    public var shapeManifest: ShapeManifest?
 
     public struct Size: Sendable, Codable, Equatable {
         public var width: Int
@@ -91,7 +93,8 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
     }
 
     public init(cols: Int, rows: Int, cellAssignments: [CellAssignment], targetSize: Size, targetCrop: CropRect,
-                params: Params, shapeFrame: ShapeFrame? = nil, formatVersion: Int = MosaicLayout.currentFormatVersion) {
+                params: Params, shapeFrame: ShapeFrame? = nil, shapeManifest: ShapeManifest? = nil,
+                formatVersion: Int = MosaicLayout.currentFormatVersion) {
         self.formatVersion = formatVersion
         self.cols = cols
         self.rows = rows
@@ -100,6 +103,7 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
         self.targetCrop = targetCrop
         self.params = params
         self.shapeFrame = shapeFrame
+        self.shapeManifest = shapeManifest
     }
 
     public var cellCount: Int { cols * rows }
@@ -124,29 +128,103 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case formatVersion, cols, rows, cells, targetSize, targetCrop, params
+        case mode, source, color, background, mask
     }
+    private enum MaskKeys: String, CodingKey { case columns, rows, encoding, data }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         formatVersion = try c.decode(Int.self, forKey: .formatVersion)
         cols = try c.decode(Int.self, forKey: .cols)
         rows = try c.decode(Int.self, forKey: .rows)
-        cellAssignments = try c.decode([CellAssignment].self, forKey: .cells)
         targetSize = try c.decode(Size.self, forKey: .targetSize)
         targetCrop = try Self.decodeRect(c.decode([Double].self, forKey: .targetCrop))
         params = try c.decode(Params.self, forKey: .params)
-        shapeFrame = nil
+        switch formatVersion {
+        case 1:
+            cellAssignments = try c.decode([CellAssignment].self, forKey: .cells)
+            shapeManifest = nil
+            shapeFrame = nil
+        case 2:
+            let mode = try c.decode(String.self, forKey: .mode)
+            let source = try c.decode(ShapeSource.self, forKey: .source)
+            guard mode == "text" || mode == "shape", (mode == "text") == source.isText else {
+                throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath, debugDescription: "shape mode does not match source"))
+            }
+            let palette = try c.decode(ShapePalette.self, forKey: .color)
+            let background = try c.decode(ShapeBackground.self, forKey: .background)
+            let mask = try Self.decodeMask(c.nestedContainer(keyedBy: MaskKeys.self, forKey: .mask))
+            guard mask.columns == cols, mask.rows == rows, mask.activeCount > 0 else {
+                throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath, debugDescription: "shape mask does not match the grid"))
+            }
+            let stored = try c.decode([CellAssignment?].self, forKey: .cells)
+            guard stored.count == cols * rows else {
+                throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath, debugDescription: "shape cell count mismatch"))
+            }
+            cellAssignments = try stored.enumerated().map { index, cell in
+                if mask.isActive(index) {
+                    guard let cell else {
+                        throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath, debugDescription: "active shape cell is null"))
+                    }
+                    return cell
+                }
+                return CellAssignment(localIdentifier: "")
+            }
+            let spec = ShapeSpec(source: source, palette: palette, background: background)
+            shapeManifest = ShapeManifest(spec: spec, mask: mask)
+            shapeFrame = ShapeFrame(background: background, mask: mask)
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath,
+                                                    debugDescription: "unsupported layout formatVersion \(formatVersion)"))
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(formatVersion, forKey: .formatVersion)
         try c.encode(cols, forKey: .cols)
         try c.encode(rows, forKey: .rows)
-        try c.encode(cellAssignments, forKey: .cells)
         try c.encode(targetSize, forKey: .targetSize)
         try c.encode(Self.encodeRect(targetCrop), forKey: .targetCrop)
         try c.encode(params, forKey: .params)
+        if let manifest = shapeManifest {
+            guard manifest.mask.columns == cols, manifest.mask.rows == rows else {
+                throw EncodingError.invalidValue(manifest, .init(codingPath: c.codingPath, debugDescription: "shape mask does not match the grid"))
+            }
+            try c.encode(2, forKey: .formatVersion)
+            try c.encode(manifest.spec.source.isText ? "text" : "shape", forKey: .mode)
+            try c.encode(manifest.spec.source, forKey: .source)
+            try c.encode(manifest.spec.palette, forKey: .color)
+            try c.encode(manifest.spec.background, forKey: .background)
+            var maskC = c.nestedContainer(keyedBy: MaskKeys.self, forKey: .mask)
+            try maskC.encode(manifest.mask.columns, forKey: .columns)
+            try maskC.encode(manifest.mask.rows, forKey: .rows)
+            try maskC.encode("bits-v1", forKey: .encoding)
+            try maskC.encode(Data(manifest.mask.bitsV1Bytes).base64EncodedString(), forKey: .data)
+            let cells: [CellAssignment?] = cellAssignments.enumerated().map { index, cell in
+                manifest.mask.isActive(index) ? cell : nil
+            }
+            try c.encode(cells, forKey: .cells)
+        } else {
+            try c.encode(formatVersion, forKey: .formatVersion)
+            try c.encode(cellAssignments, forKey: .cells)
+        }
+    }
+
+    private static func decodeMask(_ c: KeyedDecodingContainer<MaskKeys>) throws -> CellMask {
+        let columns = try c.decode(Int.self, forKey: .columns)
+        let rows = try c.decode(Int.self, forKey: .rows)
+        let encoding = try c.decode(String.self, forKey: .encoding)
+        guard encoding == "bits-v1" else {
+            throw DecodingError.dataCorruptedError(forKey: .encoding, in: c, debugDescription: "unknown mask encoding \(encoding)")
+        }
+        guard let bytes = Data(base64Encoded: try c.decode(String.self, forKey: .data)) else {
+            throw DecodingError.dataCorruptedError(forKey: .data, in: c, debugDescription: "mask data is not base64")
+        }
+        do {
+            return try CellMask(columns: columns, rows: rows, bitsV1: [UInt8](bytes))
+        } catch {
+            throw DecodingError.dataCorruptedError(forKey: .data, in: c, debugDescription: "bits-v1 mask rejected")
+        }
     }
 
     static func encodeRect(_ r: CropRect) -> [Double] { [r.x, r.y, r.width, r.height] }
@@ -160,8 +238,22 @@ public struct MosaicLayout: Sendable, Codable, Equatable {
 }
 
 extension MosaicLayout {
+    /// 形状 / 文字能不能按契约写盘。只有运行时掩码、掩码和网格对不上、或来源不认识时不能写。
+    public var canPersistShape: Bool {
+        guard let manifest = shapeManifest else { return shapeFrame == nil }
+        guard manifest.mask.columns == cols, manifest.mask.rows == rows, manifest.mask.activeCount > 0 else { return false }
+        if let frame = shapeFrame, frame.mask != manifest.mask || frame.background != manifest.spec.background { return false }
+        switch manifest.spec.source {
+        case .preset(let id):
+            if !id.isKnown { return false }
+        case .text(let lines):
+            if lines.isEmpty || lines.count > 2 || lines.contains(where: { $0.isEmpty }) { return false }
+        }
+        return true
+    }
+
     /// 从一次生成结果固化布局（结果页「导出」/「存到我的作品」都走这里）。
-    public init(product: GenerationProduct, overlayAlpha: Double) {
+    public init(product: GenerationProduct, overlayAlpha: Double, shapeManifest: ShapeManifest? = nil) {
         let g = product.generation
         let ids = product.cellAssetIDs
         let shape = product.shapeFrame
@@ -170,7 +262,7 @@ extension MosaicLayout {
                   targetSize: Size(width: g.layout.imageWidth, height: g.layout.imageHeight),
                   targetCrop: g.layout.cropRect,
                   params: Params(overlayAlpha: shape == nil ? overlayAlpha : 0, density: Self.name(g.density), seed: g.seed),
-                  shapeFrame: shape)
+                  shapeFrame: shape, shapeManifest: shapeManifest)
     }
 
     static func name(_ d: Density) -> String {

@@ -20,6 +20,21 @@ public struct ShapeChoice: Sendable, Equatable, Hashable {
         self.textLines = textLines
     }
 
+    /// 从已存的 manifest 恢复配置。文字固定细档，预设 ID 必须已登记。
+    public init?(manifest: ShapeManifest) {
+        switch manifest.spec.source {
+        case .preset(let id):
+            guard id.isKnown else { return nil }
+            self.init(preset: id, palette: manifest.spec.palette, background: manifest.spec.background)
+        case .text(let lines):
+            guard !lines.isEmpty, lines.count <= 2, lines.allSatisfy({ !$0.isEmpty }) else { return nil }
+            var rows = lines
+            if rows.count == 1 { rows.append("") }
+            self.init(preset: .heart, palette: manifest.spec.palette, background: manifest.spec.background,
+                      usesText: true, textLines: rows)
+        }
+    }
+
     /// 未登记的 ID 不能选。
     public static func make(preset raw: String, palette: ShapePalette = .auto, background: ShapeBackground = .white) -> ShapeChoice? {
         let id = ShapePresetID(rawValue: raw)

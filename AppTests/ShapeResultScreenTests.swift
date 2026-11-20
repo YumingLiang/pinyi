@@ -101,7 +101,7 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertEqual(model.flow.step, .result)
         XCTAssertNotNil(model.coordinator.product?.shapeFrame)
         XCTAssertNil(model.coordinator.target, "这条路径没有用户目标图")
-        XCTAssertFalse(model.allowsWorkSave)
+        XCTAssertTrue(model.allowsWorkSave)
         XCTAssertTrue(model.canExport, "结果已经生成，导出不应因为没有用户目标图而禁用")
 
         let product = try XCTUnwrap(model.coordinator.product)
@@ -172,7 +172,7 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertTrue(shown)
         XCTAssertTrue(model.showsFinishedPreviewHint, "有效成品才显示双指放大提示")
         XCTAssertTrue(model.canExport)
-        XCTAssertFalse(model.allowsWorkSave)
+        XCTAssertTrue(model.allowsWorkSave)
 
         model.setShapePalette(.blue)
         XCTAssertTrue(model.shapeEditsNeedRegeneration)
@@ -240,7 +240,7 @@ final class ShapeResultScreenTests: XCTestCase {
         }
         XCTAssertEqual(model.flow.shape?.usesText, true)
         XCTAssertEqual(TextDraftEditor.committedLines(model.flow.shape?.textLines ?? []), ["生日快乐", "宝贝"])
-        XCTAssertFalse(model.allowsWorkSave)
+        XCTAssertTrue(model.allowsWorkSave)
         XCTAssertNil(model.coordinator.target)
         let product = try XCTUnwrap(model.coordinator.product)
         let mask = try XCTUnwrap(product.shapeFrame).mask
@@ -310,7 +310,7 @@ final class ShapeResultScreenTests: XCTestCase {
             XCTAssertEqual(max(mask.columns, mask.rows), 120, "\(lines)")
             XCTAssertEqual(model.coordinator.state.flow.settings.density, .fine, "\(lines)")
             XCTAssertNil(model.coordinator.target)
-            XCTAssertFalse(model.allowsWorkSave, "\(lines)")
+            XCTAssertTrue(model.allowsWorkSave, "\(lines)")
             let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
             let shown = await waitUntil { model.resultImage?.width == mask.columns * previewCell }
             XCTAssertTrue(shown, "\(lines) 没有按网格尺寸显示预览")

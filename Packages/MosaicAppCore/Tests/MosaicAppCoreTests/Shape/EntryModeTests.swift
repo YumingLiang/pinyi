@@ -134,6 +134,10 @@ final class EntryModeTests: XCTestCase {
         await c.settle()
         guard case .result = c.state.flow.generation.phase else { return XCTFail("没有图形结果") }
         XCTAssertNil(c.target)
+        let saver = FakeResultSaver()
+        saver.coordinator = c
+        saver.savedRevision = c.state.resultRevision
+        c.resultSaver = saver
         c.startNewMosaicTapped()
         XCTAssertEqual(c.state.flow.step, .settings)
         XCTAssertFalse(c.state.flow.offersShapeEntry)

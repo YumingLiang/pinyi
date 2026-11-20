@@ -67,9 +67,26 @@ extension AppCoordinator {
     /// - 其他（没有结果）：直接去选目标图，选好进确认页（素材沿用）。
     /// 生成中 / 导出中 / 提示弹着或保存中忽略。
     /// - Parameter workID: 发起的作品（选图提示「取消」时回到这张作品的查看页）。
-    public func startNewFromWorkTapped(workID: WorkID? = nil) {
+    public func startNewFromWorkTapped(workID: WorkID? = nil, savedShape: ShapeManifest? = nil, densityName: String? = nil) {
         guard !state.isGenerating, !state.export.isBusy, state.unsavedPrompt == nil, !state.isSavingBeforeLeaving,
               !state.flow.isQuickAgain else { return }
+        if let savedShape, let choice = ShapeChoice(manifest: savedShape) {
+            shapeIdentity = choice
+            state.flow.shape = choice
+            if savedShape.spec.source.isText {
+                state.flow.settings.density = .fine
+            } else if let densityName, let density = DensityChoice(rawValue: densityName) {
+                state.flow.settings.density = density
+            }
+            nextQuickStartOrigin = workID.map { .work(id: $0) }
+            if state.flow.step == .result, case .result = state.flow.generation.phase {
+                state.flow.send(.shapeQuickAgainStarted)
+            } else if state.flow.step != .result {
+                state.flow.send(.freshShapeConfigStarted)
+            }
+            quickStartOrigin = nextQuickStartOrigin
+            return
+        }
         if state.canStartNewMosaic {
             nextQuickStartOrigin = workID.map { .work(id: $0) } ?? .preview
             startNewFromResult()

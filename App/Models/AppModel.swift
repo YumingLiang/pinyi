@@ -253,7 +253,10 @@ final class AppModel: ObservableObject {
     /// 作品查看页「再拼一张」（quick-start v1.0 §2a）：退回主流程，再走和预览页一样的「再拼一张」。
     func startNewFromWork(id: WorkID) {
         guard !state.isGenerating, !state.export.isBusy else { return }
-        coordinator.startNewFromWorkTapped(workID: id)
+        let opened = worksController.openedWork
+        let manifest = opened?.id == id ? opened?.layout.shapeManifest : nil
+        let density = opened?.id == id ? opened?.layout.params.density : nil
+        coordinator.startNewFromWorkTapped(workID: id, savedShape: manifest, densityName: density)
         navigationResetToken += 1
     }
     func startNewMosaicTapped() { coordinator.startNewMosaicTapped() }
