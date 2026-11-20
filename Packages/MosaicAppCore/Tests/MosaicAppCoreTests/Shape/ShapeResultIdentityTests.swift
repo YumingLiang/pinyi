@@ -26,7 +26,7 @@ final class ShapeResultIdentityTests: XCTestCase {
         XCTAssertNotNil(c.product?.shapeFrame)
         XCTAssertNil(c.target, "用形状拼不经过选目标图")
         XCTAssertTrue(c.canExport, "没有用户目标图时形状结果也要能导出")
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
         return (h, saver)
     }
 
@@ -34,8 +34,9 @@ final class ShapeResultIdentityTests: XCTestCase {
         let (h, s) = try await shapeResult()
         let c = h.coordinator
         let seed = c.product?.generation.seed
+        s.savedRevision = c.state.resultRevision
         c.startNewMosaicTapped()
-        XCTAssertNil(c.state.unsavedPrompt)
+        XCTAssertNil(c.state.unsavedPrompt, "已存的形状再拼不弹保存")
         XCTAssertEqual(s.saveCalls, 0)
         XCTAssertTrue(c.state.flow.isQuickAgain)
         c.setTarget(try CoordinatorHarness.target())
@@ -46,15 +47,16 @@ final class ShapeResultIdentityTests: XCTestCase {
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertEqual(c.product?.generation.seed, seed)
         XCTAssertNotNil(c.state.flow.shape, "回到形状结果要恢复选择")
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
+        s.savedRevision = c.state.resultRevision
         c.startNewMosaicTapped()
-        XCTAssertNil(c.state.unsavedPrompt, "换过目标再返回后，再拼一张仍不能弹保存")
+        XCTAssertNil(c.state.unsavedPrompt, "已存的形状再拼不弹保存")
         XCTAssertEqual(s.saveCalls, 0)
         _ = c.unsavedPromptSaveTapped()
         await Task.yield()
         XCTAssertEqual(s.saveCalls, 0, "旧确认保存入口不得进入 saveCurrentResult")
         c.leaveResultTapped()
-        XCTAssertNil(c.state.unsavedPrompt, "返回首页也不能弹保存")
+        XCTAssertNil(c.state.unsavedPrompt, "已存的形状返回首页不弹保存")
         XCTAssertEqual(s.saveCalls, 0)
         c.stop()
     }
@@ -62,6 +64,7 @@ final class ShapeResultIdentityTests: XCTestCase {
     func testQuickAgainChangeSourceThenBackDoesNotOfferSave() async throws {
         let (h, s) = try await shapeResult()
         let c = h.coordinator
+        s.savedRevision = c.state.resultRevision
         c.startNewMosaicTapped()
         c.setTarget(try CoordinatorHarness.target())
         XCTAssertEqual(c.state.flow.step, .settings)
@@ -72,9 +75,10 @@ final class ShapeResultIdentityTests: XCTestCase {
         c.flowSend(.back)
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertNotNil(c.product?.shapeFrame)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
+        s.savedRevision = c.state.resultRevision
         c.startNewMosaicTapped()
-        XCTAssertNil(c.state.unsavedPrompt, "换来源后返回，再拼一张不能弹保存")
+        XCTAssertNil(c.state.unsavedPrompt, "已存的形状再拼不弹保存")
         c.leaveResultTapped()
         XCTAssertNil(c.state.unsavedPrompt)
         XCTAssertEqual(s.saveCalls, 0)
@@ -87,7 +91,7 @@ final class ShapeResultIdentityTests: XCTestCase {
         let id = WorkID()
         c.send(.backToSettings)
         XCTAssertTrue(c.isAdjustingResult)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
         c.flowSend(.back)
         XCTAssertEqual(c.state.flow.step, .source)
         XCTAssertNotNil(c.state.flow.shape)
@@ -95,7 +99,7 @@ final class ShapeResultIdentityTests: XCTestCase {
         XCTAssertEqual(c.state.flow.step, .target)
         XCTAssertNil(c.state.flow.shape)
         XCTAssertNotNil(c.product?.shapeFrame)
-        XCTAssertFalse(c.allowsWorkSave, "人在目标页，当前结果仍是形状")
+        XCTAssertFalse(c.allowsWorkSave, "人已经退回目标页，当前选择和这张形状结果对不上，不提供保存")
         c.startNewFromWorkTapped(workID: id)
         XCTAssertNil(c.state.unsavedPrompt, "再调一调退回目标页后再拼，不能弹 startNewFromAdjust")
         XCTAssertEqual(s.saveCalls, 0)

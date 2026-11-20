@@ -7,10 +7,11 @@ extension AppCoordinator {
     public var workResultContext: WorkResultContext {
         var layout: MosaicLayout?
         let onResult: Bool = { if case .result = state.flow.generation.phase { return true }; return false }()
-        if let product, onResult || isAdjustingResult {
-            layout = MosaicLayout(product: product, overlayAlpha: state.flow.settings.overlayAlpha)
+        if product != nil, onResult || isAdjustingResult {
+            layout = currentLayout()
         }
-        return WorkResultContext(layout: layout, target: target, overlayAlpha: state.flow.settings.overlayAlpha,
+        let overlay = layout?.shapeManifest == nil ? state.flow.settings.overlayAlpha : 0
+        return WorkResultContext(layout: layout, target: layout?.shapeManifest == nil ? target : nil, overlayAlpha: overlay,
                                  tier: state.exportTier.rawValue, resultRevision: state.resultRevision)
     }
 

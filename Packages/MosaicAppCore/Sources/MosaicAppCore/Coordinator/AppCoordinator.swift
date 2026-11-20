@@ -39,6 +39,8 @@ public final class AppCoordinator {
     var quickStartOrigin: QuickStartOrigin?
     /// 下一次进入「再拼一张」时的发起页（中间可能先弹未保存提示）。
     var nextQuickStartOrigin: QuickStartOrigin?
+    /// 从一张没有形状 manifest 的作品再拼：开始时清掉形状，走选照片，不带回图形参数。
+    var remakeOpenedPhotoWork = false
     /// 作品页 /「再调一调」进来的「再拼一张」开始前的目标图和代次（选图提示「取消」时恢复；开始生成新图或放弃时清掉）。
     var targetBeforeFreshQuickStart: (target: PixelBuffer?, generation: Int)?
     /// 「存到我的作品」（`WorksController`）：未保存提示要问它当前结果存没存过、以及「保存」按钮去存。弱引用，不成环。
@@ -523,9 +525,15 @@ public final class AppCoordinator {
     /// 当前结果是不是形状。以结果上的 `shapeFrame` 为准，不看导航里可能已被清掉的 `flow.shape`。
     public var currentResultIsShape: Bool { product?.shapeFrame != nil }
 
-    /// 形状结果这一阶段不能存作品。正在选形状、或当前结果本身是形状，都不能存。
+    /// 照片结果可以存。形状 / 文字要有完整 manifest，并且当前参数还是这张结果的，才能存。
+    /// 只有运行时掩码、或配色密度已经改了还没重生成时，不显示保存。
     public var allowsWorkSave: Bool {
-        preparedText == nil && state.flow.shape == nil && !currentResultIsShape
+        if currentResultIsShape {
+            guard resultMatchesCurrentParameters, let layout = currentLayout(), layout.canPersistShape,
+                  layout.shapeManifest != nil else { return false }
+            return true
+        }
+        return preparedText == nil && state.flow.shape == nil
     }
     public func setShowScanSheet(_ on: Bool) { state.showScanSheet = on }
     public func setPresentedEmptyState(_ e: LibraryEmptyState?) { state.presentedEmptyState = e }
@@ -755,8 +763,18 @@ public final class AppCoordinator {
                 let textMoved = stillThisRun && self.textSelectionMovedOn(from: textMosaic)
                 if stillThisRun, !textMoved {
                     self.product = p
-                    self.shapeIdentity = p.shapeFrame == nil ? nil : shapeChoice
-                    self.productInputs = inputs
+                    if p.shapeFrame != nil, shapeChoice == nil, let textMosaic {
+                        // 直接 generateText 时还没有图形配置。身份用这次正文，否则结果有掩码但不能存。
+                        let identity = ShapeChoice(preset: .heart, palette: textMosaic.palette,
+                                                  background: textMosaic.background, usesText: true,
+                                                  textLines: TextDraftEditor.normalized(textMosaic.lines))
+                        self.shapeIdentity = identity
+                        if self.state.flow.shape == nil { self.state.flow.shape = identity }
+                        self.productInputs = self.currentInputs
+                    } else {
+                        self.shapeIdentity = p.shapeFrame == nil ? nil : shapeChoice
+                        self.productInputs = inputs
+                    }
                     self.state.resultRevision += 1
                     if p.lowRes.enabled {
                         self.state.lowResExclusion = LowResExclusion(selection: selection, assetIDs: p.lowRes.excludedAssetIDs)
@@ -819,7 +837,25 @@ public final class AppCoordinator {
 
     /// 当前结果固化成的布局（导出、「存到我的作品」都用它）。
     public func currentLayout() -> MosaicLayout? {
-        product.map { MosaicLayout(product: $0, overlayAlpha: state.flow.settings.overlayAlpha) }
+        guard let product else { return nil }
+        return MosaicLayout(product: product, overlayAlpha: state.flow.settings.overlayAlpha,
+                            shapeManifest: currentShapeManifest(for: product))
+    }
+
+    /// 这次形状结果能写进作品的参数。缺选择、未登记预设或空文字时返回 nil。
+    func currentShapeManifest(for product: GenerationProduct) -> ShapeManifest? {
+        guard let frame = product.shapeFrame, let choice = shapeIdentity else { return nil }
+        let source: ShapeSource
+        if choice.usesText {
+            let lines = TextDraftEditor.committedLines(choice.textLines)
+            guard !lines.isEmpty else { return nil }
+            source = .text(lines: lines)
+        } else {
+            guard choice.preset.isKnown else { return nil }
+            source = .preset(choice.preset)
+        }
+        let spec = ShapeSpec(source: source, palette: choice.palette, background: frame.background)
+        return ShapeManifest(spec: spec, mask: frame.mask)
     }
 
     /// 「保存到相册」（结果页）。判断顺序：权限 > 空间 > 其他（文案 §5.3）。

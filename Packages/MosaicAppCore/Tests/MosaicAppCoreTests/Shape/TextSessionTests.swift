@@ -93,6 +93,35 @@ final class TextSessionTests: XCTestCase {
                       background: c.state.flow.shape?.background ?? .white)
     }
 
+    /// 官方四组走 `generateText`，进生成前没有 `beginShape`。完成时要把这次正文写成可存身份。
+    func testDirectTextWithoutShapeConfigInstallsPersistableIdentity() async throws {
+        let h = CoordinatorHarness(assets: 300)
+        let c = h.coordinator
+        c.start()
+        await c.settle()
+        XCTAssertNil(c.state.flow.shape)
+        c.prepareText(lines: ["生日快乐", "宝贝"], outline: outline("生日快乐宝贝"),
+                      palette: .warmRed, background: .white)
+        await c.generateTapped()
+        await c.settle()
+        guard case .result = c.state.flow.generation.phase else {
+            return XCTFail("文字没有结果 \(c.state.flow.generation.phase)")
+        }
+        XCTAssertEqual(c.state.flow.shape?.usesText, true)
+        XCTAssertEqual(TextDraftEditor.committedLines(c.state.flow.shape?.textLines ?? []), ["生日快乐", "宝贝"])
+        XCTAssertEqual(c.state.flow.shape?.palette, .warmRed)
+        XCTAssertEqual(c.state.flow.shape?.background, .white)
+        XCTAssertTrue(c.canExport)
+        XCTAssertTrue(c.allowsWorkSave)
+        let layout = try XCTUnwrap(c.currentLayout())
+        XCTAssertEqual(layout.shapeManifest?.spec.source, .text(lines: ["生日快乐", "宝贝"]))
+        XCTAssertEqual(layout.shapeManifest?.spec.palette, .warmRed)
+        XCTAssertEqual(layout.shapeFrame?.background, .white)
+        XCTAssertTrue(layout.canPersistShape)
+        XCTAssertGreaterThan(layout.shapeManifest?.mask.activeCount ?? 0, 0)
+        c.stop()
+    }
+
     func testEmptyOverLimitAndEmojiDoNotStartGeneration() async throws {
         let h = CoordinatorHarness(assets: 300)
         let c = h.coordinator
@@ -157,7 +186,7 @@ final class TextSessionTests: XCTestCase {
         XCTAssertEqual(TextDraftEditor.committedLines(c.state.flow.shape?.textLines ?? []), ["满月快乐"])
         XCTAssertEqual(c.state.flow.source.selection, source)
         XCTAssertTrue(c.canExport)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
         XCTAssertNotNil(c.product?.shapeFrame)
 
         c.send(.backToSettings)
@@ -171,6 +200,10 @@ final class TextSessionTests: XCTestCase {
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertTrue(c.canExport)
 
+        let saver = FakeResultSaver()
+        saver.coordinator = c
+        saver.savedRevision = c.state.resultRevision
+        c.resultSaver = saver
         c.startNewMosaicTapped()
         XCTAssertNil(c.state.unsavedPrompt)
         XCTAssertEqual(c.state.flow.step, .settings)
@@ -180,7 +213,7 @@ final class TextSessionTests: XCTestCase {
         c.flowSend(.back)
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertTrue(c.canExport)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
         c.stop()
     }
 

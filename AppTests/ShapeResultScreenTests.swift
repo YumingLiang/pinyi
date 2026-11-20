@@ -4,7 +4,7 @@ import UIKit
 import UniformTypeIdentifiers
 import XCTest
 import MosaicCore
-import MosaicAppCore
+@testable import MosaicAppCore
 @testable import PhotoMosaic
 
 /// 形状从「用形状拼」进入，不选用户目标图。fd3c7f0 上结果页仍出现，但 `AppModel.renderPreview` 和
@@ -101,7 +101,7 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertEqual(model.flow.step, .result)
         XCTAssertNotNil(model.coordinator.product?.shapeFrame)
         XCTAssertNil(model.coordinator.target, "这条路径没有用户目标图")
-        XCTAssertFalse(model.allowsWorkSave)
+        XCTAssertTrue(model.allowsWorkSave)
         XCTAssertTrue(model.canExport, "结果已经生成，导出不应因为没有用户目标图而禁用")
 
         let product = try XCTUnwrap(model.coordinator.product)
@@ -172,7 +172,7 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertTrue(shown)
         XCTAssertTrue(model.showsFinishedPreviewHint, "有效成品才显示双指放大提示")
         XCTAssertTrue(model.canExport)
-        XCTAssertFalse(model.allowsWorkSave)
+        XCTAssertTrue(model.allowsWorkSave)
 
         model.setShapePalette(.blue)
         XCTAssertTrue(model.shapeEditsNeedRegeneration)
@@ -188,6 +188,9 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertTrue(model.canExport)
         let seed = model.coordinator.product?.generation.seed
         model.startNewMosaicTapped()
+        XCTAssertEqual(model.unsavedPrompt, .startNew, "没存进作品时再拼要提示，不直接离开结果")
+        XCTAssertEqual(model.flow.step, .result)
+        model.unsavedPromptDiscard()
         XCTAssertNil(model.unsavedPrompt)
         XCTAssertEqual(model.flow.step, .settings)
         XCTAssertEqual(model.flow.shape?.preset, .heart)
@@ -240,7 +243,7 @@ final class ShapeResultScreenTests: XCTestCase {
         }
         XCTAssertEqual(model.flow.shape?.usesText, true)
         XCTAssertEqual(TextDraftEditor.committedLines(model.flow.shape?.textLines ?? []), ["生日快乐", "宝贝"])
-        XCTAssertFalse(model.allowsWorkSave)
+        XCTAssertTrue(model.allowsWorkSave)
         XCTAssertNil(model.coordinator.target)
         let product = try XCTUnwrap(model.coordinator.product)
         let mask = try XCTUnwrap(product.shapeFrame).mask
@@ -310,7 +313,7 @@ final class ShapeResultScreenTests: XCTestCase {
             XCTAssertEqual(max(mask.columns, mask.rows), 120, "\(lines)")
             XCTAssertEqual(model.coordinator.state.flow.settings.density, .fine, "\(lines)")
             XCTAssertNil(model.coordinator.target)
-            XCTAssertFalse(model.allowsWorkSave, "\(lines)")
+            XCTAssertTrue(model.allowsWorkSave, "\(lines)")
             let previewCell = MosaicPreviewRenderer.cellPixels(for: product.generation)
             let shown = await waitUntil { model.resultImage?.width == mask.columns * previewCell }
             XCTAssertTrue(shown, "\(lines) 没有按网格尺寸显示预览")
@@ -333,6 +336,34 @@ final class ShapeResultScreenTests: XCTestCase {
                                            cellPixels: exportCell, index: inside)
             assertNear(exportPixel, tile, tolerance: 36, label: "\(lines) 导出内格")
             attachRaster(jpeg, name: "jpeg-\(label)")
+
+            // saveTapped 只写相册。下面才是 120 格作品：保存、新 store 打开、再导出。2×1 夹具不算这条。
+            await model.works.controller.saveCurrentResultTapped()
+            let listed = await model.works.controller.store.list()
+            let summary = try XCTUnwrap(listed.first, "\(lines) 没有写入作品目录")
+            XCTAssertNil(summary.meta.targetFile, "\(lines) 不存合成目标图")
+            let fresh = FileWorksStore(directory: harness.root.appendingPathComponent("Works", isDirectory: true),
+                                      images: ImageIOWorkImages(thumbnails: SolidThumbs(r: tile.r, g: tile.g, b: tile.b)))
+            let loaded = try await fresh.load(summary.id)
+            XCTAssertEqual(loaded.layout.shapeFrame?.background, .white, "\(lines)")
+            XCTAssertEqual(loaded.layout.shapeManifest?.spec.background, .white, "\(lines)")
+            if case .text(let stored) = loaded.layout.shapeManifest?.spec.source {
+                XCTAssertEqual(stored, lines, "\(lines) 正文以存盘为准，不重新描字")
+            } else {
+                XCTFail("\(lines) 再打开不是文字")
+            }
+            XCTAssertNil(loaded.targetURL, "\(lines)")
+            let reexport = try await LiveMosaicExporter(thumbnails: SolidThumbs(r: tile.r, g: tile.g, b: tile.b))
+                .export(ExportRequest(layout: loaded.layout, target: nil, tier: .share)) { _ in }
+            defer { try? FileManager.default.removeItem(at: reexport) }
+            let again = try XCTUnwrap(decodeJPEG(try Data(contentsOf: reexport)))
+            let againCell = again.width / mask.columns
+            let againBytes = try bitmap(again)
+            assertNear(pixelFromTop(againBytes, width: again.width, columns: mask.columns, cellPixels: againCell, index: inside),
+                       tile, tolerance: 36, label: "\(lines) 再导出内格")
+            let outside = try XCTUnwrap((0..<mask.cellCount).first { !mask.isActive($0) })
+            assertNear(pixelFromTop(againBytes, width: again.width, columns: mask.columns, cellPixels: againCell, index: outside),
+                       (r: 255, g: 255, b: 255), tolerance: 8, label: "\(lines) 再导出掩码外")
         }
         XCTAssertTrue(problems.isEmpty, problems.joined(separator: "\n"))
     }
@@ -365,6 +396,62 @@ final class ShapeResultScreenTests: XCTestCase {
         var root: URL
         var library: MemoryAlbum
         var model: AppModel
+    }
+
+    func testStartNewFromOpenedWorkRestoresTextAndClearsAPhoto() async throws {
+        let harness = try await makeHarness()
+        defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+        let model = harness.model
+        let mask = try CellMask(columns: 2, rows: 1, bitsV1: [0b0000_0001])
+        let manifest = ShapeManifest(spec: ShapeSpec(source: .text(lines: ["生日快乐", "宝贝"]), palette: .warmRed, background: .white),
+                                     mask: mask)
+        let shape = MosaicLayout(cols: 2, rows: 1,
+                                 cellAssignments: [MosaicLayout.CellAssignment(localIdentifier: "fixture"),
+                                                   MosaicLayout.CellAssignment(localIdentifier: "")],
+                                 targetSize: .init(width: 8, height: 4),
+                                 targetCrop: CropRect(x: 0, y: 0, width: 8, height: 4),
+                                 params: .init(overlayAlpha: 0, density: "coarse", seed: 3),
+                                 shapeFrame: ShapeFrame(background: .white, mask: mask),
+                                 shapeManifest: manifest)
+        let saved = try await model.works.controller.store.save(
+            WorkDraft(layout: shape, target: nil, overlayAlpha: 0, origin: .savedManually))
+        let token = model.navigationResetToken
+        model.beginShape()
+        model.startNewFromWork(id: saved.summary.id)
+        XCTAssertEqual(model.navigationResetToken, token)
+        XCTAssertNotNil(model.flow.shape)
+        XCTAssertEqual(model.flow.step, .source, "还没打开这张作品时不开始再拼")
+        let other = WorkID()
+        model.startNewFromWork(id: other)
+        XCTAssertEqual(model.navigationResetToken, token)
+        XCTAssertEqual(model.flow.step, .source)
+        await model.works.controller.open(saved.summary.id)
+        model.startNewFromWork(id: other)
+        XCTAssertEqual(model.navigationResetToken, token, "打开的是另一张时不消费这次点击")
+        XCTAssertEqual(model.flow.step, .source)
+        model.startNewFromWork(id: saved.summary.id)
+        XCTAssertEqual(model.flow.shape?.usesText, true)
+        XCTAssertEqual(model.flow.shape?.textLines, ["生日快乐", "宝贝"])
+        XCTAssertEqual(model.flow.shape?.palette, .warmRed)
+        XCTAssertEqual(model.flow.shape?.background, .white)
+        XCTAssertEqual(model.flow.settings.density, .fine)
+        XCTAssertEqual(model.flow.step, .settings)
+
+        let photo = MosaicLayout(cols: 2, rows: 1,
+                                 cellAssignments: [MosaicLayout.CellAssignment(localIdentifier: "fixture"),
+                                                   MosaicLayout.CellAssignment(localIdentifier: "b")],
+                                 targetSize: .init(width: 8, height: 4),
+                                 targetCrop: CropRect(x: 0, y: 0, width: 8, height: 4),
+                                 params: .init(overlayAlpha: 0, density: "coarse", seed: 8))
+        let photoSaved = try await model.works.controller.store.save(
+            WorkDraft(layout: photo, target: nil, overlayAlpha: 0, origin: .savedManually))
+        await model.works.controller.open(photoSaved.summary.id)
+        model.startNewFromWork(id: photoSaved.summary.id)
+        XCTAssertNil(model.flow.shape)
+        XCTAssertNil(model.coordinator.shapeIdentity)
+        XCTAssertEqual(model.flow.step, .target)
+        XCTAssertTrue(model.flow.isFreshQuickStart)
+        XCTAssertFalse(model.flow.offersShapeEntry)
     }
 
     private func makeHarness() async throws -> Harness {

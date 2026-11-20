@@ -29,6 +29,10 @@ final class ShapeInteractionFlowTests: XCTestCase {
         defer { c.stop() }
         let source = c.state.flow.source.selection
         let seed = c.product?.generation.seed
+        let saver = FakeResultSaver()
+        saver.coordinator = c
+        saver.savedRevision = c.state.resultRevision
+        c.resultSaver = saver
         c.startNewMosaicTapped()
         XCTAssertEqual(c.state.flow.step, .settings)
         XCTAssertNil(c.state.unsavedPrompt)
@@ -49,7 +53,7 @@ final class ShapeInteractionFlowTests: XCTestCase {
         XCTAssertEqual(c.product?.shapeBackground, .white)
         XCTAssertTrue(c.canExport)
         XCTAssertFalse(c.shapeEditsNeedRegeneration)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
     }
 
     func testAdjustingShapePaletteCannotExportUntilRegeneratedOrReverted() async throws {

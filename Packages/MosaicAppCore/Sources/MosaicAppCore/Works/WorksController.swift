@@ -377,6 +377,7 @@ public final class WorksController {
     }
 
     private func currentFingerprint(_ layout: MosaicLayout, revision: Int) -> String {
+        if layout.shapeManifest != nil { return WorkFingerprint.of(layout) }
         let key = FingerprintKey(revision: revision, cols: layout.cols, rows: layout.rows, count: layout.cellAssignments.count,
                                  first: layout.cellAssignments.first?.localIdentifier,
                                  last: layout.cellAssignments.last?.localIdentifier)

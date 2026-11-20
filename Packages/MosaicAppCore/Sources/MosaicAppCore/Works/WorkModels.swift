@@ -197,13 +197,32 @@ public enum WorkFingerprint {
             h.add([0])
             h.add(cell.crop)
         }
+        if let manifest = layout.shapeManifest {
+            h.add(Array("shape".utf8))
+            h.add(Array(layout.params.density.utf8))
+            h.add(Array((manifest.spec.source.isText ? "text" : "shape").utf8))
+            switch manifest.spec.source {
+            case .preset(let id):
+                h.add(Array(id.rawValue.utf8))
+            case .text(let lines):
+                for line in lines { h.add(Array(line.utf8)); h.add([0]) }
+            }
+            h.add(Array(manifest.spec.palette.rawValue.utf8))
+            h.add(Array(manifest.spec.background.rawValue.utf8))
+            h.add(manifest.mask.bitsV1Bytes)
+            return shapePrefix + h.hex
+        }
         return prefix + h.hex
     }
 
-    /// 当前口径指纹的前缀。
+    /// 当前口径指纹的前缀。照片作品仍是 `s2-`。
     public static let prefix = "s2-"
+    /// 形状 / 文字作品的指纹前缀。含掩码、来源、配色、背景和密度，不含 fc。
+    public static let shapePrefix = "sh1-"
     /// 是不是当前口径（含 seed）算出来的指纹。
-    public static func isCurrent(_ fingerprint: String) -> Bool { fingerprint.hasPrefix(prefix) }
+    public static func isCurrent(_ fingerprint: String) -> Bool {
+        fingerprint.hasPrefix(prefix) || fingerprint.hasPrefix(shapePrefix)
+    }
 
     /// 叠加强度是否算「没改」（滑杆值经 JSON 往返，按 1e-6 比较）。
     public static func sameOverlay(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-6 }
@@ -212,8 +231,7 @@ public enum WorkFingerprint {
 /// 作品内容摘要（`cd1-`）。覆盖指纹里的格子数据，再加每格 `fc` 的有无和 RGB。
 ///
 /// 叠加强度不在摘要里。没有 `fc` 只记一个「无」位，不记成黑色 `(0,0,0)`。
-/// 形状掩码不在摘要里：`shapeFrame` 仍不写盘，形状外格子由条带决定。
-/// 保存仍用 `s2-` 指纹去重，并且带 `fc` 或形状的草稿在进入去重前就被拒绝。这个摘要不写进 meta。
+/// 形状掩码不在这份摘要里。形状去重用 `sh1-` 指纹，不靠 `cd1-`。摘要不写进 meta，也不给 fc 开写盘。
 public enum WorkContentDigest {
     public static let version = 1
     public static let prefix = "cd1-"
@@ -484,6 +502,6 @@ public enum WorksError: Error, Sendable, Equatable {
     /// 带纯色格（`fc`）的布局还不能存成作品。预览和再导出已经按同一决定填这个颜色，但写盘仍拒绝。
     case unsupportedFilledCells
     /// 形状结果还不能存成作品。设计里的 manifest v2 要有 source / color / background / bits-v1 mask，由 S5 写入。
-    /// S3 只有预览和导出用的运行时掩码，不会写成另一种 formatVersion 2。
+    /// 形状 / 文字还不能按契约存：缺来源、掩码和网格不一致、编码不是 bits-v1，或只有运行时掩码。
     case unsupportedShapeSave
 }

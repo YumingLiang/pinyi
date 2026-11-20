@@ -67,15 +67,38 @@ extension AppCoordinator {
     /// - 其他（没有结果）：直接去选目标图，选好进确认页（素材沿用）。
     /// 生成中 / 导出中 / 提示弹着或保存中忽略。
     /// - Parameter workID: 发起的作品（选图提示「取消」时回到这张作品的查看页）。
-    public func startNewFromWorkTapped(workID: WorkID? = nil) {
+    public func startNewFromWorkTapped(workID: WorkID? = nil, savedShape: ShapeManifest? = nil, densityName: String? = nil,
+                                       openedPhotoWork: Bool = false) {
         guard !state.isGenerating, !state.export.isBusy, state.unsavedPrompt == nil, !state.isSavingBeforeLeaving,
               !state.flow.isQuickAgain else { return }
+        remakeOpenedPhotoWork = openedPhotoWork && savedShape == nil
+        if let savedShape, let choice = ShapeChoice(manifest: savedShape) {
+            remakeOpenedPhotoWork = false
+            shapeIdentity = choice
+            state.flow.shape = choice
+            if savedShape.spec.source.isText {
+                state.flow.settings.density = .fine
+            } else if let densityName, let density = DensityChoice(rawValue: densityName) {
+                state.flow.settings.density = density
+            }
+            nextQuickStartOrigin = workID.map { .work(id: $0) }
+            if state.flow.step == .result, case .result = state.flow.generation.phase {
+                state.flow.send(.shapeQuickAgainStarted)
+            } else if state.flow.step != .result {
+                state.flow.send(.freshShapeConfigStarted)
+            }
+            quickStartOrigin = nextQuickStartOrigin
+            return
+        }
         if state.canStartNewMosaic {
             nextQuickStartOrigin = workID.map { .work(id: $0) } ?? .preview
             startNewFromResult()
             return
         }
-        if case .result = state.flow.generation.phase { return }
+        if case .result = state.flow.generation.phase {
+            remakeOpenedPhotoWork = false
+            return
+        }
         // 发起页（产品 03:16 / 02:35 口径）：从作品查看页点的就回作品查看页——包括「再调一调」途中进作品页点的
         // （查看页下面的主流程恢复成「再调一调」设置页，原目标图和「完成」都在，从查看页返回即到）。
         // 没有作品 ID（旧调用）时，「再调一调」途中按设置页发起算。
@@ -92,11 +115,17 @@ extension AppCoordinator {
     }
 
     private func beginFreshQuickStart() {
+        let photoWork = remakeOpenedPhotoWork
+        remakeOpenedPhotoWork = false
+        if photoWork {
+            shapeIdentity = nil
+            state.flow.shape = nil
+        }
         pendingTarget = nil
         // 选图页 / 确认页里选过的照片会直接写 `target`（没有旧结果要保护的普通流程就是这样）；
         // 「取消」回发起页时要把进来前的目标图和代次原样放回（P1-2：「再调一调」回去仍是原目标图、主按钮仍是「完成」）。
         targetBeforeFreshQuickStart = (target, targetGeneration)
-        if currentResultIsShape {
+        if currentResultIsShape, !photoWork {
             realignShapeChoiceWithResult()
             settingsBeforeQuickAgain = (state.flow.settings, state.flow.source.selection)
             state.flow.send(.freshShapeConfigStarted)
@@ -161,6 +190,7 @@ extension AppCoordinator {
     public func unsavedPromptCancel() {
         state.unsavedPrompt = nil
         state.unsavedPromptIsUpdate = false
+        remakeOpenedPhotoWork = false
     }
 
     /// 弹窗被收起（点弹窗外面、系统收起；按钮点击时 SwiftUI 也会调）。等这一轮按钮动作做完再看：提示还是同一个、
@@ -193,9 +223,15 @@ extension AppCoordinator {
 
     /// 照片去选目标照片；形状回到形状配置。结果、预览、「已存」状态都不动。
     private func beginQuickAgain() {
+        let photoWork = remakeOpenedPhotoWork
+        remakeOpenedPhotoWork = false
+        if photoWork {
+            shapeIdentity = nil
+            state.flow.shape = nil
+        }
         pendingTarget = nil
         settingsBeforeQuickAgain = (state.flow.settings, state.flow.source.selection)
-        if currentResultIsShape {
+        if currentResultIsShape, !photoWork {
             realignShapeChoiceWithResult()
             state.flow.send(.shapeQuickAgainStarted)
         } else {

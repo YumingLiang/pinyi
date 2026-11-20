@@ -118,8 +118,14 @@ public actor FileWorksStore: WorksStore {
     // MARK: 保存
 
     public func save(_ draft: WorkDraft) async throws -> WorkSaveResult {
+        var draft = draft
+        if let manifest = draft.layout.shapeManifest, draft.layout.shapeFrame == nil {
+            draft.layout.shapeFrame = ShapeFrame(background: manifest.spec.background, mask: manifest.mask)
+        }
+        if draft.layout.shapeManifest != nil { draft.overlayAlpha = 0 }
         if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
-        if draft.layout.shapeFrame != nil { throw WorksError.unsupportedShapeSave }
+        // 只有带齐来源、配色、背景和网格一致的 bits-v1 掩码才写形状 / 文字。光有运行时掩码、损坏掩码仍拒绝。
+        if !draft.layout.canPersistShape { throw WorksError.unsupportedShapeSave }
         let fingerprint = WorkFingerprint.of(draft.layout)
         // actor 在 await 处可重入：同一张正在写（新存或更新叠加）时，后来者先等它写完，再按磁盘上的最新状态决定
         var waited: UUID?
@@ -149,8 +155,8 @@ public actor FileWorksStore: WorksStore {
     }
 
     private func write(_ draft: WorkDraft, layoutData: Data, fingerprint: String) async throws -> WorkSummary {
-        // 预览和再导出已经按同一 `cellPaint` 读 `fc`。带 `fc` 或形状的作品仍不写盘：Apple 像素验收通过之前不解除这两道守护。
         if draft.layout.cellAssignments.contains(where: { $0.fill != nil }) { throw WorksError.unsupportedFilledCells }
+        if !draft.layout.canPersistShape { throw WorksError.unsupportedShapeSave }
         let fm = FileManager.default
         let id = WorkID()
         let temp = directory.appendingPathComponent(Self.tempPrefix + id.directoryName, isDirectory: true)
@@ -163,7 +169,8 @@ public actor FileWorksStore: WorksStore {
                                                         overlayAlpha: draft.overlayAlpha,
                                                         maxLongEdge: WorkImageLimits.previewLongEdge, fallbacks: [:], into: temp)
             var targetFile: String?
-            if let t = draft.target {
+            // 形状 / 文字不存合成目标图。再导出靠格子分配和冻结掩码，不靠那张渐变图。
+            if draft.layout.shapeManifest == nil, let t = draft.target {
                 targetFile = try await images.writeTarget(t, maxLongEdge: WorkImageLimits.targetLongEdge, into: temp).fileName
             }
             let ids = draft.layout.uniqueAssetIDs

@@ -1,7 +1,7 @@
 import XCTest
 @testable import MosaicAppCore
 
-/// 形状结果不能存。离开、返回、再拼、取消都不能弹出带保存的 `quick.unsaved`，也不能把保存错误吞掉。
+/// 形状结果可以存到作品。没存时离开和再拼按普通作品提示；已存则不提示。只有运行时掩码的布局仍拒绝写盘。
 @MainActor
 final class ShapeLeaveTests: XCTestCase {
     private func shapeResult(background: ShapeBackground = .white) async throws -> (CoordinatorHarness, FakeResultSaver) {
@@ -27,7 +27,7 @@ final class ShapeLeaveTests: XCTestCase {
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertNotNil(c.product?.shapeFrame)
         XCTAssertEqual(c.product?.shapeBackground, background)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
         return (h, saver)
     }
 
@@ -36,7 +36,11 @@ final class ShapeLeaveTests: XCTestCase {
         let c = h.coordinator
         let product = c.product
         c.startNewMosaicTapped()
-        XCTAssertNil(c.state.unsavedPrompt, "再拼一张不弹带保存的提示")
+        XCTAssertEqual(c.state.unsavedPrompt, .startNew, "没存的形状再拼要提示")
+        c.unsavedPromptCancel()
+        s.savedRevision = c.state.resultRevision
+        c.startNewMosaicTapped()
+        XCTAssertNil(c.state.unsavedPrompt, "已存的形状再拼不弹提示")
         XCTAssertFalse(c.state.unsavedPromptIsUpdate)
         XCTAssertEqual(s.saveCalls, 0)
         XCTAssertEqual(c.state.flow.step, .settings, "图形再拼回到形状配置，不打开选目标照片")
@@ -53,7 +57,7 @@ final class ShapeLeaveTests: XCTestCase {
         c.flowSend(.back)
         XCTAssertEqual(c.state.flow.step, .result)
         XCTAssertNil(c.state.unsavedPrompt)
-        XCTAssertFalse(c.allowsWorkSave)
+        XCTAssertTrue(c.allowsWorkSave)
         XCTAssertNotNil(c.product?.shapeFrame)
         c.stop()
     }
@@ -62,7 +66,8 @@ final class ShapeLeaveTests: XCTestCase {
         let (h, s) = try await shapeResult(background: .black)
         let c = h.coordinator
         c.leaveResultTapped()
-        XCTAssertNil(c.state.unsavedPrompt)
+        XCTAssertEqual(c.state.unsavedPrompt, .leaveResult)
+        c.unsavedPromptDiscard()
         XCTAssertEqual(s.saveCalls, 0)
         XCTAssertEqual(c.state.flow.step, .target)
         XCTAssertNil(c.product)
@@ -75,6 +80,7 @@ final class ShapeLeaveTests: XCTestCase {
         let (h, s) = try await shapeResult()
         let c = h.coordinator
         let id = WorkID()
+        s.savedRevision = c.state.resultRevision
         c.startNewFromWorkTapped(workID: id)
         XCTAssertNil(c.state.unsavedPrompt)
         XCTAssertEqual(s.saveCalls, 0)
@@ -106,9 +112,10 @@ final class ShapeLeaveTests: XCTestCase {
         let images = FakeWorkImages()
         let store = FileWorksStore(directory: dir, images: images)
         let layout = MosaicLayout(product: product, overlayAlpha: 0.25)
+        XCTAssertNil(layout.shapeManifest)
         do {
             _ = try await store.save(WorkDraft(layout: layout, target: nil, overlayAlpha: 0, origin: .savedManually))
-            XCTFail("生成出来的形状结果仍应在写盘前拒绝")
+            XCTFail("只有运行时掩码、没有 manifest 的形状仍要拒绝")
         } catch let error as WorksError {
             XCTAssertEqual(error, .unsupportedShapeSave)
         }
