@@ -68,8 +68,8 @@ struct LiveMosaicExporter: MosaicExporting {
         ctx.interpolationQuality = .high
 
         let fallbacks = request.cellFallbacks
-        let ids = request.layout.cellAssignments.map { $0.localIdentifier.isEmpty ? nil : $0.localIdentifier }
-        let steps = ShapeStripExport.steps(columns: columns, rows: plan.rows, cellPixels: cp, shape: request.layout.shapeFrame)
+        let layout = request.layout
+        let steps = ShapeStripExport.steps(columns: columns, rows: plan.rows, cellPixels: cp, shape: layout.shapeFrame)
         let thumbs = thumbnails
         let hq: ThumbnailRequest = {
             var r = ThumbnailRequest(targetPixelSize: cp)
@@ -90,7 +90,9 @@ struct LiveMosaicExporter: MosaicExporting {
                     let step = steps[next]
                     let i = step.index
                     next += 1
-                    if let background = step.background {
+                    let paint = layout.cellPaint(at: i, outsideBackground: step.background, hasFallback: fallbacks[i] != nil)
+                    switch paint {
+                    case .shapeBackground(let background):
                         let (r, g, b) = background.srgb8
                         ctx.setFillColor(CGColor(colorSpace: cs, components: [
                             CGFloat(r) / 255, CGFloat(g) / 255, CGFloat(b) / 255, 1,
@@ -99,10 +101,18 @@ struct LiveMosaicExporter: MosaicExporting {
                         ctx.fill(CGRect(x: col * cp, y: h - (row + 1) * cp, width: cp, height: cp))
                         done += 1
                         continue
-                    }
-                    if let tile = fallbacks[i] {
+                    case .fill(let color):
+                        // 纯色格不是糊格，也不是白格，不进 ExportFillStats。
+                        ctx.setFillColor(CGColor(colorSpace: cs, components: [
+                            CGFloat(color.r) / 255, CGFloat(color.g) / 255, CGFloat(color.b) / 255, 1,
+                        ])!)
+                        let col = i % columns, row = i / columns
+                        ctx.fill(CGRect(x: col * cp, y: h - (row + 1) * cp, width: cp, height: cp))
+                        done += 1
+                        continue
+                    case .fallback:
                         let drawn: Bool = autoreleasepool {
-                            guard let img = ImagePixels.cgImage(tile) else { return false }
+                            guard let tile = fallbacks[i], let img = ImagePixels.cgImage(tile) else { return false }
                             let col = i % columns, row = i / columns
                             ctx.draw(img, in: CGRect(x: col * cp, y: h - (row + 1) * cp, width: cp, height: cp))
                             return true
@@ -110,24 +120,29 @@ struct LiveMosaicExporter: MosaicExporting {
                         fills.record(step: step, fill: drawn ? .blurryFallback : .blank)
                         done += 1
                         continue
-                    }
-                    guard let id = ids[i] else { fills.record(step: step, fill: .blank); done += 1; continue }
-                    group.addTask {
-                        let hqResult = await thumbs.thumbnail(for: id, request: hq)
-                        switch ExportFillStats.decision(afterHighQuality: hqResult) {
-                        case .highQuality:
-                            if case .image(let pb) = hqResult { return (i, pb, .highQuality) }
-                            return (i, nil, .blank)
-                        case .blank:
-                            return (i, nil, .blank)
-                        case .tryScanDisplay:
-                            if case .image(let pb) = await thumbs.thumbnail(for: id, request: .scanDisplay) {
-                                return (i, pb, .blurryFallback)
+                    case .blank:
+                        fills.record(step: step, fill: .blank)
+                        done += 1
+                        continue
+                    case .photo(let id, _):
+                        let captured = id
+                        group.addTask {
+                            let hqResult = await thumbs.thumbnail(for: captured, request: hq)
+                            switch ExportFillStats.decision(afterHighQuality: hqResult) {
+                            case .highQuality:
+                                if case .image(let pb) = hqResult { return (i, pb, .highQuality) }
+                                return (i, nil, .blank)
+                            case .blank:
+                                return (i, nil, .blank)
+                            case .tryScanDisplay:
+                                if case .image(let pb) = await thumbs.thumbnail(for: captured, request: .scanDisplay) {
+                                    return (i, pb, .blurryFallback)
+                                }
+                                return (i, nil, .blank)
                             }
-                            return (i, nil, .blank)
                         }
+                        return
                     }
-                    return
                 }
             }
             for _ in 0..<Self.maxInFlight { enqueue() }

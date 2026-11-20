@@ -71,29 +71,44 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .medium
         let steps = ShapeStripExport.steps(columns: layout.cols, rows: layout.rows, cellPixels: cp, shape: layout.shapeFrame)
-        for step in steps {
-            guard let background = step.background else { continue }
-            let (r, g, b) = background.srgb8
+        var outsideBackground = [ShapeBackground?](repeating: nil, count: layout.cellCount)
+        for step in steps where step.index < outsideBackground.count {
+            outsideBackground[step.index] = step.background
+        }
+        func paint(_ index: Int, hasFallback: Bool) -> CellPaint {
+            layout.cellPaint(at: index, outsideBackground: index < outsideBackground.count ? outsideBackground[index] : nil,
+                             hasFallback: hasFallback)
+        }
+        func fillRect(_ index: Int, _ r: UInt8, _ g: UInt8, _ b: UInt8) {
             ctx.setFillColor(CGColor(colorSpace: cs, components: [
                 CGFloat(r) / 255, CGFloat(g) / 255, CGFloat(b) / 255, 1,
             ])!)
-            let cx = step.index % layout.cols, cy = step.index / layout.cols
+            let cx = index % layout.cols, cy = index / layout.cols
             ctx.fill(CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
         }
+        for step in steps {
+            guard case .shapeBackground(let background) = paint(step.index, hasFallback: false) else { continue }
+            let (r, g, b) = background.srgb8
+            fillRect(step.index, r, g, b)
+        }
+        for step in steps {
+            guard case .fill(let color) = paint(step.index, hasFallback: false) else { continue }
+            fillRect(step.index, color.r, color.g, color.b)
+        }
 
-        // 兜底格：不取照片，旧预览裁出的小图放大填满（双线性 / .high，不用最近邻）。形状外不画兜底图。
+        // 没有 fc 的兜底格：不取照片，小图放大填满（双线性 / .high，不用最近邻）。形状外和 fc 格不画兜底图。
         ctx.interpolationQuality = .high
-        let outside = Set(steps.compactMap { $0.background == nil ? nil : $0.index })
-        for (cell, tile) in fallbacks where cell < layout.cellCount && !outside.contains(cell) {
+        for (cell, tile) in fallbacks where cell < layout.cellCount {
+            guard case .fallback = paint(cell, hasFallback: true) else { continue }
             guard let img = ImagePixels.cgImage(tile) else { continue }
             let cx = cell % layout.cols, cy = cell / layout.cols
             ctx.draw(img, in: CGRect(x: cx * cp, y: h - (cy + 1) * cp, width: cp, height: cp))
         }
         ctx.interpolationQuality = .medium
 
-        let ids: [String?] = layout.cellAssignments.enumerated().map { i, c in
-            if outside.contains(i) { return nil }
-            return c.localIdentifier.isEmpty || fallbacks[i] != nil ? nil : c.localIdentifier
+        let ids: [String?] = (0..<layout.cellCount).map { i in
+            guard case .photo(let id, _) = paint(i, hasFallback: fallbacks[i] != nil) else { return nil }
+            return id
         }
         let cols = layout.cols
         let thumbs = thumbnails
