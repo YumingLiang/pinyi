@@ -8,6 +8,7 @@ struct ShapeTextLinesEditor: View {
     var onCommit: (_ index: Int, _ text: String, _ secondLineIsComposing: Bool) -> Void
     @State private var focus: Int?
     @State private var marks = ShapeTextMarks()
+    @State private var handoff = ShapeTextFocusHandoff()
 
     var body: some View {
         let normalized = TextDraftEditor.normalized(lines)
@@ -19,10 +20,7 @@ struct ShapeTextLinesEditor: View {
                                onBegin: { focus = 0 },
                                onReturn: { field in
                                    focus = 1
-                                   // 回车处理还没结束时立刻抢焦点会被系统拉回第一行，所以放到下一轮。
-                                   DispatchQueue.main.async {
-                                       _ = field.window?.textField(identifier: "shape-text-1")?.becomeFirstResponder()
-                                   }
+                                   handoff.move(to: 1, anchor: field)
                                })
             ShapeTextLineField(title: L10nKey.shapeTextLine2.localized, text: normalized[1], identifier: "shape-text-1",
                                isFocused: focus == 1,
@@ -31,10 +29,47 @@ struct ShapeTextLinesEditor: View {
                                onBegin: { focus = 1 },
                                onReturn: { field in
                                    focus = nil
-                                   DispatchQueue.main.async {
-                                       _ = field.resignFirstResponder()
-                                   }
+                                   handoff.move(to: nil, anchor: field)
                                })
+        }
+    }
+}
+
+/// 回车交代的最新目标。下一轮只执行这一次，后一次盖过还没执行的前一次。
+/// 不在 `updateUIView` 里改第一响应者，避免更新过程中再写焦点状态。
+final class ShapeTextFocusHandoff {
+    private var desired: Int?
+    private var scheduled = false
+    private weak var anchor: UIView?
+
+    func move(to index: Int?, anchor: UIView) {
+        desired = index
+        self.anchor = anchor
+        guard !scheduled else { return }
+        scheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.scheduled = false
+            self.apply()
+        }
+    }
+
+    private func apply() {
+        let root = anchor?.window ?? anchor
+        guard let root else { return }
+        let line0 = root.textField(identifier: "shape-text-0")
+        let line1 = root.textField(identifier: "shape-text-1")
+        let target: UITextField?
+        switch desired {
+        case 0: target = line0
+        case 1: target = line1
+        default: target = nil
+        }
+        for field in [line0, line1].compactMap({ $0 }) where field !== target && field.isFirstResponder {
+            _ = field.resignFirstResponder()
+        }
+        if let target, !target.isFirstResponder {
+            _ = target.becomeFirstResponder()
         }
     }
 }
@@ -88,19 +123,16 @@ final class ShapeTextFieldAdapter: NSObject, UITextFieldDelegate {
     private var applyingModel = false
 
     /// 模型拒绝后把控件文本拉回，并把光标放在拉回后的正文里。组合中不动。
+    /// 焦点移交不在这里做：更新过程中抢第一响应者会再写 `@State`，形成属性图循环。
+    /// `focused` 只随这一轮更新传入，避免闭包停在旧的焦点上。
     func sync(modelText: String, focused: Bool, field: UITextField) {
-        if focused, !field.isFirstResponder {
-            field.becomeFirstResponder()
-        }
+        _ = focused
         if field.markedTextRange == nil, field.text != modelText {
             applyingModel = true
             field.text = modelText
             // 整次拒绝后，光标停在拉回的正文末尾。不截断，也不另造一个输入框。
             placeCaret(field, utf16: (modelText as NSString).length)
             applyingModel = false
-        }
-        if !focused, field.isFirstResponder {
-            field.resignFirstResponder()
         }
     }
 
