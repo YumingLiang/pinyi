@@ -316,13 +316,15 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
         let dir = saved.summary.previewURL.deletingLastPathComponent()
         let fallbackURL = dir.appendingPathComponent("fallback-kept.jpg")
         try writeSolidJPEG(to: fallbackURL, width: 8, height: 8, r: sentinel.r, g: sentinel.g, b: sentinel.b)
-        var meta = saved.summary.meta
-        meta.fallbackFile = fallbackURL.lastPathComponent
-        try FileWorksStore.encoder().encode(meta).write(to: dir.appendingPathComponent("meta.json"), options: .atomic)
+        let metaURL = dir.appendingPathComponent("meta.json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)) as? [String: Any])
+        object["fallbackFile"] = fallbackURL.lastPathComponent
+        try JSONSerialization.data(withJSONObject: object).write(to: metaURL, options: .atomic)
         let before = try await store.load(saved.summary.id)
         XCTAssertEqual(before.meta.fallbackFile, "fallback-kept.jpg")
         XCTAssertTrue(before.meta.needsFallbackMigration)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fallbackURL.path), "打开前已登记的兜底文件还在")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fallbackURL.path),
+                      "Remains 只指打开前：已登记且文件还在。迁移提交后才会被文件管理删掉")
         let previewURL = before.summary.previewURL
 
         let log = ProductionReadLog()
