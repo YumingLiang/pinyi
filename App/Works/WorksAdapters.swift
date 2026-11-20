@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import os
 import Photos
 import UniformTypeIdentifiers
 import MosaicCore
@@ -148,7 +149,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
     }
 
     func readTarget(at url: URL) async throws -> PixelBuffer {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+        guard let src = Self.imageSource(at: url),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
               let pb = ImagePixels.opaqueSRGB(cg)
         else { throw ExportError.encodingFailed }
@@ -160,7 +161,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
         #if INTERNAL_TOOLS
         PreviewReadProbe.recordFileRead()
         #endif
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+        guard let src = Self.imageSource(at: url),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
               let pb = ImagePixels.opaqueSRGB(cg)
         else { throw ExportError.encodingFailed }
@@ -199,7 +200,7 @@ struct ImageIOWorkImages: WorkImageEncoding {
         #if INTERNAL_TOOLS
         PreviewReadProbe.recordFileRead()
         #endif
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        guard let src = imageSource(at: url) else { return nil }
         let opts = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -208,11 +209,37 @@ struct ImageIOWorkImages: WorkImageEncoding {
         ] as CFDictionary
         return CGImageSourceCreateThumbnailAtIndex(src, 0, opts)
     }
+
+    /// 三个会打开旧预览文件的生产入口都从这里走。没有测试观察者时不记路径。
+    static func imageSource(at url: URL) -> CGImageSource? {
+        ImageIOReadObservation.note(url)
+        return CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+    }
+}
+
+/// 测试安装的观察者。生产默认没有观察者，因此不保存路径。
+/// 只覆盖 `readImage` / `readTarget` / `loadImage`。看不到裸的 `open`。
+enum ImageIOReadObservation {
+    private static let handlers = OSAllocatedUnfairLock(initialState: [UUID: @Sendable (URL) -> Void]())
+
+    static func note(_ url: URL) {
+        let current = handlers.withLock { $0 }
+        for handler in current.values { handler(url) }
+    }
+
+    @discardableResult
+    static func install(_ handler: @escaping @Sendable (URL) -> Void) -> UUID {
+        let id = UUID()
+        handlers.withLock { $0[id] = handler }
+        return id
+    }
+
+    static func remove(_ id: UUID) {
+        handlers.withLock { $0[id] = nil }
+    }
 }
 
 #if INTERNAL_TOOLS
-import os
-
 /// 内测计数：列表和查看页读预览文件的真实入口是 `ImageIOWorkImages.loadImage` / `readImage`。
 /// 日志只有次数。不记路径、作品 ID、相册名或错误内容。不改变谁可以读。
 ///

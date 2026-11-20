@@ -8,30 +8,14 @@ import MosaicCore
 import MosaicAppCore
 @testable import PhotoMosaic
 
-/// 模拟器上的真实预览 JPEG 和再导出 JPEG。Linux 不编译这个文件。
-/// 这不是目标页或确认页的点击验收。
+/// 模拟器上的真实预览 JPEG 和 `.hd` 再导出。只比较像素。
+/// 不证明旧预览有没有被读取。Linux 不编译这个文件。不是页面点击验收。
 final class FilledCellPixelTests: XCTestCase {
-    private let inside = (r: UInt8(32), g: UInt8(96), b: UInt8(160))
-
-    func testFilledCellMatchesAcrossPreviewAndExportAndDoesNotOpenTheOldPreview() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("fc-pixel-\(UUID().uuidString)", isDirectory: true)
-        let oldDir = root.appendingPathComponent("old", isDirectory: true)
-        let outDir = root.appendingPathComponent("out", isDirectory: true)
-        try FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
+    func testPreviewAndExportMatchKnownFillAndShapeBackground() async throws {
+        let outDir = FileManager.default.temporaryDirectory.appendingPathComponent("fc-pixel-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let sentinel = root.appendingPathComponent("sentinel.jpg")
-        try writeSolidJPEG(to: sentinel, width: 8, height: 8, r: 255, g: 0, b: 255)
-        let sentinelBytes = try Data(contentsOf: sentinel)
-        XCTAssertGreaterThan(sentinelBytes.count, 0)
-        let oldPreview = oldDir.appendingPathComponent("preview.jpg")
-        let pipe = PreviewPipe(url: oldPreview)
-        defer { pipe.release() }
-        try await pipe.preload(sentinelBytes)
-        let consumed = pipe.takeBytes()
-        XCTAssertEqual(consumed, sentinelBytes, "正对照：从这个路径读走的就是预览字节")
-        try await pipe.preload(sentinelBytes)
-
+        defer { try? FileManager.default.removeItem(at: outDir) }
+        let inside = (r: UInt8(32), g: UInt8(96), b: UInt8(160))
         let mask = try CellMask(columns: 2, rows: 2, bitsV1: [0b0000_1101])
         let frame = ShapeFrame(background: .black, mask: mask)
         let cells = [
@@ -46,30 +30,28 @@ final class FilledCellPixelTests: XCTestCase {
                                   params: .init(overlayAlpha: 0.3, density: "coarse", seed: 4),
                                   shapeFrame: frame)
         let magenta = try solid(width: 4, height: 4, r: 255, g: 0, b: 255)
-        let fallbacks = [0: magenta, 1: magenta]
-        let thumbs = NoFetchThumbs()
-        let images = ImageIOWorkImages(thumbnails: thumbs)
-        let previewFile = try await images.writePreview(layout: layout, target: nil, overlayAlpha: 0.3,
-                                                        maxLongEdge: 320, fallbacks: fallbacks, into: outDir)
+        let previewFile = try await bounded(seconds: 20) {
+            try await ImageIOWorkImages(thumbnails: MissingThumbs()).writePreview(
+                layout: layout, target: nil, overlayAlpha: 0.3, maxLongEdge: 320,
+                fallbacks: [0: magenta, 1: magenta], into: outDir)
+        }
         let previewURL = outDir.appendingPathComponent(previewFile.fileName)
-        let request = ExportRequest(layout: layout, target: nil, overlayAlpha: 0.3, tier: .hd, cellFallbacks: fallbacks)
-        let exportURL = try await LiveMosaicExporter(thumbnails: thumbs).export(request) { _ in }
+        let request = ExportRequest(layout: layout, target: nil, overlayAlpha: 0.3, tier: .hd,
+                                    cellFallbacks: [0: magenta, 1: magenta])
+        let exportURL = try await bounded(seconds: 20) {
+            try await LiveMosaicExporter(thumbnails: MissingThumbs()).export(request) { _ in }
+        }
         defer { try? FileManager.default.removeItem(at: exportURL) }
-
-        XCTAssertEqual(pipe.takeBytes(), sentinelBytes, "真实预览和再导出没有读走旧预览里的字节")
-        XCTAssertEqual(thumbs.ids(), [], "fc 格和形状外不取照片")
 
         let preview = try XCTUnwrap(decodeJPEG(previewURL))
         let exported = try XCTUnwrap(decodeJPEG(exportURL))
-        let previewBytes = try bitmap(preview)
-        let exportBytes = try bitmap(exported)
-        let previewInside = sample(previewBytes, image: preview, index: 0)
-        let exportInside = sample(exportBytes, image: exported, index: 0)
+        let previewInside = sample(try bitmap(preview), image: preview, index: 0)
+        let exportInside = sample(try bitmap(exported), image: exported, index: 0)
         assertNear(previewInside, inside, tolerance: 8, label: "预览内格")
         assertNear(exportInside, inside, tolerance: 8, label: "导出内格")
         assertNear(previewInside, exportInside, tolerance: 8, label: "预览和再导出")
-        let previewOutside = sample(previewBytes, image: preview, index: 1)
-        let exportOutside = sample(exportBytes, image: exported, index: 1)
+        let previewOutside = sample(try bitmap(preview), image: preview, index: 1)
+        let exportOutside = sample(try bitmap(exported), image: exported, index: 1)
         assertNear(previewOutside, (r: 0, g: 0, b: 0), tolerance: 8, label: "预览形状外仍是背景")
         assertNear(exportOutside, (r: 0, g: 0, b: 0), tolerance: 8, label: "导出形状外仍是背景")
     }
@@ -116,6 +98,132 @@ final class FilledCellPixelTests: XCTestCase {
         return try PixelBuffer(width: width, height: height, bytes: bytes)
     }
 
+    private func decodeJPEG(_ url: URL) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(src, 0, nil)
+    }
+}
+
+/// 生产 ImageIO 入口对一张普通可 seek JPEG 的调用记录。
+/// 只覆盖 `readImage`、`readTarget`、`loadImage`。不是进程里的 `open` 次数。
+final class FilledCellImageIOReadTests: XCTestCase {
+    private let sentinel = (r: UInt8(255), g: UInt8(0), b: UInt8(255))
+
+    func testProductionEntriesDecodeTheSameSeekableJPEG() async throws {
+        let url = try seekableJPEG()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let log = ProductionReadLog()
+        defer { log.stop() }
+        log.reset()
+        let full = try await bounded(seconds: 5) {
+            try await ImageIOWorkImages(thumbnails: MissingThumbs()).readImage(at: url)
+        }
+        assertNear(center(full), sentinel, tolerance: 8, label: "readImage")
+        XCTAssertEqual(log.paths().filter { $0 == url.path }.count, 1)
+        log.reset()
+        let target = try await bounded(seconds: 5) {
+            try await ImageIOWorkImages(thumbnails: MissingThumbs()).readTarget(at: url)
+        }
+        assertNear(center(target), sentinel, tolerance: 8, label: "readTarget")
+        XCTAssertEqual(log.paths().filter { $0 == url.path }.count, 1)
+        log.reset()
+        let thumb = try await bounded(seconds: 5) { ImageIOWorkImages.loadImage(url, maxPixel: 32) }
+        XCTAssertNotNil(thumb)
+        XCTAssertEqual(log.paths().filter { $0 == url.path }.count, 1)
+    }
+
+    func testDeliberateProductionReadBreaksAZeroClaim() async throws {
+        let url = try seekableJPEG()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let log = ProductionReadLog()
+        defer { log.stop() }
+        log.reset()
+        _ = try await ImageIOWorkImages(thumbnails: MissingThumbs()).readImage(at: url)
+        XCTAssertEqual(log.paths().filter { $0 == url.path }.count, 1, "故意走生产 readImage 必须留下记录，否则零调用断言没有敏感性")
+    }
+
+    func testRawOpenAndCloseIsOutsideThisObservation() throws {
+        let url = try seekableJPEG()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let log = ProductionReadLog()
+        defer { log.stop() }
+        log.reset()
+        let fd = Darwin.open(url.path, O_RDONLY)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        _ = Darwin.close(fd)
+        XCTAssertEqual(log.paths().filter { $0 == url.path }.count, 0, "裸 open/close 不在这次观察里，空记录不是 0 次 open")
+    }
+
+    func testWritePreviewAndExportDoNotCallProductionImageIOOnTheOldPreview() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("fc-read-\(UUID().uuidString)", isDirectory: true)
+        let outDir = root.appendingPathComponent("out", isDirectory: true)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let oldPreview = root.appendingPathComponent("preview.jpg")
+        try writeSolidJPEG(to: oldPreview, width: 8, height: 8, r: sentinel.r, g: sentinel.g, b: sentinel.b)
+        try assertSeekableFile(oldPreview)
+        let log = ProductionReadLog()
+        defer { log.stop() }
+        log.reset()
+        let proved = try await bounded(seconds: 5) {
+            try await ImageIOWorkImages(thumbnails: MissingThumbs()).readImage(at: oldPreview)
+        }
+        assertNear(center(proved), sentinel, tolerance: 8, label: "同一路径的生产解码")
+        XCTAssertEqual(log.paths().filter { $0 == oldPreview.path }.count, 1)
+        log.reset()
+
+        let mask = try CellMask(columns: 2, rows: 2, bitsV1: [0b0000_1101])
+        let layout = MosaicLayout(cols: 2, rows: 2, cellAssignments: [
+            MosaicLayout.CellAssignment(localIdentifier: "", fill: CellColor(r: 32, g: 96, b: 160)),
+            MosaicLayout.CellAssignment(localIdentifier: ""),
+            MosaicLayout.CellAssignment(localIdentifier: ""),
+            MosaicLayout.CellAssignment(localIdentifier: ""),
+        ], targetSize: .init(width: 32, height: 32), targetCrop: CropRect(x: 0, y: 0, width: 32, height: 32),
+           params: .init(overlayAlpha: 0, density: "coarse", seed: 4),
+           shapeFrame: ShapeFrame(background: .black, mask: mask))
+        _ = try await bounded(seconds: 20) {
+            try await ImageIOWorkImages(thumbnails: MissingThumbs()).writePreview(
+                layout: layout, target: nil, overlayAlpha: 0, maxLongEdge: 320, fallbacks: [:], into: outDir)
+        }
+        let request = ExportRequest(layout: layout, target: nil, tier: .hd)
+        let exportURL = try await bounded(seconds: 20) {
+            try await LiveMosaicExporter(thumbnails: MissingThumbs()).export(request) { _ in }
+        }
+        defer { try? FileManager.default.removeItem(at: exportURL) }
+        XCTAssertEqual(log.paths().filter { $0 == oldPreview.path }.count, 0,
+                       "writePreview 和再导出没有调用 readImage / readTarget / loadImage。这不是 0 次 open")
+    }
+
+    private func seekableJPEG() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("fc-seek-\(UUID().uuidString).jpg")
+        try writeSolidJPEG(to: url, width: 8, height: 8, r: sentinel.r, g: sentinel.g, b: sentinel.b)
+        try assertSeekableFile(url)
+        return url
+    }
+
+    private func assertSeekableFile(_ url: URL) throws {
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        XCTAssertEqual(values.isRegularFile, true)
+        XCTAssertGreaterThan(values.fileSize ?? 0, 0)
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: 0)
+        XCTAssertGreaterThan(try handle.seekToEnd(), 0)
+    }
+
+    private func center(_ buffer: PixelBuffer) -> (r: UInt8, g: UInt8, b: UInt8) {
+        let x = buffer.width / 2, y = buffer.height / 2
+        let o = y * buffer.bytesPerRow + x * 4
+        return (buffer.bytes[o], buffer.bytes[o + 1], buffer.bytes[o + 2])
+    }
+
+    private func assertNear(_ pixel: (r: UInt8, g: UInt8, b: UInt8), _ expected: (r: UInt8, g: UInt8, b: UInt8),
+                            tolerance: Int, label: String) {
+        for pair in [(pixel.r, expected.r), (pixel.g, expected.g), (pixel.b, expected.b)] {
+            XCTAssertLessThanOrEqual(abs(Int(pair.0) - Int(pair.1)), tolerance, "\(label) \(pixel)")
+        }
+    }
+
     private func writeSolidJPEG(to url: URL, width: Int, height: Int, r: UInt8, g: UInt8, b: UInt8) throws {
         let cs = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
         let ctx = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -126,118 +234,48 @@ final class FilledCellPixelTests: XCTestCase {
         ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
         let image = try XCTUnwrap(ctx.makeImage())
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
-            return XCTFail("写不出旧预览")
+            return XCTFail("写不出 jpeg")
         }
         CGImageDestinationAddImage(dest, image, nil)
         XCTAssertTrue(CGImageDestinationFinalize(dest))
     }
-
-    private func decodeJPEG(_ url: URL) -> CGImage? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(src, 0, nil)
-    }
 }
 
-/// 旧预览放在 FIFO 里。iOS 的公开 vnode 事件没有 `NOTE_OPEN`，kqueue 报不了“被打开”。
-/// 这里观察的是读走的字节：正对照把整段 JPEG 读走；渲染之后同一段还在，才算没有读。
-/// 只打开、一个字节都不读的调用不在这次观察里。ImageIO 解码会读字节。
-private final class PreviewPipe {
-    let url: URL
-    private var reader: Int32 = -1
+private struct MissingThumbs: ThumbnailProviding {
+    func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult { .missing }
+}
 
-    init(url: URL) {
-        self.url = url
-    }
+private final class ProductionReadLog: @unchecked Sendable {
+    private let urls = OSAllocatedUnfairLock(initialState: [String]())
+    private let token: UUID
 
-    func release() {
-        if reader >= 0 {
-            releaseDescriptor(reader)
-            reader = -1
+    init() {
+        let urls = self.urls
+        token = ImageIOReadObservation.install { url in
+            urls.withLock { $0.append(url.path) }
         }
     }
 
-    func preload(_ data: Data) async throws {
-        release()
-        if FileManager.default.fileExists(atPath: url.path) {
-            unlink(url.path)
-        }
-        guard mkfifo(url.path, 0o600) == 0 else { throw pipeError() }
-        let path = url.path
-        let readerFd: Int32 = try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let opened = DispatchSemaphore(value: 0)
-                let stored = OSAllocatedUnfairLock(initialState: Int32(-1))
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let fd = Darwin.open(path, O_RDONLY)
-                    stored.withLock { $0 = fd }
-                    opened.signal()
-                }
-                let writer = Darwin.open(path, O_WRONLY)
-                opened.wait()
-                let fd = stored.withLock { $0 }
-                guard writer >= 0, fd >= 0 else {
-                    if writer >= 0 { releaseDescriptor(writer) }
-                    if fd >= 0 { releaseDescriptor(fd) }
-                    continuation.resume(throwing: pipeError())
-                    return
-                }
-                var offset = 0
-                let ok: Bool = data.withUnsafeBytes { raw in
-                    guard let base = raw.baseAddress else { return false }
-                    while offset < raw.count {
-                        let n = Darwin.write(writer, base + offset, raw.count - offset)
-                        if n < 0 {
-                            if errno == EINTR { continue }
-                            return false
-                        }
-                        offset += n
-                    }
-                    return true
-                }
-                releaseDescriptor(writer)
-                guard ok else {
-                    releaseDescriptor(fd)
-                    continuation.resume(throwing: pipeError())
-                    return
-                }
-                continuation.resume(returning: fd)
-            }
-        }
-        reader = readerFd
-    }
-
-    func takeBytes() -> Data {
-        guard reader >= 0 else { return Data() }
-        var out = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let n = Darwin.read(reader, &buffer, buffer.count)
-            if n == 0 { break }
-            if n < 0 {
-                if errno == EINTR { continue }
-                break
-            }
-            out.append(contentsOf: buffer.prefix(n))
-        }
-        return out
-    }
+    func stop() { ImageIOReadObservation.remove(token) }
+    func reset() { urls.withLock { $0.removeAll() } }
+    func paths() -> [String] { urls.withLock { $0 } }
 }
 
-private func releaseDescriptor(_ fd: Int32) {
-    _ = Darwin.close(fd)
-}
-
-private func pipeError() -> POSIXError {
-    POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-}
-
-private final class NoFetchThumbs: ThumbnailProviding, @unchecked Sendable {
-    private let fetched = OSAllocatedUnfairLock(initialState: [String]())
-
-    func ids() -> [String] { fetched.withLock { $0 } }
-
-    func thumbnail(for assetID: String, request: ThumbnailRequest) async -> ThumbnailResult {
-        fetched.withLock { $0.append(assetID) }
-        return .missing
+private func bounded<T: Sendable>(seconds: TimeInterval, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+    let box = OSAllocatedUnfairLock<(Result<T, Error>)?>(initialState: nil)
+    let done = XCTestExpectation(description: "bounded")
+    Task {
+        let result: Result<T, Error>
+        do { result = .success(try await work()) }
+        catch { result = .failure(error) }
+        box.withLock { $0 = result }
+        done.fulfill()
     }
+    let outcome = await XCTWaiter().fulfillment(of: [done], timeout: seconds)
+    guard outcome == .completed else {
+        XCTFail("操作超过 \(seconds) 秒")
+        throw CocoaError(.userCancelled)
+    }
+    let result = try XCTUnwrap(box.withLock { $0 })
+    return try result.get()
 }
