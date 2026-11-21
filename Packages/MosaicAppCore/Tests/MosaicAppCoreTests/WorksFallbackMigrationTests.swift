@@ -91,14 +91,30 @@ final class WorksFallbackMigrationTests: XCTestCase {
         XCTAssertTrue(plain.needsFallbackMigration, "任何还登记着的兜底图都要迁移")
     }
 
-    /// 打开：旧兜底图删掉、格子改填目标色、重画预览、写当前版本；哨兵色哪儿都不出现（预览、兜底、导出）。
+    /// 自动打开不迁移。显式 `reconcileMissing` 仍删旧兜底图、填目标色、重画预览。
     func testOpenMigratesAndSentinelNeverAppears() async throws {
         let h = Harness()
         let id = try await h.legacyWork()
         let oldAtlas = try await h.store.load(id).meta.fallbackFile
+        let wdir = h.dir.appendingPathComponent(id.directoryName, isDirectory: true)
+        func snapshot() throws -> [String: Data] {
+            var r: [String: Data] = [:]
+            for f in try FileManager.default.contentsOfDirectory(atPath: wdir.path) { r[f] = try Data(contentsOf: wdir.appendingPathComponent(f)) }
+            return r
+        }
+        let before = try snapshot()
         await h.controller.start()
-        XCTAssertTrue(h.controller.state.summaries.first { $0.id == id }?.showsPlaceholder ?? false)
+        XCTAssertFalse(h.controller.state.summaries.contains { $0.id == id }, "要迁移的作品不进自动列表，也不封住别的作品")
+        XCTAssertEqual(h.controller.unsettled.first { $0.id == id }?.reason, .needsMigration)
+        await h.controller.open(id)
+        XCTAssertEqual(h.controller.state.notice, .worksOpenFailed)
+        XCTAssertEqual(try snapshot(), before, "自动打开不改旧作品")
         let readsBefore = h.images.state.get().imageReads
+        let loaded = try await h.store.load(id)
+        let reconciled = await h.controller.reconcileMissing(loaded)
+        let outcome = try XCTUnwrap(reconciled)
+        await h.controller.apply(outcome)
+        await h.controller.reload()
         await h.controller.open(id)
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(work.meta.fallbackVersion, WorkMeta.currentFallbackVersion)
@@ -154,15 +170,22 @@ final class WorksFallbackMigrationTests: XCTestCase {
         await h.controller.start()
         XCTAssertTrue(h.controller.state.limitedAccess)
         await h.controller.open(id)
-        XCTAssertEqual(h.controller.state.openedPreviewDisplay, .limitedAccess)
+        XCTAssertEqual(h.controller.state.notice, .worksOpenFailed)
+        XCTAssertNil(h.controller.openedWork)
         await h.controller.exportOpenedTapped(purpose: .save)
-        let fb = try XCTUnwrap(h.exporter.fallbacks.last)
-        XCTAssertTrue(Self.near(fb[1], Self.red) && Self.near(fb[4], Self.cyan), "\(fb)")
+        XCTAssertTrue(h.exporter.calls.isEmpty, "打不开的旧作品不会被导出补格")
         XCTAssertEqual(try snapshot(), before, "受限访问下作品目录逐字节不变")
 
         h.existence.fullAccess.set(true)
         await h.controller.refreshLibraryAccess()
         XCTAssertFalse(h.controller.state.limitedAccess)
+        XCTAssertEqual(try snapshot(), before, "权限恢复后的自动刷新也不迁移")
+        let loaded = try await h.store.load(id)
+        let reconciled = await h.controller.reconcileMissing(loaded)
+        let outcome = try XCTUnwrap(reconciled)
+        await h.controller.apply(outcome)
+        await h.controller.reload()
+        await h.controller.open(id)
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(work.meta.fallbackVersion, WorkMeta.currentFallbackVersion)
         XCTAssertNil(work.meta.fallbackFile)
@@ -183,6 +206,13 @@ final class WorksFallbackMigrationTests: XCTestCase {
         let id = try await h.legacyWork()
         await h.controller.start()
         await h.controller.open(id)
+        XCTAssertEqual(rm.calls.get(), 0, "自动打开不跑补格")
+        let loaded = try await h.store.load(id)
+        let reconciled = await h.controller.reconcileMissing(loaded)
+        let outcome = try XCTUnwrap(reconciled)
+        await h.controller.apply(outcome)
+        await h.controller.reload()
+        await h.controller.open(id)
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(rm.calls.get(), 1)
         XCTAssertEqual(work.layout.cellAssignments[1].localIdentifier, "x")
@@ -201,13 +231,16 @@ final class WorksFallbackMigrationTests: XCTestCase {
         _ = try await h.store.dropMissingPhotos(["b"], for: id, reasons: ["b": .hidden])
         await h.controller.start()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(rm.calls.get(), 1)
         h.controller.close()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(rm.calls.get(), 1, "没变化不重找")
         h.controller.close()
         h.controller.libraryDidChange()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(rm.calls.get(), 2, "相册变了再找一次")
         h.controller.stop()
     }

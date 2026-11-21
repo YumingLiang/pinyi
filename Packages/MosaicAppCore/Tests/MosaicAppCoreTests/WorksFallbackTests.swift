@@ -85,6 +85,7 @@ final class WorksFallbackTests: XCTestCase {
         await h.controller.start()
         h.existence.delete("a")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["3"]))
         let meta = try await h.store.load(id).meta
         XCTAssertEqual(meta.fallbackCellCount, 3)
@@ -112,6 +113,7 @@ final class WorksFallbackTests: XCTestCase {
         h.existence.delete("b", "f")
         let reads = h.images.state.get().imageReads
         await h.controller.open(id)
+        await repairOpened(h.controller)
 
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(work.layout.cellAssignments.map(\.localIdentifier), ["a", "", "c", "d", "e", ""])
@@ -145,6 +147,7 @@ final class WorksFallbackTests: XCTestCase {
         await h.controller.start()
         h.existence.delete("c")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         let previews = h.images.state.get().previews
         await h.controller.exportOpenedTapped(purpose: .save)
@@ -218,6 +221,7 @@ final class WorksFallbackTests: XCTestCase {
         try Data("not an image".utf8).write(to: preview)
         h.existence.delete("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(work.layout, sampleColorLayout(["a", "", "c"], color: smallTargetColor))
         XCTAssertNil(work.meta.fallbackFile)
@@ -238,6 +242,7 @@ final class WorksFallbackTests: XCTestCase {
         h.images.state.update { $0.failAt = .preview }
         h.existence.delete("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertNil(h.controller.state.missingLine)
         XCTAssertEqual(try h.files(id), filesBefore)
         XCTAssertEqual(try Data(contentsOf: h.workDir(id).appendingPathComponent(FileWorksStore.metaFileName)).count, metaBefore.count, "只记待处理数")
@@ -248,6 +253,7 @@ final class WorksFallbackTests: XCTestCase {
         h.images.state.update { $0.failAt = nil }
         h.controller.close()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "", "c"], color: smallTargetColor))
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         h.controller.stop()

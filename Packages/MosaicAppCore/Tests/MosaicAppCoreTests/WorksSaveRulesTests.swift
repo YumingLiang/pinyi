@@ -521,6 +521,7 @@ final class WorksSaveButtonStateTests: XCTestCase {
         var obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)) as? [String: Any])
         obj["formatVersion"] = 1
         obj["overlayAlpha"] = 0.40
+        obj["fingerprint"] = WorkFingerprint.of(dup)   // 旧重复本身指纹和布局一致；对不上的是撕裂写入，不进自动列表
         try JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]).write(to: metaURL)
 
         try h.newResult(["a", "b", "c"], seed: 7)

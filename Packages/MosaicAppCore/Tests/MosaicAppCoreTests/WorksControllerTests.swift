@@ -134,6 +134,12 @@ final class WorksControllerTests: XCTestCase {
 
         h.existence.deleted.set(["a", "d", "zzz"])
         await h.controller.open(id)
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "b", "c", "a", "b", "d"]), "自动打开不改格子")
+        XCTAssertEqual(h.controller.state.opened?.missingCount, 0)
+        await h.controller.exportOpenedTapped(purpose: .save)
+        XCTAssertEqual(h.controller.exportGate, .missingPhotos)
+        XCTAssertTrue(h.exporter.calls.isEmpty)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.opened?.missingCount, 3, "按格算：a 两格 + d 一格")
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["3"]))
         XCTAssertEqual(h.controller.state.summaries.first?.meta.missingCount, 0, "都处理过了，没有待处理的")
@@ -143,13 +149,16 @@ final class WorksControllerTests: XCTestCase {
         XCTAssertEqual(persisted?.droppedPhotoCount, 2)
         XCTAssertEqual(persisted?.fallbackCellCount, 3)
 
-        // 导出前再查一次（期间又删了一张）；按处理后的布局导出，带目标图副本
+        // 又删了 b：自动导出只拒绝，显式补格才改布局。
         h.existence.deleted.set(["a", "b", "d"])
         await h.controller.exportOpenedTapped(purpose: .save)
+        XCTAssertEqual(h.controller.exportGate, .missingPhotos)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.opened?.missingCount, 2, "只提示这次新兜底的 b 两格")
+        await h.controller.exportOpenedTapped(purpose: .save)
         XCTAssertEqual(h.exporter.calls.count, 1)
         XCTAssertEqual(h.exporter.calls.first?.0, sampleColorLayout(["", "", "c", "", "", ""], color: smallTargetColor), "导出用处理后的显式布局")
-        XCTAssertEqual(h.exporter.fallbacks.first.map { Set($0.keys) }, [0, 1, 3, 4, 5], "兜底格都带上兜底图，不出白格")
+        XCTAssertEqual(h.exporter.fallbacks.first.map { Set($0.keys) }, [0, 1, 3, 4, 5], "纯色格带上颜色，不出白格")
         XCTAssertEqual(h.exporter.calls.first?.1, true, "目标图副本读回来做叠加")
         XCTAssertEqual(h.exporter.calls.first?.2, .save)
 
@@ -237,7 +246,9 @@ final class WorksControllerTests: XCTestCase {
         let c2 = WorksController(store: store2, existence: h.existence, images: h.images)
         await c2.start()
         XCTAssertEqual(c2.state.summaries.map(\.id), [id])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tmp.path), "启动不再删除临时目录")
+        await store2.removeIncomplete()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.path), "显式 removeIncomplete 仍删除")
         await c2.open(id)
         XCTAssertEqual(c2.openedWork?.layout, sampleLayout(["a", "b", "c"]))
         XCTAssertEqual(c2.state.opened?.missingCount, 0)

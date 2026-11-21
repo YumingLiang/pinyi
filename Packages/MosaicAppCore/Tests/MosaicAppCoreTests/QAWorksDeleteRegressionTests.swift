@@ -139,21 +139,23 @@ final class QAWorksDeleteRegressionTests: XCTestCase {
     // MARK: 4 删除正在打开（PhotoKit 缺失检查中）的作品：之后的 setMissingCount 不会把目录写回来
 
     func testDeleteWhileOpenMissingCheckInFlightIsNotWrittenBack() async throws {
-        let gate = GatePoint()
-        let h = H(existence: QAGatedExistence(gate: gate))
+        let h = H()
         await h.controller.start()
         let a = try await h.saveNew(["a", "b", "c", "d", "e", "f"])
-        let opening = Task { @MainActor in await h.controller.open(a) }
-        await gate.reached.wait()                 // open() 已读完布局，卡在缺失检查
+        await h.controller.open(a)
         XCTAssertEqual(h.controller.state.opened?.id, a)
-        await h.delete(a)                         // 查看页上点删除并确认
-        await gate.release.open()
-        await opening.value
-        XCTAssertFalse(h.exists(a), "缺失检查结束后的 setMissingCount 不能重建作品目录")
-        XCTAssertEqual(h.entries(), [], "也不能留下孤立的 meta.json")
-        XCTAssertNil(h.controller.state.opened, "查看页已关闭，不会被迟到的 open 重新打开")
+        XCTAssertEqual(h.controller.openedWork?.layout.cellAssignments.map(\.localIdentifier), ["a", "b", "c", "d", "e", "f"],
+                       "自动打开不跑缺失检查")
+        await h.delete(a)
+        do {
+            try await h.store.setMissingCount(3, for: a)
+            XCTFail("目录已经不在，迟到的 setMissingCount 不能再建回来")
+        } catch WorksStoreError.notFound {}
+        XCTAssertFalse(h.exists(a))
+        XCTAssertEqual(h.entries(), [])
+        XCTAssertNil(h.controller.state.opened)
         await h.controller.reload()
-        XCTAssertEqual(h.controller.state.summaries.map(\.id), [], "reload 后列表仍为空")
+        XCTAssertEqual(h.controller.state.summaries.map(\.id), [])
         h.controller.stop()
     }
 

@@ -71,7 +71,7 @@ final class WorksPrivacyRoundTests: XCTestCase {
 
     // MARK: D-a 孤儿文件
 
-    /// 启动（removeIncomplete）和打开作品前，都删掉 meta 没登记的 preview* / fallback* / 临时预览；登记的不动；meta 读不出不删。
+    /// 自动启动和打开不再删 meta 没登记的 preview* / fallback*。显式 `removeIncomplete` 仍删；meta 读不出不删。
     func testOrphanImagesRemovedAtStartupAndBeforeOpen() async throws {
         let h = Harness()
         let id = try await h.save()
@@ -85,13 +85,14 @@ final class WorksPrivacyRoundTests: XCTestCase {
         }
         try plant()
         XCTAssertTrue(try h.anyFileContainsSentinel(id))
+        let planted = try h.files(id)
         await h.controller.start()
-        XCTAssertEqual(try h.files(id), registered, "启动清掉孤儿，登记的文件都在")
-        XCTAssertFalse(try h.anyFileContainsSentinel(id))
-
-        try plant()
+        XCTAssertEqual(try h.files(id), planted, "启动不再清孤儿")
         await h.controller.open(id)
-        XCTAssertEqual(try h.files(id), registered, "打开前也清")
+        XCTAssertEqual(try h.files(id), planted, "打开不再清孤儿")
+        await h.store.removeIncomplete()
+        XCTAssertEqual(try h.files(id), registered, "显式 removeIncomplete 仍清未登记文件")
+        XCTAssertFalse(try h.anyFileContainsSentinel(id))
         h.controller.stop()
 
         // meta 读不出：什么都不删
@@ -124,18 +125,32 @@ final class WorksPrivacyRoundTests: XCTestCase {
             XCTAssertTrue(stuck.isLayoutOutOfSync)
             XCTAssertTrue(try h.anyFileContainsSentinel(id))
 
-            // 重启
+            // 重启：自动启动不删哨兵、不把指纹写齐。显式补格才重写。
             let c = WorksController(store: FileWorksStore(directory: h.dir, images: h.images), existence: h.existence, images: h.images)
             await c.start()
-            XCTAssertFalse(try h.anyFileContainsSentinel(id), "重启清理后作品目录里没有哨兵色")
+            XCTAssertTrue(try h.anyFileContainsSentinel(id), "自动启动留下哨兵文件")
+            XCTAssertEqual(c.unsettled.first { $0.id == id }?.reason, .inconsistent)
             if unhideBeforeReopen { h.existence.unhide("b") }
             let reads = h.images.state.get().imageReads
+            let loaded = try await h.store.load(id)
+            let reconciled = await c.reconcileMissing(loaded)
+            let outcome = try XCTUnwrap(reconciled)
+            await c.apply(outcome)
+            await c.reload()
             await c.open(id)
             let work = try XCTUnwrap(c.openedWork)
             XCTAssertFalse(work.isLayoutOutOfSync, "按待处理重新写回，指纹对齐")
             XCTAssertEqual(work.meta.fingerprint, WorkFingerprint.of(work.layout))
             XCTAssertEqual(h.images.state.get().imageReads, reads, "不读旧预览 / 旧兜底图")
-            XCTAssertFalse(try h.anyFileContainsSentinel(id))
+            let registeredPreview = try XCTUnwrap(FakeWorkImages.decodeRaw(try Data(contentsOf: work.summary.previewURL)))
+            var registeredHasSentinel = false
+            for y in 0..<registeredPreview.height { for x in 0..<registeredPreview.width {
+                let c = registeredPreview.rgb(x: x, y: y)
+                if abs(Int(c.r) - 3) <= 12 && abs(Int(c.g) - 251) <= 12 && abs(Int(c.b) - 7) <= 12 { registeredHasSentinel = true }
+            } }
+            XCTAssertFalse(registeredHasSentinel, "登记的新预览不含哨兵")
+            await h.store.removeIncomplete()
+            XCTAssertFalse(try h.anyFileContainsSentinel(id), "显式清理才删掉没登记的旧预览")
             if !unhideBeforeReopen { XCTAssertEqual(work.layout.cellAssignments[1].localIdentifier, "") }
             c.stop()
         }
@@ -169,9 +184,10 @@ final class WorksPrivacyRoundTests: XCTestCase {
         let l1 = try await h.store.load(id).layout
         XCTAssertEqual(l1, sampleLayout(["a", "b", "c", "d", "e", "f"]), "受限访问不改写作品")
 
-        // 导出：填色、不写回
+        // 权限不足：导出失败，不用目标色补格，也不写回
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.exporter.fallbacks.last, [1: RGB8(r: 200, g: 30, b: 30)])
+        XCTAssertEqual(h.controller.exportGate, .needsPermission)
+        XCTAssertTrue(h.exporter.calls.isEmpty)
         let l2 = try await h.store.load(id).layout
         XCTAssertEqual(l2, sampleLayout(["a", "b", "c", "d", "e", "f"]))
 
@@ -186,7 +202,8 @@ final class WorksPrivacyRoundTests: XCTestCase {
             XCTAssertNotNil(d)
         }
         XCTAssertEqual(decodes, 2)
-        XCTAssertEqual(h.controller.openedWork?.layout.cellAssignments[1].fill, CellColor(r: 200, g: 30, b: 30))
+        XCTAssertEqual(h.controller.openedWork?.layout.cellAssignments[1].localIdentifier, "b", "重新打开仍不补格")
+        XCTAssertNil(h.controller.openedWork?.layout.cellAssignments[1].fill)
         // 又变回受限：列表重新变占位
         h.existence.fullAccess.set(false)
         await h.controller.refreshLibraryAccess()
@@ -217,12 +234,14 @@ final class WorksRematchNoBlacklistTests: XCTestCase {
             await h.controller.start()
             if restore == "unhide" { h.existence.hide("b") } else { h.existence.delete("b") }
             await h.controller.open(id)
+            await repairOpened(h.controller)
             XCTAssertEqual(h.controller.openedWork?.layout.cellAssignments[1].localIdentifier, "", "\(restore)：先填色")
             XCTAssertNotNil(h.controller.openedWork?.layout.cellAssignments[1].fill)
             h.controller.close()
             if restore == "unhide" { h.existence.unhide("b") } else { h.existence.deleted.update { $0.remove("b") } }
             h.controller.libraryDidChange()
             await h.controller.open(id)
+            await repairOpened(h.controller)
             XCTAssertEqual(h.controller.openedWork?.layout.cellAssignments[1].localIdentifier, "b", "\(restore)：b 重新被选中")
             XCTAssertNil(h.controller.openedWork?.layout.cellAssignments[1].fill)
             h.controller.stop()

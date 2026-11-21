@@ -216,6 +216,14 @@ func sampleFallbackLayout(_ ids: [String], cols: Int = 3, seed: UInt64 = 7) -> M
     return l
 }
 
+/// 显式缺图处理。自动 `open` / `export` / `start` 不再做这件事。
+@MainActor
+func repairOpened(_ controller: WorksController) async {
+    guard let work = controller.openedWork else { return }
+    guard let outcome = await controller.reconcileMissing(work) else { return }
+    await controller.apply(outcome)
+}
+
 /// 空格子都是纯色格（原照片隐藏 / 拿不准、没有候选：填目标图该格平均色）。
 func sampleColorLayout(_ ids: [String], color: CellColor, cols: Int = 3, seed: UInt64 = 7) -> MosaicLayout {
     var l = sampleLayout(ids, cols: cols, seed: seed)
