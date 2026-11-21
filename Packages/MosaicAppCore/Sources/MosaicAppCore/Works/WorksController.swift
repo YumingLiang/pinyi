@@ -200,6 +200,16 @@ public struct WorkResultContext: Sendable {
     }
 }
 
+/// 再导出没做成的原因。列表预览被权限挡住时不走这里。
+public enum WorkExportGate: Sendable, Equatable {
+    case none
+    case unavailable
+    case needsPermission
+    case missingPhotos
+    case missingTarget
+    case retryBecauseChanged
+}
+
 /// 从作品再导出：由导出线（`AppCoordinator`）实现——按保存的显式布局导出，不重跑匹配。
 @MainActor
 public protocol WorkExportHandling: AnyObject {
@@ -314,14 +324,13 @@ public final class WorksController {
         }
     }
 
-    /// 启动：清掉上次被杀留下的半截目录，再读列表。
+    /// 启动只读目录。不调用 `removeIncomplete`，半截目录和未登记文件留在磁盘上。
     public func start() async {
-        await store.removeIncomplete()
         state.limitedAccess = !(await existence.canConfirmMissing())
         await reload()
     }
 
-    /// 回到前台时重读相册权限（产品 04:00 Q2）：变了就刷新列表；变成完整权限且查看页开着，重新打开一次（这时才做缺图处理 / 迁移）。
+    /// 回到前台时重读相册权限（产品 04:00 Q2）：变了就按只读目录刷新列表；变成完整权限且查看页开着，再按磁盘 settled 打开一次。不迁移、不删孤儿。
     public func refreshLibraryAccess() async {
         let limited = !(await existence.canConfirmMissing())
         guard limited != state.limitedAccess else { return }
@@ -330,10 +339,15 @@ public final class WorksController {
         if !limited, let id = state.opened?.id { await open(id) }
     }
 
-    /// 作品列表走 `list()`，相关 pending 预览可能在这里前滚。填色是否已保存不看这次列表，另由 `matchOrdinaryPhoto` 重扫。
+    /// 自动刷新只读 `readCatalog`。有 pending、要迁移或坏掉的作品只从列表消失，不前滚、不删除。
+    public private(set) var unsettled: [SettledUnavailable] = []
+    /// 再导出没做完的原因。和列表预览被权限挡住不是同一件事。
+    public private(set) var exportGate: WorkExportGate = .none
+
     public func reload() async {
-        let list = await store.list()
-        state.summaries = list
+        let catalog = await readOnlyCatalog()
+        state.summaries = catalog.settled
+        unsettled = catalog.unavailable
         state.isLoaded = true
         filledPhotoScanGeneration += 1
         let generation = filledPhotoScanGeneration
@@ -486,11 +500,8 @@ public final class WorksController {
             if OrdinaryPhotoContent.isGuarded(shown) {
                 filledPhotoExact = (OrdinaryPhotoContent.flightKey(shown), result.summary.id)
             }
-            // 刷新列表（新增 / 预览图换了），再按库重算按钮状态（期间结果可能又变了，按最新的算）
-            let list = await store.list()
-            state.summaries = list
-            state.isLoaded = true
             failedKey = nil
+            await reload()
             state.saveStatus = computeSaveStatus(resultContext())
         } catch {
             failedKey = key
@@ -508,7 +519,7 @@ public final class WorksController {
 
     // MARK: 查看
 
-    /// 打开作品：读布局，再批量查一次原照片还在不在；取不到的（删除或后来被隐藏）按缺图处理，见 `reconcileMissing`。
+    /// 打开作品：只读磁盘上的 settled 快照。不调用 `removeOrphans` / `load` / `reconcileMissing`。异常作品只让自己打不开。
     public func open(_ id: WorkID) async {
         openToken += 1
         let token = openToken
@@ -520,17 +531,16 @@ public final class WorksController {
             await reload()
             guard token == openToken else { return }
         }
-        do {
-            // 先清掉这个作品目录里 meta 没登记的预览 / 兜底图（架构师 11-17 D-a）
-            await store.removeOrphans(for: id)
-            let work = try await store.load(id)
+        guard let file = store as? FileWorksStore else {
+            state.notice = .worksOpenFailed
+            return
+        }
+        switch await file.readSettled(id) {
+        case .settled(let work):
             guard token == openToken else { return }
             openedWork = work
-            state.opened = OpenedWork(summary: work.summary, missingCount: nil)
-            guard let outcome = await reconcileMissing(work) else { return }
-            guard token == openToken, state.opened?.id == id else { return }
-            await apply(outcome)
-        } catch {
+            state.opened = OpenedWork(summary: work.summary, missingCount: 0)
+        case .unavailable:
             guard token == openToken else { return }
             state.notice = .worksOpenFailed
             await reload()
@@ -700,7 +710,8 @@ public final class WorksController {
     }
 
     /// 把缺图处理结果同步到查看页和列表（预览文件变了，列表缩略图随 `previewURL` 刷新）。
-    private func apply(_ outcome: ReconcileOutcome) async {
+    /// 把显式缺图处理的结果同步到查看页。自动打开 / 导出不再调用。
+    func apply(_ outcome: ReconcileOutcome) async {
         let work = outcome.work
         var summary = work.summary
         if outcome.pending != summary.meta.missingCount {
@@ -727,19 +738,49 @@ public final class WorksController {
     /// 查看页「导出」：先做一遍缺图处理（期间可能又有照片被删 / 被隐藏），再按（处理后的）布局交给导出线；
     /// 目标图副本读不出来就不叠加。
     public func exportOpenedTapped(purpose: ExportPurpose) async {
-        guard let work = openedWork, let handler = exportHandler else { return }
-        guard let outcome = await reconcileMissing(work), openedWork?.id == work.id else { return }
-        await apply(outcome)
-        let updated = outcome.work
+        exportGate = .none
+        guard let opened = openedWork, let handler = exportHandler else { return }
+        guard let file = store as? FileWorksStore else { exportGate = .unavailable; return }
+        guard case .settled(let work) = await file.readSettled(opened.id) else {
+            exportGate = .unavailable
+            return
+        }
+        let photoIDs = work.layout.cellAssignments.compactMap { cell -> String? in
+            if cell.fill != nil || cell.localIdentifier.isEmpty { return nil }
+            return cell.localIdentifier
+        }
+        if !photoIDs.isEmpty {
+            if !(await existence.canConfirmMissing()) {
+                exportGate = .needsPermission
+                return
+            }
+            let present = await existence.existingIdentifiers(among: photoIDs)
+            if !Set(photoIDs).isSubset(of: present) {
+                exportGate = .missingPhotos
+                return
+            }
+        }
         var target: PixelBuffer?
-        if let url = updated.targetURL { target = try? await images.readTarget(at: url) }
-        // 兜底格（存盘的）+ 纯色格 + 没处理的缺失格（受限访问等，临时补：确认删除的从预览裁，其余填目标平均色）：
-        // 导出放大填充，不出白格，颜色与预览一致
-        let hasFill = updated.layout.cellAssignments.contains { $0.fallback || $0.fill != nil }
-        let fallbacks = hasFill || !outcome.pendingCells.isEmpty
-            ? await store.fallbackTiles(for: updated.id, transientCells: outcome.pendingCells,
-                                        transientReasons: outcome.pendingReasons) : [:]
-        await handler.exportWork(layout: updated.layout, target: target, fallbacks: fallbacks, purpose: purpose)
+        if let url = work.targetURL {
+            target = try? await images.readTarget(at: url)
+            if target == nil {
+                exportGate = .missingTarget
+                return
+            }
+        }
+        // actor 里没有 await 不等于跨进程锁。导出前后再读依赖文件字节，变了就要求重试。
+        guard let stamp = await file.settledDependencyStamp(work.id),
+              case .settled(let still) = await file.readSettled(work.id),
+              still.layout == work.layout, still.meta == work.meta else {
+            exportGate = .retryBecauseChanged
+            return
+        }
+        let tiles = MissingCellFill.colorTiles(still.layout)
+        await handler.exportWork(layout: still.layout, target: target, fallbacks: tiles, purpose: purpose)
+        guard await file.settledDependencyStamp(work.id) == stamp else {
+            exportGate = .retryBecauseChanged
+            return
+        }
     }
 
     // MARK: 删除（二次确认）
@@ -771,6 +812,11 @@ public final class WorksController {
         }
         if state.opened?.id == id { close() }
         await reload()   // 按库重算按钮：删掉的是当前结果对应的作品 → 回到可存
+    }
+
+    private func readOnlyCatalog() async -> SettledCatalog {
+        if let file = store as? FileWorksStore { return await file.readCatalog() }
+        return SettledCatalog(settled: await store.list(), unavailable: [])
     }
 
     /// 停掉中继订阅（测试结束时释放）。

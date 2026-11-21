@@ -457,9 +457,11 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
         let previewURL = saved.summary.previewURL
         let controller = WorksController(store: store, existence: AllPresent(), images: images)
         try await within(20) { await controller.open(saved.summary.id) }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path),
-                       "未登记的 fallback* 在 open 返回前由 removeOrphans 删掉。文件不在了，不能拿它证明 ImageIO 没读")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: orphan.path),
+                      "自动打开不再调用 removeOrphans。未登记文件还在，不能拿「文件被删」证明 ImageIO 没读")
         XCTAssertTrue(FileManager.default.fileExists(atPath: previewURL.path), "meta 登记的预览还在")
+        try await within(20) { await store.removeOrphans(for: saved.summary.id) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path), "显式 removeOrphans 仍删除未登记的 fallback*")
     }
 
     func testLoadImageAndReadImageRecordADeliberatePreviewRead() async throws {

@@ -71,6 +71,34 @@ enum MigrationEvidencePoint: Sendable {
     case afterCommit(preview: URL, fallback: URL?)
 }
 
+/// 一份作品能不能只读打开。不写盘。
+public enum SettledBlock: Sendable, Equatable {
+    case pending
+    case needsMigration
+    case inconsistent
+    case identity
+    case unsupportedVersion
+    case unsafeReference
+    case missingFile
+    case unreadable
+}
+
+public struct SettledUnavailable: Sendable, Equatable {
+    public var directoryName: String
+    public var id: WorkID?
+    public var reason: SettledBlock
+}
+
+public enum SettledRead: Sendable {
+    case settled(Work)
+    case unavailable(SettledUnavailable)
+}
+
+public struct SettledCatalog: Sendable {
+    public var settled: [WorkSummary]
+    public var unavailable: [SettledUnavailable]
+}
+
 public actor FileWorksStore: WorksStore {
     public static let metaFileName = "meta.json"
     public static let layoutFileName = "layout.json"
@@ -126,6 +154,85 @@ public actor FileWorksStore: WorksStore {
     // MARK: 列表
 
     public func list() async -> [WorkSummary] { listNow() }
+
+    /// 只读目录。不调用 `list` / `readSummary` / `load`，不前滚、不删文件。
+    /// 一次读到的结果不是跨进程锁：调用方在 `await` 之后要再读一次。
+    public func readCatalog() -> SettledCatalog {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else {
+            return SettledCatalog(settled: [], unavailable: [])
+        }
+        var settled: [WorkSummary] = []
+        var unavailable: [SettledUnavailable] = []
+        for name in names where !name.hasPrefix(".") {
+            switch readSettled(directoryName: name) {
+            case .settled(let work): settled.append(work.summary)
+            case .unavailable(let item): unavailable.append(item)
+            }
+        }
+        return SettledCatalog(settled: settled.sorted(by: Self.newestFirst), unavailable: unavailable)
+    }
+
+    public func readSettled(_ id: WorkID) -> SettledRead {
+        readSettled(directoryName: id.directoryName)
+    }
+
+    private func readSettled(directoryName name: String) -> SettledRead {
+        let blocked = { (reason: SettledBlock, id: WorkID?) in
+            SettledRead.unavailable(SettledUnavailable(directoryName: name, id: id, reason: reason))
+        }
+        guard let id = WorkID(directoryName: name) else { return blocked(.identity, nil) }
+        let dir = workDirectory(id)
+        guard let metaData = try? Data(contentsOf: dir.appendingPathComponent(Self.metaFileName)),
+              let meta = try? Self.decoder().decode(WorkMeta.self, from: metaData) else {
+            return blocked(.unreadable, id)
+        }
+        guard meta.id == id else { return blocked(.identity, id) }
+        guard meta.formatVersion <= WorkMeta.currentFormatVersion else { return blocked(.unsupportedVersion, id) }
+        if meta.pendingPreviewFile != nil { return blocked(.pending, id) }
+        if meta.needsFallbackMigration { return blocked(.needsMigration, id) }
+        guard OrdinaryPhotoLibrary.safeBasename(meta.previewFile) else { return blocked(.unsafeReference, id) }
+        let previewURL = dir.appendingPathComponent(meta.previewFile)
+        guard FileManager.default.fileExists(atPath: previewURL.path) else { return blocked(.missingFile, id) }
+        if let targetName = meta.targetFile {
+            guard OrdinaryPhotoLibrary.safeBasename(targetName) else { return blocked(.unsafeReference, id) }
+            guard FileManager.default.fileExists(atPath: dir.appendingPathComponent(targetName).path) else {
+                return blocked(.missingFile, id)
+            }
+        }
+        guard let layoutData = try? Data(contentsOf: dir.appendingPathComponent(Self.layoutFileName)),
+              let layout = try? Self.decoder().decode(MosaicLayout.self, from: layoutData) else {
+            return blocked(.unreadable, id)
+        }
+        // 形状 / 文字正常保存后，磁盘指纹也可能和再算的 `WorkFingerprint.of` 不同。不因此拒绝，也不回写。
+        // 普通照片仍用既有 `isLayoutOutOfSync`（fallbackVersion 已写、当前口径指纹和布局对不上）。
+        if layout.shapeManifest == nil {
+            let probe = Work(summary: WorkSummary(meta: meta, previewURL: previewURL), layout: layout, targetURL: nil)
+            if probe.isLayoutOutOfSync { return blocked(.inconsistent, id) }
+        }
+        // 首次保存会把 draft.overlayAlpha 写进 meta，layout.json 仍是调用方布局里的强度。
+        // 现有读取把这种差异当成合法作品，不在这里拒绝，也不回写。
+        let work = Work(summary: WorkSummary(meta: meta, previewURL: previewURL), layout: layout,
+                        targetURL: meta.targetFile.map { dir.appendingPathComponent($0) })
+        return .settled(work)
+    }
+
+    /// 这份 settled 作品当前依赖文件的字节。不是锁：`await` 之后再读，变了就应重试。
+    /// 含 meta、layout、已登记预览和目标图。路径已经过 `readSettled` 的安全引用检查。
+    public func settledDependencyStamp(_ id: WorkID) -> Data? {
+        guard case .settled(let work) = readSettled(id) else { return nil }
+        let dir = workDirectory(id)
+        var names = [Self.metaFileName, Self.layoutFileName, work.meta.previewFile]
+        if let target = work.meta.targetFile { names.append(target) }
+        var out = Data()
+        for name in names {
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent(name)) else { return nil }
+            var n = UInt64(data.count).littleEndian
+            withUnsafeBytes(of: &n) { out.append(contentsOf: $0) }
+            out.append(data)
+        }
+        return out
+    }
 
     /// 同步版（actor 内部用：查重和登记 inFlight 之间不能有挂起点）。
     private func listNow() -> [WorkSummary] {
@@ -574,7 +681,7 @@ public actor FileWorksStore: WorksStore {
         }
     }
 
-    /// 打开作品前也清一次（`WorksController.open`）。
+    /// 显式清孤儿。自动 `open` / `start` 不再调用。
     public func removeOrphans(for id: WorkID) async {
         removeOrphanImages(id)
     }

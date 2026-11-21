@@ -51,6 +51,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.existence.hide("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         let cleared = sampleColorLayout(["a", "", "c", "a", "", "d"], color: smallTargetColor)
         XCTAssertEqual(h.controller.openedWork?.layout, cleared,
                        "用到 b 的两格：b 被隐藏、没有候选 → 填目标图这一格的平均色（不用旧预览裁切）")
@@ -136,7 +137,10 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.existence.hide("c")   // 查看页开着时去「照片」App 隐藏
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.exporter.calls.last?.0, sampleColorLayout(["a", "b", ""], color: MissingCellFill.neutral))
+        XCTAssertEqual(h.controller.exportGate, .missingPhotos, "自动再导出不改作品，缺照片只报这一次")
+        XCTAssertEqual(h.images.state.get().previews, 1)
+        await repairOpened(h.controller)
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "b", ""], color: MissingCellFill.neutral))
         XCTAssertEqual(h.images.state.get().previews, 2)
 
         h.existence.unhide("c")
@@ -161,6 +165,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
         XCTAssertEqual(h.images.state.get().previews, 3)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["x", "y", "z"]))
         await h.controller.open(withB)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.images.state.get().previews, 4)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "", "c"], color: MissingCellFill.neutral))
         let untouched = try await h.store.load(alsoB)
@@ -189,16 +194,14 @@ final class WorksHiddenPhotoTests: XCTestCase {
         let onDisk = try await h.store.load(id)
         XCTAssertEqual(onDisk.layout, sampleLayout(["a", "b", "c"]))
         XCTAssertEqual(onDisk.meta.droppedPhotoCount, 0)
-        XCTAssertEqual(onDisk.meta.missingCount, 3, "没处理的缺失数记着（性能页）")
+        XCTAssertEqual(onDisk.meta.missingCount, 0, "自动打开不再写 missingCount")
         let filesBefore = try h.files(id)
 
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.exporter.calls.last?.0, sampleLayout(["a", "b", "c"]), "布局不改（自动保存查重照样命中）")
-        let gray = FakeWorkImages.RGB8(r: 128, g: 128, b: 128)
-        XCTAssertEqual(h.exporter.fallbacks.last, [0: gray, 1: gray, 2: gray],
-                       "受限访问拿不准是隐藏还是删除 → 按隐藏处理：导出临时填目标平均色（这里没有目标图副本，中性灰），不用当前预览裁切")
+        XCTAssertEqual(h.controller.exportGate, .needsPermission, "权限不足是导出错误，不用预览或目标色补格")
+        XCTAssertTrue(h.exporter.calls.isEmpty)
         XCTAssertNil(h.controller.state.missingLine)
-        XCTAssertEqual(try h.files(id), filesBefore, "临时兜底不存盘")
+        XCTAssertEqual(try h.files(id), filesBefore, "自动导出不写盘")
         XCTAssertEqual(h.images.state.get().fallbackWrites, 0)
         h.controller.stop()
     }
@@ -212,6 +215,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
         h.images.state.update { $0.failAt = .preview }
         h.existence.hide("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.opened?.missingCount, 0, "没写回成功，作品没变，不提示")
         let after = try await h.store.load(id)
         XCTAssertEqual(after.layout, before.layout)
@@ -221,6 +225,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
 
         h.images.state.update { $0.failAt = nil }
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "", "c"], color: MissingCellFill.neutral))
         XCTAssertEqual(h.controller.state.opened?.missingCount, 1, "这次真的兜底了，提示一次")
         h.controller.stop()
@@ -255,6 +260,7 @@ final class WorksHiddenPhotoTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("n")
         await h.controller.open(legacyID)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["m", "", "o"], color: MissingCellFill.neutral),
                        "隐藏 → 填色（没有目标图副本时中性灰）")
         XCTAssertEqual(h.controller.state.opened?.missingCount, 1, "旧 meta 里记的缺失数不重复累计")

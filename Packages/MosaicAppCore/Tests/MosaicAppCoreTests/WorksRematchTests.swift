@@ -135,6 +135,7 @@ final class WorksRematchTests: XCTestCase {
 
         h.existence.hide("b", "hiddenRed")   // b 在作品里，后来被隐藏；hiddenRed 本来就是隐藏的（索引里还留着）
         await h.controller.open(id)
+        await repairOpened(h.controller)
         let expected = sampleLayout(["a", "red1", "c", "d", "e", "f"], cols: 3)
         XCTAssertEqual(h.controller.openedWork?.layout, expected, "最近的 hiddenRed 被隐藏，选下一张可见的 red1")
         XCTAssertFalse(h.controller.openedWork!.layout.cellAssignments.contains { $0.localIdentifier == "hiddenRed" })
@@ -165,6 +166,7 @@ final class WorksRematchTests: XCTestCase {
         // 取消隐藏：不改回去
         h.existence.unhide("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, expected)
         h.controller.stop()
     }
@@ -183,6 +185,7 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("m0", "m1")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         let layout = try XCTUnwrap(h.controller.openedWork?.layout)
         XCTAssertEqual(layout.cellAssignments[0].localIdentifier, "red2")
         XCTAssertEqual(layout.cellAssignments[1].localIdentifier, "red3", "相邻格不重复，且避开作品里已有的 inWorkRed")
@@ -200,6 +203,7 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b", "hiddenRed", "hiddenRed2")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout,
                        sampleColorLayout(["a", "", "c", "d", "e", "f"], color: CellColor(r: 200, g: 30, b: 30), cols: 3),
                        "b 被隐藏且没有合格候选 → 填目标图这一格的平均色（红），不用旧预览裁切")
@@ -224,6 +228,7 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleColorLayout(["a", "", "c"], color: CellColor(r: 200, g: 30, b: 30), cols: 3))
         let meta = try await h.store.load(id).meta
         XCTAssertEqual(meta.droppedPhotoCount, 1)
@@ -240,18 +245,21 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "b", "c", "d", "e", "f"], cols: 3))
         XCTAssertEqual(h.controller.state.opened?.missingCount, 0, "作品没改写，不提示")
         XCTAssertNil(h.controller.state.missingLine)
         XCTAssertEqual(h.images.inner.state.get().previews, 1)
         h.controller.close()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertNil(h.controller.state.missingLine, "再开一次也不重复提示")
         let pendingMeta = try await h.store.load(id).meta
         XCTAssertEqual(pendingMeta.missingCount, 1, "没处理的记着（性能页）")
         h.snap.set(saved)
         h.controller.close()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "red2", "c", "d", "e", "f"], cols: 3))
         XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]))
         h.controller.stop()
@@ -265,6 +273,7 @@ final class WorksRematchTests: XCTestCase {
         let metaURL = h.dir.appendingPathComponent(id.directoryName).appendingPathComponent(FileWorksStore.metaFileName)
         let metaBefore = try Data(contentsOf: metaURL)
         await h.controller.open(id)
+        await repairOpened(h.controller)
         await h.controller.exportOpenedTapped(purpose: .save)
         XCTAssertEqual(h.snapshotCalls.get(), 0)
         XCTAssertEqual(h.images.inner.state.get().previews, 1)
@@ -302,7 +311,11 @@ final class WorksRematchTests: XCTestCase {
         h.existence.hide("b")
 
         let c = h.controller
-        let task = Task { @MainActor in await c.open(id) }
+        await c.open(id)
+        let task = Task { @MainActor in
+            guard let work = c.openedWork else { return }
+            _ = await c.reconcileMissing(work)
+        }
         while h.snapshotCalls.get() == 0 { await Task.yield(); try await Task.sleep(nanoseconds: 1_000_000) }
         task.cancel()
         await task.value
@@ -315,6 +328,7 @@ final class WorksRematchTests: XCTestCase {
 
         h.hang.set(false)
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "red2", "c", "d", "e", "f"], cols: 3))
         h.controller.stop()
     }
@@ -329,6 +343,7 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("gone")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["x", "red2", "z"], cols: 3))
         h.controller.stop()
     }
@@ -343,12 +358,14 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]), "第一次：出")
         XCTAssertNil(h.controller.state.missingLine)
 
         // 第二次打开
         h.controller.close()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertNil(h.controller.state.replacedLine, "第二次打开：不出")
         XCTAssertNil(h.controller.state.missingLine)
 
@@ -378,11 +395,13 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b", "hiddenRed")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]), "第一次：出")
         XCTAssertNil(h.controller.state.replacedLine)
 
         h.controller.close()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertNil(h.controller.state.missingLine, "第二次打开：不出（留白格重找了一次，仍没有，不写回）")
         await h.controller.exportOpenedTapped(purpose: .save)
         XCTAssertNil(h.controller.state.missingLine, "再导出：不出")
@@ -409,6 +428,7 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]), "出现")
         try await Self.waitUntil { h.controller.state.replacedLine == nil }
         XCTAssertNil(h.controller.state.missingLine)
@@ -429,6 +449,7 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.hide("b", "hiddenRed")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.state.missingLine, LocalizedLine(.worksMissing, ["1"]))
         try await Self.waitUntil { h.controller.state.missingLine == nil }
         XCTAssertEqual(h.controller.state.opened?.id, id)
@@ -467,6 +488,7 @@ final class WorksRematchTests: XCTestCase {
         for i in 0..<6 { h.existence.hide("hidden\(i)") }
         let callsBefore = h.existence.calls.get()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         let layout = try XCTUnwrap(h.controller.openedWork?.layout)
         XCTAssertEqual(layout.cellAssignments.map(\.localIdentifier), (0..<6).map { "ok\($0)" })
         XCTAssertFalse(layout.cellAssignments.contains { $0.localIdentifier.hasPrefix("hidden") }, "隐藏照片永远不进补格结果")
@@ -484,6 +506,7 @@ final class WorksRematchTests: XCTestCase {
         await h.controller.start()
         h.existence.delete("b")   // 删除 → 和隐藏一样填目标色（Q1 取消 4b）
         await h.controller.open(id)
+        await repairOpened(h.controller)
         let firstLayout = try XCTUnwrap(h.controller.openedWork?.layout)
         XCTAssertEqual(firstLayout.cellAssignments.map(\.localIdentifier), ["a", "", "c"])
         XCTAssertNotNil(firstLayout.cellAssignments[1].fill)
@@ -494,6 +517,7 @@ final class WorksRematchTests: XCTestCase {
         h.snap.set(Self.snapshot(base + [("red2", (212, 34, 30))]))   // 用户新拍了一张、扫描进了索引
         h.controller.close()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "red2", "c"], cols: 3), "留白格升级成照片")
         XCTAssertEqual(h.controller.state.replacedLine, LocalizedLine(.worksReplaced, ["1"]), "按 works.replaced 出一次")
         XCTAssertNil(h.controller.state.missingLine)
@@ -506,6 +530,7 @@ final class WorksRematchTests: XCTestCase {
 
         h.controller.close()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertNil(h.controller.state.replacedLine, "之后不再出")
         h.controller.stop()
         let c2 = h.relaunched()

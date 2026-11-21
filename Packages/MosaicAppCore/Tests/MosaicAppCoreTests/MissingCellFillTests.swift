@@ -112,6 +112,7 @@ final class MissingCellFillTests: XCTestCase {
         h.existence.hide("b")
         let readsBefore = h.images.state.get().imageReads
         await h.controller.open(id)
+        await repairOpened(h.controller)
 
         let red = CellColor(r: 200, g: 30, b: 30)   // 目标图格 1
         let work = try XCTUnwrap(h.controller.openedWork)
@@ -140,6 +141,7 @@ final class MissingCellFillTests: XCTestCase {
         h.existence.delete("b")
         let readsBefore = h.images.state.get().imageReads
         await h.controller.open(id)
+        await repairOpened(h.controller)
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(work.layout, sampleColorLayout(["a", "", "c", "d", "e", "f"], color: CellColor(r: 200, g: 30, b: 30)))
         XCTAssertFalse(work.layout.cellAssignments[1].fallback)
@@ -193,6 +195,7 @@ final class MissingCellFillTests: XCTestCase {
         h.existence.hide("b")
         h.existence.delete("e")
         await h.controller.open(id)
+        await repairOpened(h.controller)
         let work = try XCTUnwrap(h.controller.openedWork)
         XCTAssertEqual(work.layout.cellAssignments[1].fill, CellColor(r: 200, g: 30, b: 30))
         XCTAssertFalse(work.layout.cellAssignments[1].fallback)
@@ -236,8 +239,9 @@ final class MissingCellFillTests: XCTestCase {
         await h.controller.open(id)
         let readsBefore = h.images.state.get().imageReads
         await h.controller.exportOpenedTapped(purpose: .save)
-        XCTAssertEqual(h.exporter.calls.last?.0, sampleLayout(["a", "b", "c", "d", "e", "f"]), "受限访问不改写作品")
-        XCTAssertEqual(h.exporter.fallbacks.last, [1: RGB8(r: 200, g: 30, b: 30), 4: RGB8(r: 30, g: 200, b: 200)])
+        XCTAssertEqual(h.controller.exportGate, .needsPermission, "权限不足是导出错误，不用目标色补格")
+        XCTAssertTrue(h.exporter.calls.isEmpty)
+        XCTAssertEqual(h.controller.openedWork?.layout, sampleLayout(["a", "b", "c", "d", "e", "f"]), "受限访问不改写作品")
         XCTAssertEqual(h.images.state.get().imageReads, readsBefore, "没有读当前预览")
         h.controller.stop()
     }
@@ -250,6 +254,7 @@ final class MissingCellFillTests: XCTestCase {
         h.existence.hide("b", "c")
         let before = h.images.state.get()
         await h.controller.open(id)
+        await repairOpened(h.controller)
         XCTAssertEqual(h.existence.metadataCalls.get(), 1)
         let after = h.images.state.get()
         XCTAssertEqual(after.imageReads, before.imageReads, "原图 / 旧预览请求 0 次")

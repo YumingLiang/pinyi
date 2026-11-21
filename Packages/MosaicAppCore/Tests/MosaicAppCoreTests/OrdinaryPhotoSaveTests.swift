@@ -572,9 +572,14 @@ final class OrdinaryPhotoSaveTests: XCTestCase {
         }
         let controller = WorksController(store: store, existence: FakeExistence(), images: images)
         await controller.open(saved.summary.id)
-        XCTAssertEqual(box.beforeExists, true, "提交前已登记兜底还在")
+        XCTAssertEqual(controller.state.notice, .worksOpenFailed, "自动打开不迁移已登记兜底")
+        XCTAssertEqual(box.beforeExists, false)
+        let loaded = try await store.load(saved.summary.id)
+        _ = await controller.reconcileMissing(loaded)
+        XCTAssertEqual(box.beforeExists, true, "显式迁移提交前已登记兜底还在")
         XCTAssertEqual(box.afterExists, false, "提交后文件管理删掉了它。删文件不是读取记录")
-        XCTAssertNil(controller.openedWork?.meta.fallbackFile)
+        let migrated = try await store.load(saved.summary.id)
+        XCTAssertNil(migrated.meta.fallbackFile)
     }
 
     func testButtonDoesNotTreatADifferentFillAsSaved() async throws {

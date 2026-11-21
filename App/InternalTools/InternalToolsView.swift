@@ -87,7 +87,10 @@ struct TestAlbumView: View {
         let latest = model.works.summaries.first?.id
         Task {
             var preferred = Set<String>()
-            if let latest, let work = try? await controller.store.load(latest) { preferred = Set(work.layout.uniqueAssetIDs) }
+            if let latest, let file = controller.store as? FileWorksStore,
+               case .settled(let work) = await file.readSettled(latest) {
+                preferred = Set(work.layout.uniqueAssetIDs)
+            }
             do {
                 if let i = try await w.hideOne(preferring: preferred) {
                     hiddenNote = "已隐藏相簿里第 \(i + 1) 张" + (preferred.isEmpty ? "（没有作品）" : "（最新作品里用到的优先）")

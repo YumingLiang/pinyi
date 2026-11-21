@@ -454,6 +454,98 @@ final class ShapeResultScreenTests: XCTestCase {
         XCTAssertFalse(model.flow.offersShapeEntry)
     }
 
+    /// 真实 AppModel：当前普通填色结果保存 → 只读列表 → 生产打开 → JPEG 像素。
+    /// 旁边的异常作品只让自己失败。不调用 controller-only 导出器，也不读私人照片。
+    func testAppModelSavesListsOpensAndExportsTheSettledJPEG() async throws {
+        let harness = try await makeHarness()
+        defer { harness.model.coordinator.stop(); try? FileManager.default.removeItem(at: harness.root) }
+        let model = harness.model
+        let store = try XCTUnwrap(model.works.controller.store as? FileWorksStore)
+        var filled = MosaicLayout(cols: 2, rows: 1,
+                                  cellAssignments: [MosaicLayout.CellAssignment(localIdentifier: ""),
+                                                    MosaicLayout.CellAssignment(localIdentifier: "")],
+                                  targetSize: .init(width: 8, height: 4),
+                                  targetCrop: CropRect(x: 0, y: 0, width: 8, height: 4),
+                                  params: .init(overlayAlpha: 0, density: "coarse", seed: 3))
+        filled.cellAssignments[0].fill = CellColor(r: 12, g: 34, b: 56)
+        filled.cellAssignments[1].fill = CellColor(r: 200, g: 10, b: 20)
+        model.works.controller.attach(resultContext: {
+            WorkResultContext(layout: filled, target: nil, overlayAlpha: 0, tier: "hd", resultRevision: 1)
+        }, relay: ExportSuccessRelay())
+        await model.works.controller.saveCurrentResultTapped()
+        guard case .saved(let id) = model.works.controller.state.saveStatus else {
+            return XCTFail("当前结果应保存 \(model.works.controller.state.saveStatus)")
+        }
+        let photo = MosaicLayout(cols: 2, rows: 1,
+                                 cellAssignments: [MosaicLayout.CellAssignment(localIdentifier: "synth-photo"),
+                                                   MosaicLayout.CellAssignment(localIdentifier: "")],
+                                 targetSize: .init(width: 8, height: 4),
+                                 targetCrop: CropRect(x: 0, y: 0, width: 8, height: 4),
+                                 params: .init(overlayAlpha: 0, density: "coarse", seed: 5))
+        let photoSaved = try await store.save(WorkDraft(layout: photo, target: nil, overlayAlpha: 0, origin: .savedManually))
+        let targetBuffer = try PixelBuffer(width: 4, height: 4, bytes: [UInt8](repeating: 80, count: 64))
+        let plain = MosaicLayout(cols: 1, rows: 1,
+                                 cellAssignments: [MosaicLayout.CellAssignment(localIdentifier: "")],
+                                 targetSize: .init(width: 4, height: 4),
+                                 targetCrop: CropRect(x: 0, y: 0, width: 4, height: 4),
+                                 params: .init(overlayAlpha: 0, density: "coarse", seed: 6))
+        let targetSaved = try await store.save(WorkDraft(layout: plain, target: targetBuffer, overlayAlpha: 0, origin: .savedManually))
+        let targetName = try XCTUnwrap(targetSaved.summary.meta.targetFile)
+        try Data("not-a-jpeg".utf8).write(to: targetSaved.summary.previewURL.deletingLastPathComponent().appendingPathComponent(targetName))
+        let pendingLayout = MosaicLayout(cols: 2, rows: 1,
+                                         cellAssignments: [MosaicLayout.CellAssignment(localIdentifier: "synth-photo"),
+                                                           MosaicLayout.CellAssignment(localIdentifier: "")],
+                                         targetSize: .init(width: 8, height: 4),
+                                         targetCrop: CropRect(x: 0, y: 0, width: 8, height: 4),
+                                         params: .init(overlayAlpha: 0, density: "coarse", seed: 11))
+        let pending = try await store.save(WorkDraft(layout: pendingLayout, target: nil, overlayAlpha: 0, origin: .savedManually))
+        var meta = try FileWorksStore.decoder().decode(WorkMeta.self, from: Data(contentsOf: pending.summary.previewURL.deletingLastPathComponent().appendingPathComponent("meta.json")))
+        meta.pendingPreviewFile = ".preview-pending-probe.jpg"
+        try FileWorksStore.encoder().encode(meta).write(to: pending.summary.previewURL.deletingLastPathComponent().appendingPathComponent("meta.json"))
+        let before = try Data(contentsOf: harness.root.appendingPathComponent("Works").appendingPathComponent(id.directoryName).appendingPathComponent("layout.json"))
+        await model.start()
+        XCTAssertTrue(model.works.summaries.contains { $0.id == id })
+        XCTAssertTrue(model.works.summaries.contains { $0.id == photoSaved.summary.id })
+        XCTAssertFalse(model.works.summaries.contains { $0.id == pending.summary.id }, "pending 不进列表，也不挡住这次新作")
+        XCTAssertEqual(try Data(contentsOf: harness.root.appendingPathComponent("Works").appendingPathComponent(id.directoryName).appendingPathComponent("layout.json")), before)
+        await model.works.open(id)
+        model.coordinator.setExportTier(.hd)
+        await model.works.controller.exportOpenedTapped(purpose: .share)
+        let exported = await waitUntil(seconds: 20) {
+            if case .sharing = model.coordinator.state.export { return true }
+            if case .failed = model.coordinator.state.export { return true }
+            return false
+        }
+        XCTAssertTrue(exported)
+        guard case .sharing(let url) = model.coordinator.state.export else {
+            return XCTFail("生产导出没有给出 JPEG \(model.coordinator.state.export)")
+        }
+        let image = try XCTUnwrap(decodeJPEG(try Data(contentsOf: url)))
+        let bytes = try bitmap(image)
+        let cell = image.width / 2
+        assertNear(pixelFromTop(bytes, width: image.width, columns: 2, cellPixels: cell, index: 0),
+                   (r: 12, g: 34, b: 56), tolerance: 8, label: "AppModel 导出 fc")
+        assertNear(pixelFromTop(bytes, width: image.width, columns: 2, cellPixels: cell, index: 1),
+                   (r: 200, g: 10, b: 20), tolerance: 8, label: "AppModel 导出第二格")
+        model.coordinator.shareFinished()
+        let photoBytes = try directoryFile("layout.json", id: photoSaved.summary.id, root: harness.root)
+        await model.works.open(photoSaved.summary.id)
+        await model.works.controller.exportOpenedTapped(purpose: .share)
+        XCTAssertTrue(model.works.controller.exportGate == .needsPermission || model.works.controller.exportGate == .missingPhotos)
+        XCTAssertEqual(try directoryFile("layout.json", id: photoSaved.summary.id, root: harness.root), photoBytes)
+        if case .sharing = model.coordinator.state.export { XCTFail("缺照片不能当成导出成功") }
+        await model.works.open(targetSaved.summary.id)
+        await model.works.controller.exportOpenedTapped(purpose: .share)
+        XCTAssertEqual(model.works.controller.exportGate, .missingTarget)
+        await model.works.controller.deleteConfirmed(photoSaved.summary.id)
+        XCTAssertFalse(model.works.summaries.contains { $0.id == photoSaved.summary.id })
+        XCTAssertTrue(model.works.summaries.contains { $0.id == id })
+    }
+
+    private func directoryFile(_ name: String, id: WorkID, root: URL) throws -> Data {
+        try Data(contentsOf: root.appendingPathComponent("Works").appendingPathComponent(id.directoryName).appendingPathComponent(name))
+    }
+
     private func makeHarness() async throws -> Harness {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("shape-screen-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
