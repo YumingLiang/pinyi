@@ -552,6 +552,72 @@ final class OrdinaryPhotoFillEvidenceTests: XCTestCase {
                       "事务外的临时预览还在。新作品在 Works 里，不是靠清空临时根证明的")
     }
 
+    func testControllerSaveListsOpensAndExportsTheNewJPEG() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("photo-chain-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let works = root.appendingPathComponent("Works", isDirectory: true)
+        let thumbs = TwoColorThumbs(photo: (r: 220, g: 30, b: 30), other: photo)
+        let images = ImageIOWorkImages(thumbnails: thumbs)
+        let store = FileWorksStore(directory: works, images: images)
+        let old = try await store.save(WorkDraft(layout: photoLayout(fill: nil), target: nil, overlayAlpha: 0, origin: .savedManually))
+        try writeSolidJPEG(to: old.summary.previewURL, width: 16, height: 16, r: sentinel.r, g: sentinel.g, b: sentinel.b)
+        let oldFallback = old.summary.previewURL.deletingLastPathComponent().appendingPathComponent("fallback-sentinel.jpg")
+        try writeSolidJPEG(to: oldFallback, width: 8, height: 8, r: sentinel.r, g: sentinel.g, b: sentinel.b)
+        let oldPreviewBytes = try Data(contentsOf: old.summary.previewURL)
+        let oldFallbackBytes = try Data(contentsOf: oldFallback)
+        let oldLayoutBytes = try Data(contentsOf: old.summary.previewURL.deletingLastPathComponent().appendingPathComponent("layout.json"))
+        let shown = photoLayout(fill: CellColor(r: fill.r, g: fill.g, b: fill.b))
+        let exporter = RecordingExporter(thumbs: thumbs)
+        let controller = WorksController(store: store, existence: AllPresent(), images: images,
+                                        resultContext: { WorkResultContext(layout: shown, target: nil,
+                                                                           overlayAlpha: 0, tier: nil, resultRevision: 4) })
+        controller.exportHandler = exporter
+        let log = ProductionReadLog()
+        defer { log.stop() }
+        log.reset()
+        try await within(20) { await controller.saveCurrentResultTapped() }
+        guard case .saved(let id) = controller.state.saveStatus else {
+            return XCTFail("按钮应是已保存 \(controller.state.saveStatus)")
+        }
+        XCTAssertNotEqual(id, old.summary.id)
+        XCTAssertTrue(controller.state.summaries.contains { $0.id == id })
+        XCTAssertEqual(try Data(contentsOf: old.summary.previewURL), oldPreviewBytes)
+        XCTAssertEqual(try Data(contentsOf: oldFallback), oldFallbackBytes)
+        XCTAssertEqual(try Data(contentsOf: old.summary.previewURL.deletingLastPathComponent().appendingPathComponent("layout.json")), oldLayoutBytes)
+        let summary = try XCTUnwrap(controller.state.summaries.first { $0.id == id })
+        let storedPreview = try XCTUnwrap(decodeJPEG(summary.previewURL))
+        assertNear(sample(try bitmap(storedPreview), image: storedPreview, columns: 2, index: 0), fill, tolerance: 8, label: "作品目录里的 JPEG fc")
+        assertNear(sample(try bitmap(storedPreview), image: storedPreview, columns: 2, index: 1), photo, tolerance: 12, label: "作品目录里的 JPEG 邻格")
+        let savedBytes = try Data(contentsOf: summary.previewURL)
+        try await within(20) { await controller.open(id) }
+        XCTAssertEqual(controller.openedWork?.id, id)
+        XCTAssertEqual(try Data(contentsOf: summary.previewURL), savedBytes, "重开这次新作不重画它的 JPEG")
+        try await within(20) { await controller.exportOpenedTapped(purpose: .save) }
+        XCTAssertNil(exporter.failure)
+        let exported = try XCTUnwrap(decodeJPEG(try XCTUnwrap(exporter.url)))
+        assertNear(sample(try bitmap(exported), image: exported, columns: 2, index: 0), fill, tolerance: 8, label: "打开后再导出的 fc")
+        assertNear(sample(try bitmap(exported), image: exported, columns: 2, index: 1), photo, tolerance: 12, label: "打开后再导出的邻格")
+        XCTAssertEqual(hits(log, old.summary.previewURL), 0, "这条保存/重开/再导出的 imageSource 没读旧预览。不是全局 0 次 open")
+        XCTAssertEqual(hits(log, oldFallback), 0, "这条链的 imageSource 没读旧兜底。Data 和裸 open 仍看不见")
+        let whole = try directorySnapshot(works)
+        try await within(20) { await controller.saveCurrentResultTapped() }
+        XCTAssertEqual(controller.state.saveStatus, .saved(id))
+        XCTAssertEqual(try directorySnapshot(works), whole, "等价再存不写盘")
+    }
+
+    private func directorySnapshot(_ dir: URL) throws -> String {
+        let fm = FileManager.default
+        guard let names = fm.enumerator(at: dir, includingPropertiesForKeys: nil)?.allObjects as? [URL] else { return "" }
+        return try names.sorted { $0.path < $1.path }.map { url -> String in
+            var isDir: ObjCBool = false
+            let rel = url.path.replacingOccurrences(of: dir.path, with: "")
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue { return "dir \(rel)" }
+            let data = try Data(contentsOf: url)
+            return "file \(rel) \(data.base64EncodedString())"
+        }.joined(separator: "\n")
+    }
+
     private func hits(_ log: ProductionReadLog, _ url: URL) -> Int {
         log.paths().filter { $0 == url.path }.count
     }
